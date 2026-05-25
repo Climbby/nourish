@@ -1,7 +1,13 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 * {
   -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background-color: #111416;
 }

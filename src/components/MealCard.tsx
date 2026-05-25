@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Recipe } from '../types/grocy'
 import { grocy } from '../api/grocy'
-import { stripHtml } from '../utils/stripHtml'
+import { parseDescription } from '../utils/parseDescription'
 
 interface Props {
   recipe: Recipe
@@ -11,11 +11,12 @@ interface Props {
 export function MealCard({ recipe }: Props) {
   const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
+  const { nutrition, price } = parseDescription(recipe.description ?? '')
 
   return (
     <button
       onClick={() => navigate(`/meal/${recipe.id}`)}
-      className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 text-left w-full active:scale-95 transition-transform duration-100 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-1"
+      className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border text-left w-full active:scale-95 transition-transform duration-100 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-1 focus:ring-offset-nourish-bg"
     >
       {recipe.picture_file_name && !imgError ? (
         <img
@@ -27,18 +28,34 @@ export function MealCard({ recipe }: Props) {
         />
       ) : (
         <div
-          className="w-full bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center text-4xl"
+          className="w-full bg-nourish-surface-high flex items-center justify-center text-4xl"
           style={{ aspectRatio: '4/3' }}
         >
           🍽️
         </div>
       )}
-      <div className="p-3">
-        <h3 className="font-semibold text-gray-900 text-sm leading-snug">{recipe.name}</h3>
-        {recipe.description && (
-          <p className="text-gray-500 text-xs mt-0.5 line-clamp-2">
-            {stripHtml(recipe.description).substring(0, 120)}
-          </p>
+      <div className="p-3 space-y-2">
+        <h3 className="font-semibold text-nourish-text text-sm leading-snug">{recipe.name}</h3>
+
+        {(price !== null || nutrition) && (
+          <div className="flex items-center justify-between gap-1 flex-wrap">
+            {price !== null && (
+              <span className="text-nourish-primary text-xs font-semibold">€{price.toFixed(2)}</span>
+            )}
+            {nutrition && (
+              <div className="flex gap-1">
+                <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums">
+                  {nutrition.protein}g P
+                </span>
+                <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums">
+                  {nutrition.carbs}g C
+                </span>
+                <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums">
+                  {nutrition.fat}g F
+                </span>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </button>

@@ -6,6 +6,7 @@ export interface Recipe {
   desired_servings: number
   not_check_shoppinglist: number
   picture_file_name: string | null
+  type: string
 }
 
 export interface RecipeIngredient {
@@ -29,4 +30,11 @@ export interface QuantityUnit {
   id: number
   name: string
   name_plural: string
+}
+
+export interface MealPlanEntry {
+  id: number
+  day: string
+  recipe_id: number
+  note: string
 }

@@ -1,4 +1,4 @@
-import type { Product, QuantityUnit, Recipe, RecipeIngredient } from '../types/grocy'
+import type { MealPlanEntry, Product, QuantityUnit, Recipe, RecipeIngredient } from '../types/grocy'
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, options)
@@ -11,7 +11,8 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const grocy = {
-  getRecipes: () => apiFetch<Recipe[]>('/objects/recipes'),
+  getRecipes: () =>
+    apiFetch<Recipe[]>('/objects/recipes').then((all) => all.filter((r) => r.type === 'normal')),
 
   getRecipe: (id: number) => apiFetch<Recipe>(`/objects/recipes/${id}`),
 
@@ -30,6 +31,28 @@ export const grocy = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+    }),
+
+  updateRecipe: (id: number, data: Partial<Recipe>) =>
+    apiFetch<void>(`/objects/recipes/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  deleteRecipe: (id: number) =>
+    apiFetch<void>(`/objects/recipes/${id}`, { method: 'DELETE' }),
+
+  deleteMealPlanEntry: (id: number) =>
+    apiFetch<void>(`/objects/meal_plan/${id}`, { method: 'DELETE' }),
+
+  getMealPlan: () => apiFetch<MealPlanEntry[]>('/objects/meal_plan'),
+
+  logMeal: (entry: Omit<MealPlanEntry, 'id'>) =>
+    apiFetch<{ created_object_id: number }>('/objects/meal_plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
     }),
 
   async uploadPicture(file: File): Promise<string> {
