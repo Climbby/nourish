@@ -16,7 +16,9 @@ export function buildDescription(
   steps: string,
   nutrition: { calories: string; protein: string; carbs: string; fat: string },
   priceOverride: string,
-  autoTotal: number
+  autoTotal: number,
+  category?: string,
+  portions?: number | null
 ): string {
   const parts: string[] = []
 
@@ -43,5 +45,24 @@ export function buildDescription(
     parts.push(`[Preco]\n${finalPrice.toFixed(2)}`)
   }
 
+  if (category?.trim()) parts.push(`[Categoria]\n${category.trim()}`)
+  if (portions !== undefined && portions !== null && portions >= 0) parts.push(`[Porcoes]\n${portions}`)
+
   return parts.join('\n\n')
+}
+
+export function decrementPortions(description: string): string {
+  return description.replace(/(\[Porcoes\]\n)(\d+)/, (_, prefix, n) =>
+    `${prefix}${Math.max(0, parseInt(n, 10) - 1)}`
+  )
+}
+
+export function addPortions(description: string, amount: number): string {
+  if (/\[Porcoes\]/.test(description)) {
+    return description.replace(/(\[Porcoes\]\n)(\d+)/, (_, prefix, n) =>
+      `${prefix}${parseInt(n, 10) + amount}`
+    )
+  }
+  const base = description.trim()
+  return base ? `${base}\n\n[Porcoes]\n${amount}` : `[Porcoes]\n${amount}`
 }

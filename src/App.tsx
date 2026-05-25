@@ -5,6 +5,7 @@ import { MealDetail } from './pages/MealDetail'
 import { EditMeal } from './pages/EditMeal'
 import { Favourites } from './pages/Favourites'
 import { History } from './pages/History'
+import { AddProduct } from './pages/AddProduct'
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/meal/:id/edit" element={<EditMeal />} />
           <Route path="/favourites" element={<Favourites />} />
           <Route path="/history" element={<History />} />
+          <Route path="/add-product" element={<AddProduct />} />
         </Routes>
       </div>
     </BrowserRouter>

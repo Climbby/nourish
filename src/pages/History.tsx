@@ -21,6 +21,49 @@ function formatDay(day: string): string {
   return new Date(y, m - 1, dd).toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
+function formatTime(ts: string): string {
+  const d = new Date(ts.replace(' ', 'T'))
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function mealType(ts: string): 'Almoço' | 'Jantar' {
+  return new Date(ts.replace(' ', 'T')).getHours() < 17 ? 'Almoço' : 'Jantar'
+}
+
+const MERGE_WINDOW_MS = 30 * 60 * 1000
+
+interface EntryGroup {
+  entry: MealPlanEntry
+  count: number
+  allIds: number[]
+}
+
+function groupByRecipe(entries: MealPlanEntry[]): EntryGroup[] {
+  const result: EntryGroup[] = []
+  for (const entry of entries) {
+    const last = result[result.length - 1]
+    if (
+      last &&
+      last.entry.recipe_id === entry.recipe_id &&
+      last.entry.row_created_timestamp &&
+      entry.row_created_timestamp
+    ) {
+      const dt =
+        Math.abs(
+          new Date(entry.row_created_timestamp.replace(' ', 'T')).getTime() -
+          new Date(last.entry.row_created_timestamp.replace(' ', 'T')).getTime()
+        )
+      if (dt <= MERGE_WINDOW_MS) {
+        last.count++
+        last.allIds.push(entry.id)
+        continue
+      }
+    }
+    result.push({ entry, count: 1, allIds: [entry.id] })
+  }
+  return result
+}
+
 function TrashIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
@@ -41,7 +84,11 @@ export function History() {
     Promise.all([grocy.getMealPlan(), grocy.getRecipes()])
       .then(([plan, recipeList]) => {
         if (!mounted) return
-        setEntries([...plan].sort((a, b) => b.day.localeCompare(a.day)))
+        setEntries([...plan].sort((a, b) =>
+          b.day !== a.day
+            ? b.day.localeCompare(a.day)
+            : (b.row_created_timestamp ?? '').localeCompare(a.row_created_timestamp ?? '')
+        ))
         setRecipes(Object.fromEntries(recipeList.map((r) => [r.id, r])))
       })
       .catch((e: Error) => { if (mounted) setError(e.message) })
@@ -90,7 +137,8 @@ export function History() {
                   {formatDay(day)}
                 </h2>
                 <div className="space-y-2">
-                  {grouped[day].map((entry) => {
+                  {groupByRecipe(grouped[day]).map((group) => {
+                    const { entry, count, allIds } = group
                     const recipe = recipes[entry.recipe_id]
                     return (
                       <div
@@ -101,21 +149,39 @@ export function History() {
                           onClick={() => navigate(`/meal/${entry.recipe_id}`)}
                           className="flex items-center gap-3 p-3 text-left flex-1 min-w-0 active:bg-nourish-surface-high transition-colors focus:outline-none"
                         >
-                          {recipe?.picture_file_name ? (
-                            <img
-                              src={grocy.pictureUrl(recipe.picture_file_name)}
-                              alt={recipe.name}
-                              className="w-14 h-14 rounded-xl object-cover flex-shrink-0"
-                            />
-                          ) : (
-                            <div className="w-14 h-14 rounded-xl bg-nourish-surface-high flex items-center justify-center text-2xl flex-shrink-0">
-                              🍽️
-                            </div>
-                          )}
+                          <div className="relative flex-shrink-0">
+                            {recipe?.picture_file_name ? (
+                              <img
+                                src={grocy.pictureUrl(recipe.picture_file_name)}
+                                alt={recipe.name}
+                                className="w-14 h-14 rounded-xl object-cover"
+                              />
+                            ) : (
+                              <div className="w-14 h-14 rounded-xl bg-nourish-surface-high flex items-center justify-center text-2xl">
+                                🍽️
+                              </div>
+                            )}
+                            {count > 1 && (
+                              <span className="absolute -top-1 -right-1 bg-nourish-primary text-nourish-on-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+                                ×{count}
+                              </span>
+                            )}
+                          </div>
                           <div className="min-w-0">
                             <p className="font-semibold text-nourish-text text-sm truncate">
                               {recipe?.name ?? `Refeição ${entry.recipe_id}`}
                             </p>
+                            {entry.row_created_timestamp && (
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-xs text-nourish-primary font-medium">
+                                  {mealType(entry.row_created_timestamp)}
+                                </span>
+                                <span className="text-nourish-border text-xs">·</span>
+                                <span className="text-xs text-nourish-text-dim tabular-nums">
+                                  {formatTime(entry.row_created_timestamp)}
+                                </span>
+                              </div>
+                            )}
                             {entry.note && (
                               <p className="text-xs text-nourish-text-dim mt-0.5 truncate">{entry.note}</p>
                             )}
@@ -123,9 +189,9 @@ export function History() {
                         </button>
                         <button
                           onClick={async () => {
-                            setEntries((prev) => prev.filter((e) => e.id !== entry.id))
+                            setEntries((prev) => prev.filter((e) => !allIds.includes(e.id)))
                             try {
-                              await grocy.deleteMealPlanEntry(entry.id)
+                              await Promise.all(allIds.map((id) => grocy.deleteMealPlanEntry(id)))
                             } catch {
                               setEntries((prev) => [...prev, entry].sort((a, b) => b.day.localeCompare(a.day)))
                             }

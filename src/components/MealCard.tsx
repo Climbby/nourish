@@ -6,34 +6,42 @@ import { parseDescription } from '../utils/parseDescription'
 
 interface Props {
   recipe: Recipe
+  showPortions?: boolean
 }
 
-export function MealCard({ recipe }: Props) {
+export function MealCard({ recipe, showPortions }: Props) {
   const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
-  const { nutrition, price } = parseDescription(recipe.description ?? '')
+  const { nutrition, price, portions } = parseDescription(recipe.description ?? '')
 
   return (
     <button
       onClick={() => navigate(`/meal/${recipe.id}`)}
       className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border text-left w-full active:scale-95 transition-transform duration-100 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-1 focus:ring-offset-nourish-bg"
     >
-      {recipe.picture_file_name && !imgError ? (
-        <img
-          src={grocy.pictureUrl(recipe.picture_file_name)}
-          alt={recipe.name}
-          className="w-full object-cover"
-          style={{ aspectRatio: '4/3' }}
-          onError={() => setImgError(true)}
-        />
-      ) : (
-        <div
-          className="w-full bg-nourish-surface-high flex items-center justify-center text-4xl"
-          style={{ aspectRatio: '4/3' }}
-        >
-          🍽️
-        </div>
-      )}
+      <div className="relative">
+        {recipe.picture_file_name && !imgError ? (
+          <img
+            src={grocy.pictureUrl(recipe.picture_file_name)}
+            alt={recipe.name}
+            className="w-full object-cover"
+            style={{ aspectRatio: '4/3' }}
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <div
+            className="w-full bg-nourish-surface-high flex items-center justify-center text-4xl"
+            style={{ aspectRatio: '4/3' }}
+          >
+            🍽️
+          </div>
+        )}
+        {showPortions && portions !== null && portions > 0 && (
+          <span className="absolute top-2 right-2 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full">
+            {portions}×
+          </span>
+        )}
+      </div>
       <div className="p-3 space-y-2">
         <h3 className="font-semibold text-nourish-text text-sm leading-snug">{recipe.name}</h3>
 

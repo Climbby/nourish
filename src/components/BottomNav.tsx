@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom'
+import { useState } from 'react'
+import { NavLink, useNavigate } from 'react-router-dom'
 
 function HomeIcon() {
   return (
@@ -33,33 +34,85 @@ function ClockIcon() {
   )
 }
 
+const ADD_OPTIONS = [
+  { type: 'completa', label: 'Refeição completa', desc: 'Almoço, jantar ou prato principal' },
+  { type: 'ligeira', label: 'Refeição ligeira', desc: 'Snack, petisco ou lanche' },
+  { type: 'despensa', label: 'Produto de despensa', desc: 'Água, leite, pão, cereais…' },
+]
+
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `flex-1 flex flex-col items-center justify-center py-2 gap-0.5 text-[10px] font-medium transition-colors min-h-[56px] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-nourish-primary ${
     isActive ? 'text-nourish-primary' : 'text-nourish-text-dim'
   }`
 
 export function BottomNav() {
+  const navigate = useNavigate()
+  const [showSheet, setShowSheet] = useState(false)
+
+  function handleOption(type: string) {
+    setShowSheet(false)
+    navigate(`/add?type=${type}`)
+  }
+
   return (
-    <nav
-      className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface border-t border-nourish-border flex z-50"
-      style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
-    >
-      <NavLink to="/" end className={linkClass}>
-        <HomeIcon />
-        Refeições
-      </NavLink>
-      <NavLink to="/add" className={linkClass}>
-        <PlusIcon />
-        Adicionar
-      </NavLink>
-      <NavLink to="/favourites" className={linkClass}>
-        <HeartIcon />
-        Favoritos
-      </NavLink>
-      <NavLink to="/history" className={linkClass}>
-        <ClockIcon />
-        Historial
-      </NavLink>
-    </nav>
+    <>
+      {showSheet && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60"
+          onClick={() => setShowSheet(false)}
+        >
+          <div
+            className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface rounded-t-2xl"
+            style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 space-y-2">
+              <p className="text-xs text-nourish-text-dim text-center pb-1">O que queres adicionar?</p>
+              {ADD_OPTIONS.map(({ type, label, desc }) => (
+                <button
+                  key={type}
+                  onClick={() => handleOption(type)}
+                  className="w-full py-4 bg-nourish-surface-high rounded-xl text-nourish-text font-semibold text-sm flex flex-col items-center justify-center gap-0.5 active:opacity-80 focus:outline-none"
+                >
+                  {label}
+                  <span className="text-xs font-normal text-nourish-text-dim">{desc}</span>
+                </button>
+              ))}
+              <button
+                onClick={() => setShowSheet(false)}
+                className="w-full py-3 text-nourish-text-dim text-sm focus:outline-none"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav
+        className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface border-t border-nourish-border flex z-40"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      >
+        <NavLink to="/" end className={linkClass}>
+          <HomeIcon />
+          Refeições
+        </NavLink>
+        <button
+          onClick={() => setShowSheet(true)}
+          className="flex-1 flex flex-col items-center justify-center py-2 gap-0.5 text-[10px] font-medium text-nourish-text-dim transition-colors min-h-[56px] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-nourish-primary"
+        >
+          <PlusIcon />
+          Adicionar
+        </button>
+        <NavLink to="/favourites" className={linkClass}>
+          <HeartIcon />
+          Favoritos
+        </NavLink>
+        <NavLink to="/history" className={linkClass}>
+          <ClockIcon />
+          Historial
+        </NavLink>
+      </nav>
+    </>
   )
 }

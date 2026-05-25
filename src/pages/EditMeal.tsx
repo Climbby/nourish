@@ -5,21 +5,13 @@ import type { Recipe } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription } from '../utils/parseDescription'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
-import { IngredientSection, NutritionSection, PriceSection } from './AddMeal'
+import { CategorySection, IngredientSection, NutritionSection, PriceSection } from './AddMeal'
+import { PhotoField } from '../components/PhotoField'
 
 function BackIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
       <path fillRule="evenodd" d="M7.72 12.53a.75.75 0 0 1 0-1.06l7.5-7.5a.75.75 0 1 1 1.06 1.06L9.31 12l6.97 6.97a.75.75 0 1 1-1.06 1.06l-7.5-7.5Z" clipRule="evenodd" />
-    </svg>
-  )
-}
-
-function CameraIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10 text-nourish-border">
-      <path d="M12 9a3.75 3.75 0 1 0 0 7.5A3.75 3.75 0 0 0 12 9Z" />
-      <path fillRule="evenodd" d="M9.344 3.071a49.52 49.52 0 0 1 5.312 0c.967.052 1.83.585 2.332 1.39l.821 1.317c.24.383.645.643 1.11.71.386.054.77.113 1.152.177 1.432.239 2.429 1.493 2.429 2.909V18a3 3 0 0 1-3 3h-15a3 3 0 0 1-3-3V9.574c0-1.416.997-2.67 2.429-2.909.382-.064.766-.123 1.151-.178a1.56 1.56 0 0 0 1.11-.71l.822-1.315a2.942 2.942 0 0 1 2.332-1.39ZM6.75 12.75a5.25 5.25 0 1 1 10.5 0 5.25 5.25 0 0 1-10.5 0Zm12-1.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clipRule="evenodd" />
     </svg>
   )
 }
@@ -32,7 +24,6 @@ const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
 export function EditMeal() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const fileRef = useRef<HTMLInputElement>(null)
   const rowIdRef = useRef(1)
 
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -49,6 +40,8 @@ export function EditMeal() {
   const [protein, setProtein] = useState('')
   const [carbs, setCarbs] = useState('')
   const [fat, setFat] = useState('')
+  const [category, setCategory] = useState('')
+  const [portions, setPortions] = useState<number | null>(null)
   const [priceOverride, setPriceOverride] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -91,6 +84,8 @@ export function EditMeal() {
       }
 
       if (parsed.price !== null) setPriceOverride(parsed.price.toFixed(2))
+      setCategory(parsed.category ?? '')
+      setPortions(parsed.portions)
 
       if (r.picture_file_name) {
         setExistingPhoto(r.picture_file_name)
@@ -121,13 +116,6 @@ export function EditMeal() {
     })
   }
 
-  function handlePhoto(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setPhotoFile(file)
-    setPhotoPreview(URL.createObjectURL(file))
-  }
-
   async function handleSave() {
     if (!name.trim()) { setNameError(true); return }
     setNameError(false)
@@ -142,7 +130,9 @@ export function EditMeal() {
         comoFazer,
         { calories, protein, carbs, fat },
         priceOverride,
-        autoTotal
+        autoTotal,
+        category,
+        portions
       )
 
       await grocy.updateRecipe(numId, {
@@ -202,20 +192,11 @@ export function EditMeal() {
       </header>
 
       <div className="p-4 space-y-5" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 100px)' }}>
-        {/* Photo */}
-        <div>
-          <label className={labelClass}>Foto</label>
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="w-full bg-nourish-surface border-2 border-dashed border-nourish-border rounded-2xl overflow-hidden flex flex-col items-center justify-center gap-2 active:bg-nourish-surface-high transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-            style={{ aspectRatio: '4/3' }}
-          >
-            {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" alt="preview" /> : (
-              <><CameraIcon /><p className="text-sm text-nourish-text-dim">Toca para adicionar foto</p></>
-            )}
-          </button>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handlePhoto} />
-        </div>
+        <PhotoField
+          preview={photoPreview}
+          onChange={(file, url) => { setPhotoFile(file); setPhotoPreview(url) }}
+          labelClass={labelClass}
+        />
 
         {/* Name */}
         <div>
@@ -224,6 +205,8 @@ export function EditMeal() {
             placeholder="Ex: Esparguete com atum" className={`${inputClass} ${nameError ? 'border-red-500' : ''}`} />
           {nameError && <p className="text-red-400 text-xs mt-1">Nome é obrigatório</p>}
         </div>
+
+        <CategorySection category={category} onChange={setCategory} labelClass={labelClass} />
 
         <IngredientSection rows={ingredientRows} onUpdate={updateRow} onAdd={addRow} onRemove={removeRow}
           inputClass={inputClass} labelClass={labelClass} />

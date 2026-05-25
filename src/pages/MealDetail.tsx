@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { Product, QuantityUnit, Recipe, RecipeIngredient } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription } from '../utils/parseDescription'
+import { addPortions, decrementPortions } from '../utils/buildDescription'
 import { useFavourites } from '../hooks/useFavourites'
 
 function PencilIcon() {
@@ -61,6 +62,10 @@ export function MealDetail() {
   const [logError, setLogError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [preparing, setPreparing] = useState(false)
+  const [prepCount, setPrepCount] = useState('1')
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const didLongPress = useRef(false)
 
   useEffect(() => {
     const numId = id ? parseInt(id, 10) : NaN
@@ -95,12 +100,53 @@ export function MealDetail() {
     const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     try {
       await grocy.logMeal({ day, recipe_id: recipeId, note: '' })
+      if (recipe && (parsed.portions ?? 0) > 0) {
+        const newDesc = decrementPortions(recipe.description ?? '')
+        await grocy.updateRecipe(recipeId, { description: newDesc })
+        setRecipe({ ...recipe, description: newDesc })
+      }
       setLogged(true)
       setTimeout(() => setLogged(false), 2500)
     } catch (e) {
       setLogError(e instanceof Error ? e.message : 'Erro ao registar')
     } finally {
       setLogging(false)
+    }
+  }
+
+  async function handlePrepare(amount?: number) {
+    const n = amount ?? parseInt(prepCount, 10)
+    if (!recipe || isNaN(n) || n <= 0) return
+    try {
+      const newDesc = addPortions(recipe.description ?? '', n)
+      await grocy.updateRecipe(recipe.id, { description: newDesc })
+      setRecipe({ ...recipe, description: newDesc })
+      setPreparing(false)
+      setPrepCount('1')
+    } catch (e) {
+      setLogError(e instanceof Error ? e.message : 'Erro ao preparar')
+    }
+  }
+
+  function startPrepLongPress() {
+    didLongPress.current = false
+    longPressTimer.current = setTimeout(() => {
+      didLongPress.current = true
+      setPreparing(true)
+    }, 500)
+  }
+
+  function cancelPrepLongPress() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+  }
+
+  function handlePrepPointerUp() {
+    if (!didLongPress.current) {
+      cancelPrepLongPress()
+      handlePrepare(2)
     }
   }
 
@@ -181,7 +227,7 @@ export function MealDetail() {
     : []
 
   return (
-    <div className="min-h-screen bg-nourish-bg" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
+    <div className="min-h-screen bg-nourish-bg" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 180px)' }}>
       {header(recipe.name, recipe.id)}
 
       {recipe.picture_file_name && (
@@ -293,14 +339,58 @@ export function MealDetail() {
               {deleting ? 'A apagar...' : 'Apagar refeição'}
             </button>
           </div>
+        ) : preparing ? (
+          <div className="space-y-2">
+            <p className="text-xs text-nourish-text-dim text-center">Quantas porções preparaste?</p>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                value={prepCount}
+                onChange={(e) => setPrepCount(e.target.value)}
+                min="1"
+                className="flex-1 px-3 py-2.5 bg-nourish-surface border border-nourish-border rounded-xl text-nourish-text text-sm text-center focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+              />
+              <button
+                onClick={() => { setPreparing(false); setPrepCount('1') }}
+                className="px-4 py-2.5 rounded-xl border border-nourish-border text-nourish-text-dim text-sm font-semibold focus:outline-none"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => handlePrepare()}
+                className="px-4 py-2.5 rounded-xl bg-nourish-primary text-nourish-on-primary text-sm font-semibold focus:outline-none"
+              >
+                OK
+              </button>
+            </div>
+          </div>
         ) : (
-          <button
-            onClick={() => handleLog(recipe.id)}
-            disabled={logging || logged}
-            className="w-full bg-nourish-primary text-nourish-on-primary font-semibold py-3.5 rounded-xl active:opacity-90 transition-opacity disabled:opacity-70 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-2 focus:ring-offset-nourish-surface"
-          >
-            {logged ? 'Registado ✓' : logging ? 'A registar...' : 'Registar refeição'}
-          </button>
+          <div className="space-y-2">
+            {parsed.portions !== null && (
+              <div className="flex items-center justify-between text-sm px-1">
+                <span className="text-nourish-text-dim">Porções disponíveis</span>
+                <span className={`font-semibold ${parsed.portions > 0 ? 'text-nourish-primary' : 'text-nourish-border'}`}>
+                  {parsed.portions > 0 ? parsed.portions : 'Nenhuma'}
+                </span>
+              </div>
+            )}
+            <button
+              onClick={() => handleLog(recipe.id)}
+              disabled={logging || logged}
+              className="w-full bg-nourish-primary text-nourish-on-primary font-semibold py-3.5 rounded-xl active:opacity-90 transition-opacity disabled:opacity-70 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-2 focus:ring-offset-nourish-surface"
+            >
+              {logged ? 'Registado ✓' : logging ? 'A registar...' : 'Registar refeição'}
+            </button>
+            <button
+              onPointerDown={startPrepLongPress}
+              onPointerUp={handlePrepPointerUp}
+              onPointerLeave={cancelPrepLongPress}
+              onPointerCancel={cancelPrepLongPress}
+              className="w-full py-2.5 rounded-xl border border-nourish-border text-nourish-text-dim text-sm font-semibold focus:outline-none select-none"
+            >
+              + Preparar refeição
+            </button>
+          </div>
         )}
       </div>
     </div>

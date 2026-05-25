@@ -18,6 +18,8 @@ export interface ParsedRecipe {
   steps: string | null
   nutrition: Nutrition | null
   price: number | null
+  category: string | null
+  portions: number | null
 }
 
 export function parseDescription(raw: string): ParsedRecipe {
@@ -27,7 +29,7 @@ export function parseDescription(raw: string): ParsedRecipe {
   let currentKey: string | null = null
 
   for (const line of text.split('\n')) {
-    const match = line.match(/^\[(Ingredientes|Passos|Nutricao|Preco)\]$/)
+    const match = line.match(/^\[(Ingredientes|Passos|Nutricao|Preco|Categoria|Porcoes)\]$/)
     if (match) {
       currentKey = match[1]
       sections[currentKey] = ''
@@ -37,7 +39,7 @@ export function parseDescription(raw: string): ParsedRecipe {
   }
 
   if (Object.keys(sections).length === 0) {
-    return { ingredients: null, ingredientItems: [], steps: text || null, nutrition: null, price: null }
+    return { ingredients: null, ingredientItems: [], steps: text || null, nutrition: null, price: null, category: null, portions: null }
   }
 
   const rawIngredients = sections['Ingredientes']?.trim() || null
@@ -72,11 +74,21 @@ export function parseDescription(raw: string): ParsedRecipe {
     if (!isNaN(val)) price = val
   }
 
+  const category = sections['Categoria']?.trim() || null
+
+  let portions: number | null = null
+  if (sections['Porcoes'] !== undefined) {
+    const val = parseInt(sections['Porcoes'].trim(), 10)
+    if (!isNaN(val)) portions = val
+  }
+
   return {
     ingredients: rawIngredients,
     ingredientItems,
     steps: sections['Passos']?.trim() || null,
     nutrition,
     price,
+    category,
+    portions,
   }
 }
