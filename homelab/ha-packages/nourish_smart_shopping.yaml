@@ -1,0 +1,10 @@
+# rest_command only — input_number + nourish_despensa_check live in configuration.yaml
+
+rest_command:
+  nourish_at_supermarket:
+    url: "http://192.168.1.24:5678/webhook/nourish-at-supermarket"
+    method: POST
+    headers:
+      Content-Type: application/json
+    payload: "{}"
+    timeout: 60

@@ -23,7 +23,11 @@ import {
   profileSummary,
   recommendedDailyTargets,
 } from '../utils/nutritionRecommendations'
-import { fetchHomelabMetrics, type HomelabMetrics } from '../api/homelabMetrics'
+import {
+  defaultDaysUntilShop,
+  fetchHomelabMetrics,
+  type HomelabMetrics,
+} from '../api/homelabMetrics'
 
 const PERIODS: { key: StatsPeriod; short: string }[] = [
   { key: '7d', short: '7 dias' },
@@ -47,9 +51,13 @@ export function Profile() {
   const [showTargets, setShowTargets] = useState(false)
   const [showBody, setShowBody] = useState(false)
   const [homelabMetrics, setHomelabMetrics] = useState<HomelabMetrics | null>(null)
+  const [homelabMetricsError, setHomelabMetricsError] = useState(false)
 
   useEffect(() => {
-    fetchHomelabMetrics().then(setHomelabMetrics)
+    fetchHomelabMetrics().then((m) => {
+      setHomelabMetrics(m)
+      setHomelabMetricsError(m === null)
+    })
   }, [])
 
   const recommended = useMemo(() => recommendedDailyTargets(profile), [profile])
@@ -408,44 +416,58 @@ export function Profile() {
               </section>
             )}
 
-            {homelabMetrics && (
-              <section className="rounded-2xl border border-nourish-border bg-nourish-surface p-4">
-                <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-3">
-                  Casa e supermercado
+            <section className="rounded-2xl border border-nourish-border bg-nourish-surface p-4">
+              <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-3">
+                Casa e supermercado
+              </p>
+              <div className="text-center mb-4 py-2 rounded-xl bg-nourish-bg border border-nourish-border">
+                <p className="text-3xl font-bold text-nourish-primary tabular-nums">
+                  {homelabMetrics?.days_until_shop ?? defaultDaysUntilShop()}
                 </p>
-                <div className="grid grid-cols-2 gap-3 text-center">
-                  <div>
-                    <p className="text-xl font-bold text-nourish-text tabular-nums">
-                      {homelabMetrics.supermarket_visits_week}
-                    </p>
-                    <p className="text-[10px] text-nourish-text-dim">visitas ao super / semana</p>
+                <p className="text-xs text-nourish-text-dim mt-1">dias até à próxima ida ao super</p>
+                <p className="text-[10px] text-nourish-text-dim mt-1">
+                  (igual ao helper no Home Assistant; altera em Definições → Helpers)
+                </p>
+              </div>
+              {homelabMetricsError && (
+                <p className="text-xs text-amber-600/90 mb-3 text-center">
+                  Visitas e intervalos não carregaram — verifica ligação a /nourish/metrics
+                </p>
+              )}
+              {homelabMetrics && (
+                <>
+                  <div className="grid grid-cols-2 gap-3 text-center">
+                    <div>
+                      <p className="text-xl font-bold text-nourish-text tabular-nums">
+                        {homelabMetrics.supermarket_visits_week}
+                      </p>
+                      <p className="text-[10px] text-nourish-text-dim">visitas ao super / semana</p>
+                    </div>
+                    <div>
+                      <p className="text-xl font-bold text-nourish-text tabular-nums">
+                        {homelabMetrics.leave_home_week}
+                      </p>
+                      <p className="text-[10px] text-nourish-text-dim">saídas de casa / semana</p>
+                    </div>
+                    <div>
+                      <p className="text-xl font-bold text-nourish-text tabular-nums">
+                        {homelabMetrics.supermarket_visits_month}
+                      </p>
+                      <p className="text-[10px] text-nourish-text-dim">visitas / mês</p>
+                    </div>
+                    <div>
+                      <p className="text-xl font-bold text-nourish-text tabular-nums">
+                        {homelabMetrics.avg_days_between_shops ?? '—'}
+                      </p>
+                      <p className="text-[10px] text-nourish-text-dim">dias entre compras (mediana)</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-xl font-bold text-nourish-text tabular-nums">
-                      {homelabMetrics.leave_home_week}
-                    </p>
-                    <p className="text-[10px] text-nourish-text-dim">saídas de casa / semana</p>
-                  </div>
-                  <div>
-                    <p className="text-xl font-bold text-nourish-text tabular-nums">
-                      {homelabMetrics.supermarket_visits_month}
-                    </p>
-                    <p className="text-[10px] text-nourish-text-dim">visitas / mês</p>
-                  </div>
-                  <div>
-                    <p className="text-xl font-bold text-nourish-text tabular-nums">
-                      {homelabMetrics.avg_days_between_shops ?? '—'}
-                    </p>
-                    <p className="text-[10px] text-nourish-text-dim">dias entre compras (mediana)</p>
-                  </div>
-                </div>
-                {homelabMetrics.suggested_days_until_shop != null && (
                   <p className="text-xs text-nourish-text-dim mt-3 text-center">
-                    Sugestão para lista automática: ~{homelabMetrics.suggested_days_until_shop} dias até ao super
+                    Lista automática ao sair: ~{homelabMetrics.suggested_days_until_shop} dias de despensa
                   </p>
-                )}
-              </section>
-            )}
+                </>
+              )}
+            </section>
 
             <section className="rounded-xl border border-nourish-border bg-nourish-surface/50 p-3 space-y-2">
               <p className="text-xs text-nourish-text-dim leading-snug">

@@ -45,8 +45,8 @@ ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- /opt/nourish/check.sh" | 
 tar czf - -C "$ROOT/homelab" nourish-check-server.mjs nourish-check.service 2>/dev/null | \
   ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- tar xzf - -C /opt/nourish" 2>/dev/null || true
 ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- bash -c '
-  cp /opt/nourish/nourish-check.service /etc/systemd/system/nourish-check.service 2>/dev/null || cp /opt/nourish/check-server.mjs /opt/nourish/check-server.mjs
-  test -f /opt/nourish/check-server.mjs || mv /opt/nourish/nourish-check-server.mjs /opt/nourish/check-server.mjs 2>/dev/null || true
+  cp /opt/nourish/nourish-check.service /etc/systemd/system/nourish-check.service
+  cp /opt/nourish/nourish-check-server.mjs /opt/nourish/check-server.mjs
   systemctl daemon-reload
   systemctl enable nourish-check
   systemctl restart nourish-check

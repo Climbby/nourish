@@ -9,7 +9,7 @@
 ## Phase 3 — Supermarket automation (homelab)
 
 1. `homelab/install-smart-shopping.sh` — atualiza servidor + scripts
-2. Copiar `homelab/ha-packages/nourish-supermarket-metrics.yaml` para HA `packages/`
+2. Copiar `homelab/ha-packages/nourish_supermarket_metrics.yaml` para HA `packages/`
 3. Importar `homelab/n8n/nourish-at-supermarket-import.json`, ativar, token HA
 4. `HA_TOKEN=… ./homelab/deploy-ha-smart-shopping.sh` — leave home + eventos
 5. Confirmar zona HA = `zone.auchan` (ou editar YAML)

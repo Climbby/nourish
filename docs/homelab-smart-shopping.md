@@ -129,8 +129,10 @@ GROCY_HOST=192.168.1.61:9192 GROCY_API_KEY=xxx DAYS_UNTIL_SHOP=4 node scripts/gr
 
 | Channel | Used for |
 |---------|----------|
-| **ntfy** topic `presence` via HA `notify.presence` | Arrive / leave home (automations use `notify.send_message`, not `notify.ntfy_presence`) |
-| **HA Companion** `notify.telemovel_francisco` | Nourish shopping list alerts from n8n when items are added |
+| **ntfy** topic `presence` via HA `notify.presence` | Arrive / leave home (automations use `notify.send_message`, not `notify.ntfy_presence`) — only devices subscribed to that topic |
+| **HA Companion** `notify.telemovel_francisco` | Nourish shopping list alerts from n8n — **Francisco’s phone only** (`notify.anasta` is never used) |
+
+**Avoid duplicate pings:** leave home can send **two** channels (presence ntfy + Companion if the despensa check adds items). Supermarket arrival notifies **only when the Grocy list has pending items** (n8n `List has items?` gate).
 
 **Not in the PWA yet:** Web Push when leaving home would need a backend + geofence; HA + n8n is the right place for that.
 

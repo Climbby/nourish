@@ -37,6 +37,11 @@ function loadEvents(days = 30) {
     .filter((e) => e && new Date(e.at).getTime() >= cutoff)
 }
 
+function configuredDaysUntilShop() {
+  const n = parseFloat(process.env.DAYS_UNTIL_SHOP || process.env.NOURISH_DAYS_UNTIL_SHOP || '4')
+  return Number.isFinite(n) && n > 0 ? n : 4
+}
+
 function computeMetrics(events) {
   const supermarket = events.filter((e) => e.type === 'supermarket_enter')
   const leaveHome = events.filter((e) => e.type === 'leave_home')
@@ -54,16 +59,22 @@ function computeMetrics(events) {
       gaps.push((shopTimes[i] - shopTimes[i - 1]) / 86400000)
     }
     gaps.sort((a, b) => a - b)
-    avgDaysBetween = Math.round(gaps[Math.floor(gaps.length / 2)] * 10) / 10
+    const median = gaps[Math.floor(gaps.length / 2)]
+    if (median > 0) avgDaysBetween = Math.round(median * 10) / 10
   }
 
+  const daysUntilShop = configuredDaysUntilShop()
+  const suggested =
+    avgDaysBetween != null && avgDaysBetween > 0 ? avgDaysBetween : daysUntilShop
+
   return {
+    days_until_shop: daysUntilShop,
     supermarket_visits_week: supermarket.filter(inWeek).length,
     supermarket_visits_month: supermarket.filter(inMonth).length,
     leave_home_week: leaveHome.filter(inWeek).length,
     leave_home_month: leaveHome.filter(inMonth).length,
     avg_days_between_shops: avgDaysBetween,
-    suggested_days_until_shop: avgDaysBetween ?? null,
+    suggested_days_until_shop: suggested,
   }
 }
 

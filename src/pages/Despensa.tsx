@@ -5,6 +5,7 @@ import { grocyConfig } from '../config/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
+import { fetchHomelabMetrics } from '../api/homelabMetrics'
 import { computeDespensaAnalytics, getBuyAmountFromDesc } from '../utils/despensaAnalytics'
 
 const { despensaGroupId: DESPENSA_GROUP_ID } = grocyConfig
@@ -16,12 +17,21 @@ interface DespensaCardProps {
   onConsume: (id: number) => void
   onAdd: (id: number) => void
   onAddToShoppingList: (id: number) => void
+  daysUntilShop: number | null
 }
 
-function DespensaCard({ item, log, onShoppingList, onConsume, onAdd, onAddToShoppingList }: DespensaCardProps) {
+function DespensaCard({
+  item,
+  log,
+  onShoppingList,
+  onConsume,
+  onAdd,
+  onAddToShoppingList,
+  daysUntilShop,
+}: DespensaCardProps) {
   const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
-  const analytics = computeDespensaAnalytics(log, item.amount)
+  const analytics = computeDespensaAnalytics(log, item.amount, daysUntilShop)
   const buyAmount = getBuyAmountFromDesc(item.product.description, item.product.id)
   const pricePerUnit = item.amount > 0 && item.value > 0 ? item.value / item.amount : null
 
@@ -126,6 +136,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   const [items, setItems] = useState<StockItem[]>([])
   const [logs, setLogs] = useState<Record<number, StockLogEntry[]>>({})
   const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>([])
+  const [daysUntilShop, setDaysUntilShop] = useState<number | null>(null)
   const [showList, setShowList] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -157,6 +168,12 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    fetchHomelabMetrics().then((m) => {
+      if (m) setDaysUntilShop(m.days_until_shop)
+    })
+  }, [])
 
   const handleConsume = async (id: number) => {
     setItems(prev => prev.map(s => s.product_id === id ? { ...s, amount: Math.max(0, s.amount - 1) } : s))
@@ -198,7 +215,12 @@ export function DespensaSection({ query = '' }: { query?: string }) {
 
   return (
     <div>
-      <div className="flex justify-end mb-3">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        {daysUntilShop != null && (
+          <p className="text-xs text-nourish-text-dim">
+            Compras a cada <span className="font-semibold text-nourish-text">{daysUntilShop}</span> dias
+          </p>
+        )}
         <ShoppingListButton count={pendingList.length} onClick={() => setShowList(true)} />
       </div>
 
@@ -218,6 +240,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
             onConsume={handleConsume}
             onAdd={handleAdd}
             onAddToShoppingList={handleAddToShoppingList}
+            daysUntilShop={daysUntilShop}
           />
         ))}
       </div>

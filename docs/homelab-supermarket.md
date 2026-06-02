@@ -34,4 +34,4 @@ Leave home also `POST /event` with `leave_home` (for Perfil metrics).
 
 Import n8n workflow `homelab/n8n/nourish-at-supermarket-import.json`.
 
-Add HA package `homelab/ha-packages/nourish-supermarket-metrics.yaml` and reload.
+Add HA package `homelab/ha-packages/nourish_supermarket_metrics.yaml` (underscore slug) and reload.

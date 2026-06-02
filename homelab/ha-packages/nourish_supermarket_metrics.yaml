@@ -1,0 +1,15 @@
+# Supermarket arrival automation (rest_command in nourish_smart_shopping.yaml)
+
+automation:
+  - id: nourish_supermarket_arrival
+    alias: "Nourish — chegada ao supermercado"
+    description: Envia lista de compras ao telemovel ao entrar no super
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: zone
+        entity_id: person.francisco_fernandes
+        zone: zone.auchan
+        event: enter
+    action:
+      - action: rest_command.nourish_at_supermarket
