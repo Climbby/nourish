@@ -49,6 +49,8 @@ export const grocy = {
 
   getProducts: () => apiFetch<Product[]>('/objects/products'),
 
+  getProduct: (id: number) => apiFetch<Product>(`/objects/products/${id}`),
+
   getQuantityUnits: () => apiFetch<QuantityUnit[]>('/objects/quantity_units'),
 
   createRecipe: (data: Partial<Recipe>) =>
@@ -153,6 +155,9 @@ export const grocy = {
     params.append('query[]', `product_id=${productId}`)
     return apiFetch<StockLogEntry[]>(`/objects/stock_log?${params.toString()}`)
   },
+
+  deleteStockLogEntry: (id: number) =>
+    apiFetch<void>(`/objects/stock_log/${id}`, { method: 'DELETE' }),
 
   getAllStockLog: () => apiFetch<StockLogEntry[]>('/objects/stock_log'),
 

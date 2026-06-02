@@ -7,6 +7,7 @@ import { Favourites } from './pages/Favourites'
 import { History } from './pages/History'
 import { Profile } from './pages/Profile'
 import { AddProduct } from './pages/AddProduct'
+import { ProductDetail } from './pages/ProductDetail'
 import { UpdatePrompt } from './components/UpdatePrompt'
 
 export default function App() {
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/history" element={<History />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/add-product" element={<AddProduct />} />
+          <Route path="/product/:id" element={<ProductDetail />} />
         </Routes>
       </div>
     </BrowserRouter>

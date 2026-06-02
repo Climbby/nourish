@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { grocyConfig } from '../config/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
@@ -18,6 +19,7 @@ interface DespensaCardProps {
 }
 
 function DespensaCard({ item, log, onShoppingList, onConsume, onAdd, onAddToShoppingList }: DespensaCardProps) {
+  const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
   const analytics = computeDespensaAnalytics(log, item.amount)
   const buyAmount = getBuyAmountFromDesc(item.product.description, item.product.id)
@@ -26,7 +28,11 @@ function DespensaCard({ item, log, onShoppingList, onConsume, onAdd, onAddToShop
   return (
     <div className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border flex flex-col">
       {/* Image */}
-      <div className="relative flex-shrink-0">
+      <button
+        type="button"
+        className="relative flex-shrink-0 w-full text-left focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-inset rounded-t-2xl"
+        onClick={() => navigate(`/product/${item.product_id}`)}
+      >
         {item.product.picture_file_name && !imgError ? (
           <img
             src={grocy.productPictureUrl(item.product.picture_file_name)}
@@ -49,11 +55,17 @@ function DespensaCard({ item, log, onShoppingList, onConsume, onAdd, onAddToShop
             ⚠
           </span>
         )}
-      </div>
+      </button>
 
       {/* Info */}
       <div className="p-3 space-y-2 flex flex-col flex-1">
-        <h3 className="font-semibold text-nourish-text text-sm leading-snug">{item.product.name}</h3>
+        <button
+          type="button"
+          onClick={() => navigate(`/product/${item.product_id}`)}
+          className="font-semibold text-nourish-text text-sm leading-snug text-left focus:outline-none focus:underline"
+        >
+          {item.product.name}
+        </button>
 
         {(pricePerUnit !== null || (item.product.calories ?? 0) > 0) && (
           <div className="flex items-center justify-between gap-1 flex-wrap">
