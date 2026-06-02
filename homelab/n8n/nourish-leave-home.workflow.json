@@ -1,0 +1,119 @@
+{
+  "name": "Nourish — despensa ao sair de casa",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nourish-leave-home",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "nourish-leave-home"
+    },
+    {
+      "parameters": {
+        "command": "=pct exec 117 -- /opt/nourish/check.sh {{ $json.body.days_until_shop || $json.days_until_shop || '' }}"
+      },
+      "id": "ssh",
+      "name": "Run nourish check",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [220, 0],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_WITH_PROXMOX_SSH_CREDENTIAL_ID",
+          "name": "Proxmox root (pve_ed25519)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.stdout || $input.first().json.data || '{}';\nlet data;\ntry { data = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { data = { summary: 'Erro ao ler resposta do script', added: [] }; }\nreturn [{ json: data }];"
+      },
+      "id": "parse",
+      "name": "Parse JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "has-items",
+              "leftValue": "={{ $json.added.length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-added",
+      "name": "Items added?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "resource": "notify",
+        "operation": "send",
+        "entityId": "notify.telemovel_francisco",
+        "message": "={{ $json.summary }}",
+        "additionalFields": {
+          "title": "Compras — saíste de casa"
+        }
+      },
+      "id": "notify-phone",
+      "name": "Notify phone",
+      "type": "n8n-nodes-base.homeAssistant",
+      "typeVersion": 1,
+      "position": [900, -80],
+      "credentials": {
+        "homeAssistantApi": {
+          "id": "REPLACE_WITH_HA_CREDENTIAL_ID",
+          "name": "Home Assistant"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 120]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Run nourish check", "type": "main", "index": 0 }]] },
+    "Run nourish check": { "main": [[{ "node": "Parse JSON", "type": "main", "index": 0 }]] },
+    "Parse JSON": {
+      "main": [
+        [
+          { "node": "Items added?", "type": "main", "index": 0 },
+          { "node": "Respond", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Items added?": {
+      "main": [
+        [{ "node": "Notify phone", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": false }
+}

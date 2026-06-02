@@ -10,14 +10,18 @@ import { parseDescription } from '../utils/parseDescription'
 import { pickMealSuggestion } from '../utils/suggestMeal'
 import { DespensaSection } from './Despensa'
 
-type Filter = 'todos' | 'completa' | 'ligeira' | 'despensa'
+type Filter = 'completa' | 'ligeira' | 'despensa'
 
 const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'todos', label: 'Todos' },
   { key: 'completa', label: 'Completa' },
   { key: 'ligeira', label: 'Ligeira' },
   { key: 'despensa', label: 'Despensa' },
 ]
+
+function parseFilter(raw: string | null): Filter {
+  if (raw === 'ligeira' || raw === 'despensa') return raw
+  return 'completa'
+}
 
 function SearchIcon() {
   return (
@@ -45,7 +49,7 @@ export function Home() {
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [searchParams, setSearchParams] = useSearchParams()
-  const activeFilter = (searchParams.get('filter') as Filter | null) ?? 'todos'
+  const activeFilter = parseFilter(searchParams.get('filter'))
   const setActiveFilter = (f: Filter) => setSearchParams({ filter: f }, { replace: true })
   const [migrating, setMigrating] = useState(false)
   const [migrateProgress, setMigrateProgress] = useState<{ done: number; total: number } | null>(null)
@@ -107,11 +111,10 @@ export function Home() {
   const filtered = recipes
     .filter((r) => {
       if (query && !r.name.toLowerCase().includes(query.toLowerCase())) return false
-      if (activeFilter === 'todos') return true
       const parsed = parsedById.get(r.id)!
       if (activeFilter === 'completa') return parsed.category === 'Completa'
       if (activeFilter === 'ligeira') return parsed.category === 'Ligeira'
-      return false // 'despensa' — no recipes
+      return false
     })
     .sort((a, b) => {
       const aPortions = parsedById.get(a.id)!.portions ?? 0
@@ -211,7 +214,7 @@ export function Home() {
           </div>
         )}
 
-        {!isDespensa && !loading && !error && suggestion && !query && activeFilter === 'todos' && (
+        {!isDespensa && !loading && !error && suggestion && !query && activeFilter === 'completa' && (
           <button
             type="button"
             onClick={() => navigate(`/meal/${suggestion.id}`)}

@@ -3,7 +3,7 @@ import { grocy } from '../api/grocy'
 import { grocyConfig } from '../config/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
-
+import { ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
 import { computeDespensaAnalytics, getBuyAmountFromDesc } from '../utils/despensaAnalytics'
 
 const { despensaGroupId: DESPENSA_GROUP_ID } = grocyConfig
@@ -114,6 +114,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   const [items, setItems] = useState<StockItem[]>([])
   const [logs, setLogs] = useState<Record<number, StockLogEntry[]>>({})
   const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>([])
+  const [showList, setShowList] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -174,7 +175,8 @@ export function DespensaSection({ query = '' }: { query?: string }) {
     } catch { /* silent */ }
   }
 
-  const shoppingListProductIds = new Set(shoppingList.filter(i => !i.done).map(i => i.product_id))
+  const pendingList = shoppingList.filter((i) => !i.done)
+  const shoppingListProductIds = new Set(pendingList.map((i) => i.product_id))
   const visible = items.filter(i =>
     !query || i.product.name.toLowerCase().includes(query.toLowerCase())
   )
@@ -184,6 +186,16 @@ export function DespensaSection({ query = '' }: { query?: string }) {
 
   return (
     <div>
+      <div className="flex justify-end mb-3">
+        <ShoppingListButton count={pendingList.length} onClick={() => setShowList(true)} />
+      </div>
+
+      <ShoppingListSheet
+        open={showList}
+        onClose={() => setShowList(false)}
+        onListChange={() => grocy.getShoppingList().then(setShoppingList)}
+      />
+
       <div className="grid grid-cols-2 gap-3">
         {visible.map(item => (
           <DespensaCard

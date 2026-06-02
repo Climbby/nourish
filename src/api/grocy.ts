@@ -165,6 +165,16 @@ export const grocy = {
       body: JSON.stringify({ product_id: productId, amount }),
     }),
 
+  removeFromShoppingList: (id: number) =>
+    apiFetch<void>(`/objects/shopping_list/${id}`, { method: 'DELETE' }),
+
+  markShoppingListDone: (item: ShoppingListItem) =>
+    apiFetch<void>(`/objects/shopping_list/${item.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...item, done: 1 }),
+    }),
+
   async migratePhotosToWebP(
     recipes: Recipe[],
     onProgress: (done: number, total: number) => void

@@ -97,7 +97,7 @@ cd /path/to/nourish && \
 ```
 
 4. **IF** JSON `added.length > 0`
-5. **Home Assistant** “notify.mobile_app_…” or **Telegram** with body from script output.
+5. **Home Assistant** `notify.send_message` with top-level `entity_id: notify.telemovel_francisco` (not nested under `data`).
 
 ### HA `rest_command` calling n8n
 
@@ -125,18 +125,12 @@ Run manually:
 GROCY_HOST=192.168.1.61:9192 GROCY_API_KEY=xxx DAYS_UNTIL_SHOP=4 node scripts/grocy-despensa-check.mjs
 ```
 
-## 4. Notifications
+## 4. Notifications (two channels)
 
-**Home Assistant** (example after n8n receives script output):
-
-```yaml
-service: notify.mobile_app_your_phone
-data:
-  title: "Compras antes de sair"
-  message: "{{ trigger.json.summary }}"
-```
-
-Message can list product names from the script’s `added` array.
+| Channel | Used for |
+|---------|----------|
+| **ntfy** topic `presence` via HA `notify.presence` | Arrive / leave home (automations use `notify.send_message`, not `notify.ntfy_presence`) |
+| **HA Companion** `notify.telemovel_francisco` | Nourish shopping list alerts from n8n when items are added |
 
 **Not in the PWA yet:** Web Push when leaving home would need a backend + geofence; HA + n8n is the right place for that.
 
@@ -148,6 +142,49 @@ Message can list product names from the script’s `added` array.
 | Global shop interval | Script can use **median** purchase interval across products if `DAYS_UNTIL_SHOP` unset. |
 | HA “away” vs “leave home” | Use **leave** if you only want alerts when exiting; use **not_home** if you also want checks while travelling. |
 | Security | Keep `GROCY_API_KEY` on the server (n8n/HA secrets), not in the phone app. |
+
+## Quick setup (this repo)
+
+### Live stack (2026-06-02)
+
+| Piece | Status |
+|--------|--------|
+| **CT117** `POST http://192.168.1.27:8787/check` | `nourish-check.service` |
+| **n8n** workflow `Nourish — despensa ao sair de casa` (`yfLrWmTcwKUDqerk`) | Active; webhook `http://192.168.1.24:5678/webhook/nourish-leave-home` |
+| **HA** `rest_command.nourish_despensa_check` + `input_number.nourish_days_until_shop` | In `configuration.yaml` |
+| **HA** automation `francisco_sai_de_casa` | `notify.send_message` → `notify.presence` (ntfy topic) + `rest_command.nourish_despensa_check` |
+| **Shopping alert** | n8n → `notify.telemovel_francisco` (Companion) only when items are added — separate from ntfy presence |
+
+Install / refresh:
+
+```bash
+./homelab/install-smart-shopping.sh          # CT117 check API + script
+HA_TOKEN=... ./homelab/deploy-ha-smart-shopping.sh   # HA VM 106 (restarts HA)
+```
+
+Set n8n **Notify HA phone** body to:
+
+```json
+{ "message": "…", "title": "Compras — saíste de casa", "entity_id": "notify.telemovel_francisco" }
+```
+
+Store the HA token in n8n credentials or env — never commit tokens to git.
+
+### n8n (CT114 — 192.168.1.24)
+
+Import `homelab/n8n/nourish-leave-home-import.json` (replace `HA_TOKEN_PLACEHOLDER` locally before import). Workflow uses HTTP to CT117 and HA — no SSH node required.
+
+### Home Assistant
+
+Helper **Dias ate ao supermercado** (`input_number.nourish_days_until_shop`, default 4). Tweak in **Settings → Helpers** before your next shop trip.
+
+Test webhook manually:
+
+```bash
+curl -X POST http://192.168.1.24:5678/webhook/nourish-leave-home \
+  -H 'Content-Type: application/json' \
+  -d '{"days_until_shop": 4}'
+```
 
 ## 6. Next steps you can add later
 
