@@ -10,7 +10,7 @@ CT_NOURISH="${CT_NOURISH:-117}"
 
 ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- mkdir -p /opt/nourish /etc/nourish"
 
-tar czf - -C "$ROOT/scripts" grocy-despensa-check.mjs | \
+tar czf - -C "$ROOT/scripts" grocy-despensa-check.mjs shopping-list-summary.mjs | \
   ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- tar xzf - -C /opt/nourish"
 
 GROCY_API_KEY=$(grep '^GROCY_API_KEY=' "$ROOT/.env" | cut -d= -f2-)

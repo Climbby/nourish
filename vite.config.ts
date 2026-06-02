@@ -92,6 +92,11 @@ export default defineConfig(({ mode }) => {
             'GROCY-API-KEY': env.GROCY_API_KEY,
           },
         },
+        '/nourish': {
+          target: 'http://192.168.1.27:8787',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/nourish/, ''),
+        },
       },
     },
   }

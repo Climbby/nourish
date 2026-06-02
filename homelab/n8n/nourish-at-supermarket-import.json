@@ -1,0 +1,69 @@
+{
+  "name": "Nourish — lista ao chegar ao super",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nourish-at-supermarket",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "w1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "nourish-at-supermarket"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.1.27:8787/at-supermarket"
+      },
+      "id": "w2",
+      "name": "Get shopping list",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.1.61:8123/api/services/notify/send_message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer HA_TOKEN_PLACEHOLDER" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"message\": {{ JSON.stringify($json.summary) }}, \"title\": \"Lista de compras\", \"entity_id\": \"notify.telemovel_francisco\"}"
+      },
+      "id": "w3",
+      "name": "Notify phone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "w4",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [560, 480]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Get shopping list", "type": "main", "index": 0 }]] },
+    "Get shopping list": {
+      "main": [[{ "node": "Notify phone", "type": "main", "index": 0 }, { "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

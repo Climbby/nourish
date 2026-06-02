@@ -75,7 +75,7 @@ import yaml
 autos = yaml.safe_load(guest("cat /mnt/data/supervisor/homeassistant/automations.yaml"))
 for a in autos:
     if a.get("id") == "francisco_sai_de_casa":
-        a["actions"] = [
+        acts = [
             {
                 "action": "notify.send_message",
                 "target": {"entity_id": "notify.presence"},
@@ -84,8 +84,10 @@ for a in autos:
                     "message": "{{ trigger.to_state.attributes.friendly_name }} saiu de casa",
                 },
             },
+            {"action": "rest_command.nourish_event_leave_home"},
             {"action": "rest_command.nourish_despensa_check"},
         ]
+        a["actions"] = acts
         break
 else:
     raise SystemExit("automation francisco_sai_de_casa not found")
