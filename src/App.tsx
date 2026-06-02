@@ -5,11 +5,14 @@ import { MealDetail } from './pages/MealDetail'
 import { EditMeal } from './pages/EditMeal'
 import { Favourites } from './pages/Favourites'
 import { History } from './pages/History'
+import { Profile } from './pages/Profile'
 import { AddProduct } from './pages/AddProduct'
+import { UpdatePrompt } from './components/UpdatePrompt'
 
 export default function App() {
   return (
     <BrowserRouter>
+      <UpdatePrompt />
       <div className="max-w-sm mx-auto min-h-screen bg-nourish-bg">
         <Routes>
           <Route path="/" element={<Home />} />
@@ -18,6 +21,7 @@ export default function App() {
           <Route path="/meal/:id/edit" element={<EditMeal />} />
           <Route path="/favourites" element={<Favourites />} />
           <Route path="/history" element={<History />} />
+          <Route path="/profile" element={<Profile />} />
           <Route path="/add-product" element={<AddProduct />} />
         </Routes>
       </div>

@@ -92,3 +92,45 @@ export function parseDescription(raw: string): ParsedRecipe {
     portions,
   }
 }
+
+function stripStepPrefix(step: string): string {
+  return step.replace(/^[-•*]\s*/, '').replace(/^\d+[.)]\s*/, '').trim()
+}
+
+export function parseSteps(steps: string | null): string[] {
+  if (!steps) return []
+  const trimmed = steps.trim()
+  if (!trimmed) return []
+
+  const lines = trimmed.split('\n').map(stripStepPrefix).filter(Boolean)
+  if (lines.length > 1) return lines
+
+  const single = lines[0] ?? trimmed
+
+  const numbered = single
+    .split(/(?=\d+[.)]\s+)/)
+    .map(stripStepPrefix)
+    .filter((s) => s.length > 0)
+  if (numbered.length > 1) return numbered
+
+  const sentences = single
+    .split(/\.\s+(?=[A-ZÀÁÂÃÉÊÍÓÔÕÚÇ])/)
+    .map((s) => s.trim().replace(/\.$/, ''))
+    .filter((s) => s.length > 3)
+  if (sentences.length > 1) return sentences
+
+  const semicolonParts = single.split(/\s*;\s+/).map(stripStepPrefix).filter((s) => s.length > 3)
+  if (semicolonParts.length > 1) return semicolonParts
+
+  return [stripStepPrefix(single)]
+}
+
+/** Normalise AI or pasted steps into one line per step (for storage in [Passos]). */
+export function stepsTextFromAi(raw: unknown): string {
+  if (Array.isArray(raw)) {
+    return raw.map((s) => stripStepPrefix(String(s))).filter(Boolean).join('\n')
+  }
+  const text = String(raw ?? '').trim()
+  if (!text) return ''
+  return parseSteps(text).join('\n')
+}

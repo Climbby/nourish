@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
+import { analyzeMeal, suggestIngredients } from '../api/ai'
 import type { Recipe } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription } from '../utils/parseDescription'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
-import { CategorySection, IngredientSection, NutritionSection, PriceSection } from './AddMeal'
+import { IngredientSection, NutritionSection, PriceSection, PortionsSection, aiButtonClass } from './AddMeal'
 import { PhotoField } from '../components/PhotoField'
 
 function BackIcon() {
@@ -41,13 +42,34 @@ export function EditMeal() {
   const [carbs, setCarbs] = useState('')
   const [fat, setFat] = useState('')
   const [category, setCategory] = useState('')
-  const [portions, setPortions] = useState<number | null>(null)
+  const [portions, setPortions] = useState('')
   const [priceOverride, setPriceOverride] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [nameError, setNameError] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [existingProducts, setExistingProducts] = useState<string[]>([])
+  const [suggestions, setSuggestions] = useState<Record<number, string[]>>({})
+  const [focusedRow, setFocusedRow] = useState<number | null>(null)
+  const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const numId = id ? parseInt(id, 10) : NaN
+
+  useEffect(() => {
+    grocy.getProducts().then((products) => {
+      setExistingProducts(products.map((p) => p.name))
+    }).catch(() => {})
+  }, [])
+
+  const debouncedSuggest = useCallback(async (rowId: number, query: string) => {
+    if (!query.trim() || query.length < 2) {
+      setSuggestions((prev) => ({ ...prev, [rowId]: [] }))
+      return
+    }
+    const results = await suggestIngredients(query, existingProducts)
+    setSuggestions((prev) => ({ ...prev, [rowId]: results }))
+  }, [existingProducts])
 
   useEffect(() => {
     if (!id || isNaN(numId)) {
@@ -85,7 +107,7 @@ export function EditMeal() {
 
       if (parsed.price !== null) setPriceOverride(parsed.price.toFixed(2))
       setCategory(parsed.category ?? '')
-      setPortions(parsed.portions)
+      setPortions(parsed.portions !== null ? String(parsed.portions) : '')
 
       if (r.picture_file_name) {
         setExistingPhoto(r.picture_file_name)
@@ -101,8 +123,62 @@ export function EditMeal() {
 
   const autoTotal = computeAutoTotal(ingredientRows)
 
-  function updateRow(id: number, field: 'name' | 'price', value: string) {
-    setIngredientRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)))
+  async function photoForAi(): Promise<File | null> {
+    if (photoFile) return photoFile
+    if (!photoPreview || photoPreview.startsWith('blob:')) return null
+    try {
+      const res = await fetch(photoPreview)
+      if (!res.ok) return null
+      const blob = await res.blob()
+      return new File([blob], 'meal.jpg', { type: blob.type || 'image/jpeg' })
+    } catch {
+      return null
+    }
+  }
+
+  async function handleAnalyze() {
+    setAnalyzing(true)
+    setAiError(null)
+    try {
+      const ingredientNames = ingredientRows.map((r) => r.name.trim()).filter(Boolean)
+      const result = await analyzeMeal(name.trim() || 'refeição', ingredientNames, await photoForAi())
+      if (result.calories !== null) setCalories(String(Math.round(result.calories)))
+      if (result.protein !== null) setProtein(String(Math.round(result.protein)))
+      if (result.carbs !== null) setCarbs(String(Math.round(result.carbs)))
+      if (result.fat !== null) setFat(String(Math.round(result.fat)))
+      if (result.totalPrice !== null) setPriceOverride(result.totalPrice.toFixed(2))
+      if (result.ingredients.length > 0) {
+        const existingNames = new Set(
+          ingredientRows.map((r) => r.name.trim().toLowerCase()).filter(Boolean)
+        )
+        const newRows = result.ingredients
+          .filter((n) => !existingNames.has(n.trim().toLowerCase()))
+          .map((n) => ({ id: rowIdRef.current++, name: n.trim(), price: '' }))
+        if (newRows.length > 0) {
+          setIngredientRows((prev) => {
+            const filled = prev.filter((r) => r.name.trim())
+            const empty = prev.filter((r) => !r.name.trim())
+            const base = filled.length > 0 ? filled : []
+            const firstEmpty = empty.length > 0 ? [{ ...empty[0], name: newRows[0].name, price: '' }] : []
+            const rest = newRows.slice(empty.length > 0 ? 1 : 0)
+            return [...base, ...firstEmpty, ...rest]
+          })
+        }
+      }
+      if (result.steps.trim() && !comoFazer.trim()) setComoFazer(result.steps.trim())
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Erro na análise')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  function updateRow(rowId: number, field: 'name' | 'price', value: string) {
+    setIngredientRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, [field]: value } : r)))
+    if (field === 'name') {
+      if (suggestTimeoutRef.current) clearTimeout(suggestTimeoutRef.current)
+      suggestTimeoutRef.current = setTimeout(() => debouncedSuggest(rowId, value), 300)
+    }
   }
 
   function addRow() {
@@ -132,7 +208,7 @@ export function EditMeal() {
         priceOverride,
         autoTotal,
         category,
-        portions
+        portions === '' ? null : parseInt(portions, 10)
       )
 
       await grocy.updateRecipe(numId, {
@@ -204,12 +280,27 @@ export function EditMeal() {
           <input type="text" value={name} onChange={(e) => { setName(e.target.value); setNameError(false) }}
             placeholder="Ex: Esparguete com atum" className={`${inputClass} ${nameError ? 'border-red-500' : ''}`} />
           {nameError && <p className="text-red-400 text-xs mt-1">Nome é obrigatório</p>}
+          <button type="button" onClick={handleAnalyze} disabled={analyzing || saving} className={aiButtonClass}>
+            {analyzing ? 'A gerar com IA…' : '✨ Gerar com IA'}
+          </button>
+          <p className="text-xs text-nourish-text-dim mt-1 leading-snug">
+            Usa o nome da refeição{photoPreview ? ', a foto' : ''} e ingredientes já escritos. Atualiza nutrição e preço;
+            acrescenta ingredientes em falta; preenche passos só se estiverem vazios. Não altera nome nem porções.
+          </p>
+          {aiError && <p className="text-red-400 text-xs mt-1">{aiError}</p>}
         </div>
 
-        <CategorySection category={category} onChange={setCategory} labelClass={labelClass} />
-
-        <IngredientSection rows={ingredientRows} onUpdate={updateRow} onAdd={addRow} onRemove={removeRow}
-          inputClass={inputClass} labelClass={labelClass} />
+        <IngredientSection
+          rows={ingredientRows}
+          onUpdate={updateRow}
+          onAdd={addRow}
+          onRemove={removeRow}
+          inputClass={inputClass}
+          labelClass={labelClass}
+          suggestions={suggestions}
+          focusedRow={focusedRow}
+          onFocus={setFocusedRow}
+        />
 
         {/* Steps */}
         <div>
@@ -223,6 +314,9 @@ export function EditMeal() {
           inputClass={inputClass} labelClass={labelClass} />
 
         <PriceSection autoTotal={autoTotal} priceOverride={priceOverride} onOverrideChange={setPriceOverride}
+          inputClass={inputClass} labelClass={labelClass} />
+
+        <PortionsSection portions={portions} onChange={setPortions}
           inputClass={inputClass} labelClass={labelClass} />
 
         {saveError && <div className="p-3 bg-red-900/30 border border-red-800 text-red-400 rounded-xl text-sm">{saveError}</div>}

@@ -189,11 +189,18 @@ export function History() {
                         </button>
                         <button
                           onClick={async () => {
+                            const removed = entries.filter((e) => allIds.includes(e.id))
                             setEntries((prev) => prev.filter((e) => !allIds.includes(e.id)))
                             try {
                               await Promise.all(allIds.map((id) => grocy.deleteMealPlanEntry(id)))
                             } catch {
-                              setEntries((prev) => [...prev, entry].sort((a, b) => b.day.localeCompare(a.day)))
+                              setEntries((prev) =>
+                                [...prev, ...removed].sort((a, b) =>
+                                  b.day !== a.day
+                                    ? b.day.localeCompare(a.day)
+                                    : (b.row_created_timestamp ?? '').localeCompare(a.row_created_timestamp ?? '')
+                                )
+                              )
                             }
                           }}
                           className="p-3 pr-4 text-nourish-border hover:text-red-400 transition-colors flex-shrink-0 focus:outline-none"

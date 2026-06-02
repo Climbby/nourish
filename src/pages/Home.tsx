@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
-import type { Recipe } from '../types/grocy'
+import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { MealCard } from '../components/MealCard'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
+import { useFavourites } from '../hooks/useFavourites'
 import { parseDescription } from '../utils/parseDescription'
+import { pickMealSuggestion } from '../utils/suggestMeal'
 import { DespensaSection } from './Despensa'
 
 type Filter = 'todos' | 'completa' | 'ligeira' | 'despensa'
@@ -35,7 +37,10 @@ function XIcon() {
 }
 
 export function Home() {
+  const navigate = useNavigate()
+  const { favourites } = useFavourites()
   const [recipes, setRecipes] = useState<Recipe[]>([])
+  const [mealPlan, setMealPlan] = useState<MealPlanEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -47,9 +52,12 @@ export function Home() {
 
   useEffect(() => {
     let mounted = true
-    grocy
-      .getRecipes()
-      .then((data) => { if (mounted) setRecipes(data) })
+    Promise.all([grocy.getRecipes(), grocy.getMealPlan()])
+      .then(([recipeList, plan]) => {
+        if (!mounted) return
+        setRecipes(recipeList)
+        setMealPlan(plan)
+      })
       .catch((e: Error) => { if (mounted) setError(e.message) })
       .finally(() => { if (mounted) setLoading(false) })
     return () => { mounted = false }
@@ -74,20 +82,40 @@ export function Home() {
     }
   }
 
+  const parsedById = useMemo(() => {
+    const map = new Map<number, ReturnType<typeof parseDescription>>()
+    for (const r of recipes) {
+      map.set(r.id, parseDescription(r.description ?? ''))
+    }
+    return map
+  }, [recipes])
+
   const isDespensa = activeFilter === 'despensa'
+
+  const suggestion = useMemo(
+    () =>
+      !isDespensa && !loading
+        ? pickMealSuggestion({ recipes, favourites, mealPlan })
+        : null,
+    [recipes, favourites, mealPlan, isDespensa, loading]
+  )
+
+  const suggestionParsed = suggestion
+    ? parseDescription(suggestion.description ?? '')
+    : null
 
   const filtered = recipes
     .filter((r) => {
       if (query && !r.name.toLowerCase().includes(query.toLowerCase())) return false
       if (activeFilter === 'todos') return true
-      const parsed = parseDescription(r.description ?? '')
+      const parsed = parsedById.get(r.id)!
       if (activeFilter === 'completa') return parsed.category === 'Completa'
       if (activeFilter === 'ligeira') return parsed.category === 'Ligeira'
       return false // 'despensa' — no recipes
     })
     .sort((a, b) => {
-      const aPortions = parseDescription(a.description ?? '').portions ?? 0
-      const bPortions = parseDescription(b.description ?? '').portions ?? 0
+      const aPortions = parsedById.get(a.id)!.portions ?? 0
+      const bPortions = parsedById.get(b.id)!.portions ?? 0
       return (bPortions > 0 ? 1 : 0) - (aPortions > 0 ? 1 : 0)
     })
 
@@ -181,6 +209,26 @@ export function Home() {
             <p className="font-medium text-nourish-text-dim">Sem resultados</p>
             <p className="text-sm text-nourish-border mt-1">Tenta outro filtro ou pesquisa</p>
           </div>
+        )}
+
+        {!isDespensa && !loading && !error && suggestion && !query && activeFilter === 'todos' && (
+          <button
+            type="button"
+            onClick={() => navigate(`/meal/${suggestion.id}`)}
+            className="w-full mb-4 p-4 rounded-2xl bg-nourish-surface border border-nourish-primary/30 text-left active:scale-[0.99] transition-transform focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+          >
+            <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-1">
+              Sugestão de hoje
+            </p>
+            <p className="font-semibold text-nourish-text">{suggestion.name}</p>
+            <p className="text-xs text-nourish-text-dim mt-1">
+              {(suggestionParsed?.portions ?? 0) > 0
+                ? `${suggestionParsed!.portions} porção${suggestionParsed!.portions! > 1 ? 'ões' : ''} pronta no frigorífico`
+                : favourites.has(suggestion.id)
+                  ? 'Uma das tuas favoritas'
+                  : 'Boa escolha para hoje'}
+            </p>
+          </button>
         )}
 
         {!isDespensa && !loading && filtered.length > 0 && (

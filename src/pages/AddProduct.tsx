@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
+import { grocyConfig } from '../config/grocy'
 import { PhotoField } from '../components/PhotoField'
 
-const DESPENSA_GROUP_ID = 6
-const DEFAULT_LOCATION_ID = 2
+const { despensaGroupId: DESPENSA_GROUP_ID, defaultLocationId: DEFAULT_LOCATION_ID, defaultQuId: DEFAULT_QU_ID } = grocyConfig
 
 const inputClass =
   'w-full px-4 py-3 bg-nourish-surface border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:border-transparent transition-shadow'
@@ -39,29 +39,22 @@ export function AddProduct() {
         name: name.trim(),
         product_group_id: DESPENSA_GROUP_ID,
         location_id: DEFAULT_LOCATION_ID,
-        qu_id_purchase: 2,
-        qu_id_stock: 2,
-        qu_id_consume: 2,
-        qu_id_price: 2,
+        qu_id_purchase: DEFAULT_QU_ID,
+        qu_id_stock: DEFAULT_QU_ID,
+        qu_id_consume: DEFAULT_QU_ID,
+        qu_id_price: DEFAULT_QU_ID,
         calories: calories ? parseFloat(calories) : null,
         active: 1,
         quick_consume_amount: 1,
         default_best_before_days: 0,
+        description: `[BuyAmount]\n${buyAmount || '1'}`,
       })
 
       if (photoFile) {
-        const filename = `product_${result.created_object_id}_${Date.now()}.webp`
-        const b64name = btoa(filename).replace(/=+$/, '')
-        await fetch(`/api/files/productpictures/${b64name}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': photoFile.type },
-          body: photoFile,
-        })
+        const filename = await grocy.uploadProductPicture(photoFile, result.created_object_id)
         await grocy.updateProduct(result.created_object_id, { picture_file_name: filename })
       }
 
-      // Store custom buy amount in the BUY_AMOUNTS config if != 1
-      // For now navigate back; user can adjust buy amount per-product later
       navigate(-1)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao guardar')

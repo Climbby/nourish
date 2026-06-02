@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { Product, QuantityUnit, Recipe, RecipeIngredient } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
-import { parseDescription } from '../utils/parseDescription'
+import { parseDescription, parseSteps } from '../utils/parseDescription'
 import { addPortions, decrementPortions } from '../utils/buildDescription'
 import { useFavourites } from '../hooks/useFavourites'
 
@@ -47,6 +47,8 @@ function HeartIcon({ filled }: { filled: boolean }) {
   )
 }
 
+const PREP_QUICK = [1, 2, 4] as const
+
 export function MealDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -62,10 +64,12 @@ export function MealDetail() {
   const [logError, setLogError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [preparing, setPreparing] = useState(false)
+  const [showPrepareSheet, setShowPrepareSheet] = useState(false)
   const [prepCount, setPrepCount] = useState('1')
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const didLongPress = useRef(false)
+  const [prepSaving, setPrepSaving] = useState(false)
+  const [confirmLogZero, setConfirmLogZero] = useState(false)
+  const [kitchenMode, setKitchenMode] = useState(false)
+  const [kitchenStep, setKitchenStep] = useState(0)
 
   useEffect(() => {
     const numId = id ? parseInt(id, 10) : NaN
@@ -94,59 +98,63 @@ export function MealDetail() {
   }, [id])
 
   async function handleLog(recipeId: number) {
+    if (!recipe) return
+    setConfirmLogZero(false)
     setLogging(true)
     setLogError(null)
     const d = new Date()
     const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const originalDesc = recipe.description ?? ''
+    const shouldDecrement = (parseDescription(originalDesc).portions ?? 0) > 0
+    let decremented = false
     try {
-      await grocy.logMeal({ day, recipe_id: recipeId, note: '' })
-      if (recipe && (parsed.portions ?? 0) > 0) {
-        const newDesc = decrementPortions(recipe.description ?? '')
+      if (shouldDecrement) {
+        const newDesc = decrementPortions(originalDesc)
         await grocy.updateRecipe(recipeId, { description: newDesc })
         setRecipe({ ...recipe, description: newDesc })
+        decremented = true
       }
+      await grocy.logMeal({ day, recipe_id: recipeId, note: '' })
       setLogged(true)
       setTimeout(() => setLogged(false), 2500)
     } catch (e) {
+      if (decremented) {
+        try {
+          await grocy.updateRecipe(recipeId, { description: originalDesc })
+          setRecipe({ ...recipe, description: originalDesc })
+        } catch { /* rollback failed — portions may be out of sync */ }
+      }
       setLogError(e instanceof Error ? e.message : 'Erro ao registar')
     } finally {
       setLogging(false)
     }
   }
 
+  function requestLog(recipeId: number) {
+    if (!recipe) return
+    const portions = parseDescription(recipe.description ?? '').portions
+    if (portions !== null && portions <= 0) {
+      setConfirmLogZero(true)
+      return
+    }
+    handleLog(recipeId)
+  }
+
   async function handlePrepare(amount?: number) {
     const n = amount ?? parseInt(prepCount, 10)
     if (!recipe || isNaN(n) || n <= 0) return
+    setPrepSaving(true)
+    setLogError(null)
     try {
       const newDesc = addPortions(recipe.description ?? '', n)
       await grocy.updateRecipe(recipe.id, { description: newDesc })
       setRecipe({ ...recipe, description: newDesc })
-      setPreparing(false)
+      setShowPrepareSheet(false)
       setPrepCount('1')
     } catch (e) {
       setLogError(e instanceof Error ? e.message : 'Erro ao preparar')
-    }
-  }
-
-  function startPrepLongPress() {
-    didLongPress.current = false
-    longPressTimer.current = setTimeout(() => {
-      didLongPress.current = true
-      setPreparing(true)
-    }, 500)
-  }
-
-  function cancelPrepLongPress() {
-    if (longPressTimer.current) {
-      clearTimeout(longPressTimer.current)
-      longPressTimer.current = null
-    }
-  }
-
-  function handlePrepPointerUp() {
-    if (!didLongPress.current) {
-      cancelPrepLongPress()
-      handlePrepare(2)
+    } finally {
+      setPrepSaving(false)
     }
   }
 
@@ -216,6 +224,8 @@ export function MealDetail() {
 
   const parsed = parseDescription(recipe.description ?? '')
   const { ingredients: parsedIngr, steps, nutrition, price } = parsed
+  const stepLines = parseSteps(steps)
+  const tracksPortions = parsed.portions !== null
 
   const nutritionItems = nutrition
     ? [
@@ -240,7 +250,6 @@ export function MealDetail() {
       )}
 
       <div className="px-4 pt-5 space-y-6">
-        {/* Nutrition + price card */}
         {(nutrition || price !== null) && (
           <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
             {nutrition && (
@@ -262,7 +271,6 @@ export function MealDetail() {
           </div>
         )}
 
-        {/* Grocy-linked ingredients */}
         {ingredients.length > 0 && (
           <section>
             <h3 className="font-semibold text-nourish-text mb-3">Ingredientes</h3>
@@ -286,7 +294,6 @@ export function MealDetail() {
           </section>
         )}
 
-        {/* Free-text ingredients from description */}
         {ingredients.length === 0 && parsedIngr && (
           <section>
             <h3 className="font-semibold text-nourish-text mb-3">Ingredientes</h3>
@@ -306,14 +313,142 @@ export function MealDetail() {
           </section>
         )}
 
-        {/* Steps */}
-        {steps && (
+        {stepLines.length > 0 && (
           <section>
-            <h3 className="font-semibold text-nourish-text mb-3">Como fazer</h3>
-            <p className="text-nourish-text-dim text-sm leading-relaxed whitespace-pre-line">{steps}</p>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-nourish-text">Como fazer</h3>
+              {stepLines.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => { setKitchenStep(0); setKitchenMode(true) }}
+                  className="text-xs font-semibold text-nourish-primary focus:outline-none"
+                >
+                  Modo cozinha
+                </button>
+              )}
+            </div>
+            <ol className="space-y-3">
+              {stepLines.map((step, i) => (
+                <li key={i} className="flex gap-3 text-sm">
+                  <span className="w-6 h-6 rounded-full bg-nourish-primary text-nourish-on-primary text-xs font-bold flex items-center justify-center flex-shrink-0">
+                    {i + 1}
+                  </span>
+                  <span className="text-nourish-text-dim leading-relaxed pt-0.5">{step}</span>
+                </li>
+              ))}
+            </ol>
           </section>
         )}
       </div>
+
+      {kitchenMode && stepLines.length > 0 && (
+        <div className="fixed inset-0 z-50 bg-nourish-bg flex flex-col">
+          <header className="flex items-center gap-3 px-4 pt-12 pb-4 border-b border-nourish-border">
+            <button
+              type="button"
+              onClick={() => setKitchenMode(false)}
+              className="p-2 -ml-2 text-nourish-text-dim rounded-lg focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+            >
+              <BackIcon />
+            </button>
+            <h2 className="font-semibold text-nourish-text text-lg truncate flex-1">{recipe.name}</h2>
+          </header>
+          <div className="flex-1 flex flex-col justify-center px-6 py-8">
+            <p className="text-xs text-nourish-text-dim uppercase tracking-wider mb-3">
+              Passo {kitchenStep + 1} de {stepLines.length}
+            </p>
+            <p className="text-nourish-text text-xl leading-relaxed font-medium">{stepLines[kitchenStep]}</p>
+          </div>
+          <div
+            className="flex gap-2 p-4 border-t border-nourish-border"
+            style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
+          >
+            <button
+              type="button"
+              disabled={kitchenStep === 0}
+              onClick={() => setKitchenStep((s) => s - 1)}
+              className="flex-1 py-3.5 rounded-xl border border-nourish-border text-nourish-text-dim font-semibold text-sm disabled:opacity-30 focus:outline-none"
+            >
+              Anterior
+            </button>
+            {kitchenStep < stepLines.length - 1 ? (
+              <button
+                type="button"
+                onClick={() => setKitchenStep((s) => s + 1)}
+                className="flex-1 py-3.5 rounded-xl bg-nourish-primary text-nourish-on-primary font-semibold text-sm focus:outline-none"
+              >
+                Seguinte
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setKitchenMode(false)}
+                className="flex-1 py-3.5 rounded-xl bg-nourish-primary text-nourish-on-primary font-semibold text-sm focus:outline-none"
+              >
+                Concluir
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showPrepareSheet && (
+        <div className="fixed inset-0 z-50 bg-black/60" onClick={() => !prepSaving && setShowPrepareSheet(false)}>
+          <div
+            className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface rounded-t-2xl"
+            style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 space-y-4">
+              <div className="text-center">
+                <p className="font-semibold text-nourish-text">Preparar refeição</p>
+                <p className="text-xs text-nourish-text-dim mt-1 leading-snug">
+                  Quantas porções guardaste no frigorífico?
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {PREP_QUICK.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    disabled={prepSaving}
+                    onClick={() => handlePrepare(n)}
+                    className="flex-1 py-3 rounded-xl bg-nourish-surface-high border border-nourish-border text-nourish-text font-semibold text-sm active:bg-nourish-primary active:text-nourish-on-primary active:border-nourish-primary disabled:opacity-50 focus:outline-none transition-colors"
+                  >
+                    +{n}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  value={prepCount}
+                  onChange={(e) => setPrepCount(e.target.value)}
+                  min="1"
+                  disabled={prepSaving}
+                  className="flex-1 px-3 py-2.5 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text text-sm text-center focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                />
+                <button
+                  type="button"
+                  disabled={prepSaving}
+                  onClick={() => handlePrepare()}
+                  className="px-5 py-2.5 rounded-xl bg-nourish-primary text-nourish-on-primary text-sm font-semibold disabled:opacity-50 focus:outline-none"
+                >
+                  {prepSaving ? '…' : 'OK'}
+                </button>
+              </div>
+              <button
+                type="button"
+                disabled={prepSaving}
+                onClick={() => setShowPrepareSheet(false)}
+                className="w-full py-2 text-nourish-text-dim text-sm focus:outline-none"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface border-t border-nourish-border p-4"
@@ -339,57 +474,56 @@ export function MealDetail() {
               {deleting ? 'A apagar...' : 'Apagar refeição'}
             </button>
           </div>
-        ) : preparing ? (
+        ) : confirmLogZero ? (
           <div className="space-y-2">
-            <p className="text-xs text-nourish-text-dim text-center">Quantas porções preparaste?</p>
+            <p className="text-xs text-nourish-text-dim text-center leading-snug">
+              Sem porções prontas no frigorífico. Registar na mesma?
+            </p>
             <div className="flex gap-2">
-              <input
-                type="number"
-                value={prepCount}
-                onChange={(e) => setPrepCount(e.target.value)}
-                min="1"
-                className="flex-1 px-3 py-2.5 bg-nourish-surface border border-nourish-border rounded-xl text-nourish-text text-sm text-center focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-              />
               <button
-                onClick={() => { setPreparing(false); setPrepCount('1') }}
-                className="px-4 py-2.5 rounded-xl border border-nourish-border text-nourish-text-dim text-sm font-semibold focus:outline-none"
+                type="button"
+                onClick={() => setConfirmLogZero(false)}
+                className="flex-1 py-3.5 rounded-xl border border-nourish-border text-nourish-text-dim font-semibold text-sm focus:outline-none"
               >
                 Cancelar
               </button>
               <button
-                onClick={() => handlePrepare()}
-                className="px-4 py-2.5 rounded-xl bg-nourish-primary text-nourish-on-primary text-sm font-semibold focus:outline-none"
+                type="button"
+                onClick={() => handleLog(recipe.id)}
+                disabled={logging}
+                className="flex-1 py-3.5 rounded-xl bg-nourish-primary text-nourish-on-primary font-semibold text-sm disabled:opacity-50 focus:outline-none"
               >
-                OK
+                Sim, comi hoje
               </button>
             </div>
           </div>
         ) : (
           <div className="space-y-2">
-            {parsed.portions !== null && (
+            {tracksPortions && (
               <div className="flex items-center justify-between text-sm px-1">
-                <span className="text-nourish-text-dim">Porções disponíveis</span>
-                <span className={`font-semibold ${parsed.portions > 0 ? 'text-nourish-primary' : 'text-nourish-border'}`}>
-                  {parsed.portions > 0 ? parsed.portions : 'Nenhuma'}
+                <span className="text-nourish-text-dim">Porções no frigorífico</span>
+                <span className={`font-semibold ${parsed.portions! > 0 ? 'text-nourish-primary' : 'text-nourish-border'}`}>
+                  {parsed.portions! > 0 ? parsed.portions : 'Nenhuma'}
                 </span>
               </div>
             )}
             <button
-              onClick={() => handleLog(recipe.id)}
+              onClick={() => requestLog(recipe.id)}
               disabled={logging || logged}
               className="w-full bg-nourish-primary text-nourish-on-primary font-semibold py-3.5 rounded-xl active:opacity-90 transition-opacity disabled:opacity-70 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-2 focus:ring-offset-nourish-surface"
             >
               {logged ? 'Registado ✓' : logging ? 'A registar...' : 'Registar refeição'}
             </button>
             <button
-              onPointerDown={startPrepLongPress}
-              onPointerUp={handlePrepPointerUp}
-              onPointerLeave={cancelPrepLongPress}
-              onPointerCancel={cancelPrepLongPress}
-              className="w-full py-2.5 rounded-xl border border-nourish-border text-nourish-text-dim text-sm font-semibold focus:outline-none select-none"
+              type="button"
+              onClick={() => setShowPrepareSheet(true)}
+              className="w-full py-2.5 rounded-xl border border-nourish-border text-nourish-text-dim text-sm font-semibold focus:outline-none"
             >
-              + Preparar refeição
+              Preparar refeição
             </button>
+            <p className="text-[10px] text-nourish-text-dim text-center leading-snug px-2">
+              Registar = comeste hoje · Preparar = guardaste porções no frigorífico
+            </p>
           </div>
         )}
       </div>

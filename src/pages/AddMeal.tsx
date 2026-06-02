@@ -1,11 +1,12 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
+import { analyzeMeal, analyzeProduct, suggestIngredients } from '../api/ai'
+import { grocyConfig } from '../config/grocy'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
 import { PhotoField } from '../components/PhotoField'
 
-const DESPENSA_GROUP_ID = 6
-const DEFAULT_LOCATION_ID = 2
+const { despensaGroupId: DESPENSA_GROUP_ID, defaultLocationId: DEFAULT_LOCATION_ID, defaultQuId: DEFAULT_QU_ID } = grocyConfig
 
 function BackIcon() {
   return (
@@ -28,6 +29,10 @@ const inputClass =
 
 const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
 
+export const aiButtonClass =
+  'w-full mt-2 py-2.5 rounded-xl text-sm font-semibold transition-all focus:outline-none focus:ring-2 focus:ring-nourish-primary ' +
+  'bg-gradient-to-r from-purple-600 to-blue-500 text-white hover:from-purple-500 hover:to-blue-400 active:opacity-90 disabled:opacity-50'
+
 export function AddMeal() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -47,7 +52,7 @@ export function AddMeal() {
   const [protein, setProtein] = useState('')
   const [carbs, setCarbs] = useState('')
   const [fat, setFat] = useState('')
-  const [category] = useState(() => {
+  const [category, setCategory] = useState(() => {
     if (typeParam === 'completa') return 'Completa'
     if (typeParam === 'ligeira') return 'Ligeira'
     return ''
@@ -55,13 +60,87 @@ export function AddMeal() {
   const [buyAmount, setBuyAmount] = useState('1')
   const [priceOverride, setPriceOverride] = useState('')
   const [saving, setSaving] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [nameError, setNameError] = useState(false)
+  const [existingProducts, setExistingProducts] = useState<string[]>([])
+  const [suggestions, setSuggestions] = useState<Record<number, string[]>>({})
+  const [focusedRow, setFocusedRow] = useState<number | null>(null)
+  const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const autoTotal = computeAutoTotal(ingredientRows)
 
+  useEffect(() => {
+    if (!isDespensa) {
+      grocy.getProducts().then((products) => {
+        setExistingProducts(products.map((p) => p.name))
+      }).catch(() => {})
+    }
+  }, [isDespensa])
+
+  const debouncedSuggest = useCallback(async (id: number, query: string) => {
+    if (!query.trim() || query.length < 2) {
+      setSuggestions((prev) => ({ ...prev, [id]: [] }))
+      return
+    }
+    const results = await suggestIngredients(query, existingProducts)
+    setSuggestions((prev) => ({ ...prev, [id]: results }))
+  }, [existingProducts])
+
+  async function handleAnalyze() {
+    setAnalyzing(true)
+    setAiError(null)
+    try {
+      if (isDespensa) {
+        const result = await analyzeProduct(name.trim() || 'produto', photoFile)
+        if (result.calories !== null) setCalories(String(Math.round(result.calories)))
+      } else {
+        const ingredientNames = ingredientRows.map((r) => r.name.trim()).filter(Boolean)
+        const result = await analyzeMeal(name.trim() || 'refeição', ingredientNames, photoFile)
+        if (result.calories !== null) setCalories(String(Math.round(result.calories)))
+        if (result.protein !== null) setProtein(String(Math.round(result.protein)))
+        if (result.carbs !== null) setCarbs(String(Math.round(result.carbs)))
+        if (result.fat !== null) setFat(String(Math.round(result.fat)))
+        if (result.totalPrice !== null) setPriceOverride(result.totalPrice.toFixed(2))
+
+        if (result.ingredients.length > 0) {
+          const existingNames = new Set(
+            ingredientRows.map((r) => r.name.trim().toLowerCase()).filter(Boolean)
+          )
+          const newRows = result.ingredients
+            .filter((n) => !existingNames.has(n.trim().toLowerCase()))
+            .map((n) => ({ id: rowIdRef.current++, name: n.trim(), price: '' }))
+
+          if (newRows.length > 0) {
+            setIngredientRows((prev) => {
+              const filled = prev.filter((r) => r.name.trim())
+              const empty = prev.filter((r) => !r.name.trim())
+              const base = filled.length > 0 ? filled : []
+              const firstEmpty = empty.length > 0 ? [{ ...empty[0], name: newRows[0].name, price: '' }] : []
+              const rest = newRows.slice(empty.length > 0 ? 1 : 0)
+              return [...base, ...firstEmpty, ...rest]
+            })
+          }
+        }
+
+        if (result.steps.trim() && !comoFazer.trim()) {
+          setComoFazer(result.steps.trim())
+        }
+      }
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Erro na análise')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
   function updateRow(id: number, field: 'name' | 'price', value: string) {
     setIngredientRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)))
+    if (field === 'name') {
+      if (suggestTimeoutRef.current) clearTimeout(suggestTimeoutRef.current)
+      suggestTimeoutRef.current = setTimeout(() => debouncedSuggest(id, value), 300)
+    }
   }
 
   function addRow() {
@@ -86,10 +165,10 @@ export function AddMeal() {
           name: name.trim(),
           product_group_id: DESPENSA_GROUP_ID,
           location_id: DEFAULT_LOCATION_ID,
-          qu_id_purchase: 2,
-          qu_id_stock: 2,
-          qu_id_consume: 2,
-          qu_id_price: 2,
+          qu_id_purchase: DEFAULT_QU_ID,
+          qu_id_stock: DEFAULT_QU_ID,
+          qu_id_consume: DEFAULT_QU_ID,
+          qu_id_price: DEFAULT_QU_ID,
           calories: calories ? parseFloat(calories) : null,
           active: 1,
           quick_consume_amount: 1,
@@ -156,6 +235,13 @@ export function AddMeal() {
             placeholder={isDespensa ? 'Ex: Leite, Água, Pão…' : 'Ex: Esparguete com atum'}
             className={`${inputClass} ${nameError ? 'border-red-500' : ''}`} />
           {nameError && <p className="text-red-400 text-xs mt-1">Nome é obrigatório</p>}
+          <button type="button" onClick={handleAnalyze} disabled={analyzing || saving} className={aiButtonClass}>
+            {analyzing ? 'A gerar com IA…' : '✨ Gerar com IA'}
+          </button>
+          <p className="text-xs text-nourish-text-dim mt-1 leading-snug">
+            Preenche ingredientes, passos, nutrição e preço a partir do nome{photoPreview ? ' e da foto' : ''}.
+          </p>
+          {aiError && <p className="text-red-400 text-xs">{aiError}</p>}
         </div>
 
         {isDespensa ? (
@@ -174,7 +260,6 @@ export function AddMeal() {
           </>
         ) : (
           <>
-            <CategorySection category={category} onChange={() => {}} labelClass={labelClass} />
             <IngredientSection
               rows={ingredientRows}
               onUpdate={updateRow}
@@ -182,6 +267,9 @@ export function AddMeal() {
               onRemove={removeRow}
               inputClass={inputClass}
               labelClass={labelClass}
+              suggestions={suggestions}
+              focusedRow={focusedRow}
+              onFocus={setFocusedRow}
             />
             <div>
               <label className={labelClass}>Como fazer <span className="text-nourish-border font-normal">(opcional)</span></label>
@@ -216,59 +304,54 @@ export function AddMeal() {
 
 // ── Shared sub-sections (also used by EditMeal) ──────────────────────────────
 
-export function CategorySection({ category, onChange, labelClass }: {
-  category: string
-  onChange: (v: string) => void
-  labelClass: string
-}) {
-  return (
-    <div>
-      <label className={labelClass}>Tipo <span className="text-nourish-border font-normal">(opcional)</span></label>
-      <div className="flex gap-2">
-        {(['Ligeira', 'Completa'] as const).map((c) => (
-          <button
-            key={c}
-            type="button"
-            onClick={() => onChange(category === c ? '' : c)}
-            className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-              category === c
-                ? 'bg-nourish-primary text-nourish-on-primary border-nourish-primary'
-                : 'bg-nourish-surface border-nourish-border text-nourish-text-dim'
-            }`}
-          >
-            {c}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-export function IngredientSection({ rows, onUpdate, onAdd, onRemove, inputClass, labelClass }: {
+export function IngredientSection({ rows, onUpdate, onAdd, onRemove, inputClass, labelClass, suggestions = {}, focusedRow = null, onFocus }: {
   rows: IngredientRow[]
   onUpdate: (id: number, field: 'name' | 'price', value: string) => void
   onAdd: () => void
   onRemove: (id: number) => void
   inputClass: string
   labelClass: string
+  suggestions?: Record<number, string[]>
+  focusedRow?: number | null
+  onFocus?: (id: number | null) => void
 }) {
   return (
     <div>
       <label className={labelClass}>Ingredientes <span className="text-nourish-border font-normal">(opcional)</span></label>
       <div className="space-y-2">
         {rows.map((row) => (
-          <div key={row.id} className="flex gap-2 items-center">
-            <input type="text" value={row.name} onChange={(e) => onUpdate(row.id, 'name', e.target.value)}
-              placeholder="Ingrediente" className={`${inputClass} flex-1`} />
-            <div className="relative w-24 flex-shrink-0">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">€</span>
-              <input type="number" value={row.price} onChange={(e) => onUpdate(row.id, 'price', e.target.value)}
-                placeholder="0.00" className={`${inputClass} pl-7 pr-2`} min="0" step="0.01" />
+          <div key={row.id} className="space-y-1">
+            <div className="flex gap-2 items-start">
+              <div className="flex-1 relative">
+                <input type="text" value={row.name} onChange={(e) => onUpdate(row.id, 'name', e.target.value)}
+                  onFocus={() => onFocus?.(row.id)}
+                  onBlur={() => setTimeout(() => onFocus?.(null), 200)}
+                  placeholder="Ingrediente" className={`${inputClass} w-full`} />
+                {onFocus && focusedRow === row.id && suggestions[row.id]?.length > 0 && (
+                  <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-nourish-surface border border-nourish-border rounded-xl shadow-lg overflow-hidden">
+                    {suggestions[row.id].map((s, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onMouseDown={(e) => { e.preventDefault(); onUpdate(row.id, 'name', s); onFocus(null) }}
+                        className="w-full text-left px-4 py-2 text-sm text-nourish-text hover:bg-nourish-border/20 transition-colors focus:outline-none"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="relative w-24 flex-shrink-0">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">€</span>
+                <input type="number" value={row.price} onChange={(e) => onUpdate(row.id, 'price', e.target.value)}
+                  placeholder="0.00" className={`${inputClass} pl-7 pr-2`} min="0" step="0.01" />
+              </div>
+              <button type="button" onClick={() => onRemove(row.id)}
+                className="p-2 text-nourish-border hover:text-red-400 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded-lg mt-2">
+                <TrashIcon />
+              </button>
             </div>
-            <button type="button" onClick={() => onRemove(row.id)}
-              className="p-2 text-nourish-border hover:text-red-400 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded-lg">
-              <TrashIcon />
-            </button>
           </div>
         ))}
       </div>
@@ -322,6 +405,28 @@ export function PriceSection({ autoTotal, priceOverride, onOverrideChange, input
       {priceOverride !== '' && autoTotal > 0 && parseFloat(priceOverride) !== autoTotal && (
         <p className="text-xs text-nourish-text-dim mt-1">A usar valor manual em vez da soma</p>
       )}
+    </div>
+  )
+}
+
+export function PortionsSection({ portions, onChange, inputClass, labelClass }: {
+  portions: string
+  onChange: (v: string) => void
+  inputClass: string
+  labelClass: string
+}) {
+  return (
+    <div>
+      <label className={labelClass}>Porções no frigorífico <span className="text-nourish-border font-normal">(opcional)</span></label>
+      <input
+        type="number"
+        value={portions}
+        onChange={(e) => onChange(e.target.value)}
+        min="0"
+        placeholder="0"
+        className={inputClass}
+      />
+      <p className="text-xs text-nourish-text-dim mt-1">Quantas porções prontas tens guardadas</p>
     </div>
   )
 }

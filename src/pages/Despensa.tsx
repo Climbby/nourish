@@ -1,61 +1,12 @@
 import { useEffect, useState, useCallback } from 'react'
 import { grocy } from '../api/grocy'
+import { grocyConfig } from '../config/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 
-const DESPENSA_GROUP_ID = 6
+import { computeDespensaAnalytics, getBuyAmountFromDesc } from '../utils/despensaAnalytics'
 
-function getBuyAmount(product: { id: number; description: string | null }): number {
-  if (product.description) {
-    const m = product.description.match(/\[BuyAmount\]\s*(\d+)/)
-    if (m) return parseInt(m[1], 10)
-  }
-  // Fallback for products created before buy amount was stored in description
-  const legacy: Record<number, number> = { 17: 6 }
-  return legacy[product.id] ?? 1
-}
-
-interface Analytics {
-  dailyAvg: number
-  daysRemaining: number | null
-  isLow: boolean
-  avgDaysBetweenPurchases: number | null
-}
-
-function computeAnalytics(log: StockLogEntry[], currentAmount: number): Analytics | null {
-  const consumes = log.filter(e => e.transaction_type === 'consume' && e.amount < 0)
-  if (consumes.length < 2) return null
-
-  const sorted = [...consumes].sort(
-    (a, b) => new Date(a.row_created_timestamp).getTime() - new Date(b.row_created_timestamp).getTime()
-  )
-  const totalConsumed = sorted.reduce((sum, e) => sum + Math.abs(e.amount), 0)
-  const spanMs = new Date(sorted[sorted.length - 1].row_created_timestamp).getTime()
-    - new Date(sorted[0].row_created_timestamp).getTime()
-  const spanDays = spanMs / (1000 * 60 * 60 * 24)
-  if (spanDays < 0.1) return null
-
-  const dailyAvg = totalConsumed / spanDays
-  const daysRemaining = dailyAvg > 0 ? currentAmount / dailyAvg : null
-
-  const purchases = log
-    .filter(e => e.transaction_type === 'purchase' && e.amount > 0)
-    .map(e => new Date(e.row_created_timestamp).getTime())
-    .sort((a, b) => a - b)
-
-  let avgDaysBetweenPurchases: number | null = null
-  if (purchases.length >= 2) {
-    const gaps = purchases.slice(1).map((d, i) => (d - purchases[i]) / (1000 * 60 * 60 * 24))
-    avgDaysBetweenPurchases = gaps.reduce((a, b) => a + b, 0) / gaps.length
-  }
-
-  const isLow =
-    daysRemaining !== null &&
-    avgDaysBetweenPurchases !== null &&
-    daysRemaining < avgDaysBetweenPurchases
-
-  return { dailyAvg, daysRemaining, isLow, avgDaysBetweenPurchases }
-}
+const { despensaGroupId: DESPENSA_GROUP_ID } = grocyConfig
 
 interface DespensaCardProps {
   item: StockItem
@@ -68,8 +19,8 @@ interface DespensaCardProps {
 
 function DespensaCard({ item, log, onShoppingList, onConsume, onAdd, onAddToShoppingList }: DespensaCardProps) {
   const [imgError, setImgError] = useState(false)
-  const analytics = computeAnalytics(log, item.amount)
-  const buyAmount = getBuyAmount(item.product)
+  const analytics = computeDespensaAnalytics(log, item.amount)
+  const buyAmount = getBuyAmountFromDesc(item.product.description, item.product.id)
   const pricePerUnit = item.amount > 0 && item.value > 0 ? item.value / item.amount : null
 
   return (
@@ -168,13 +119,22 @@ export function DespensaSection({ query = '' }: { query?: string }) {
 
   const load = useCallback(async () => {
     try {
-      const [stock, sl] = await Promise.all([grocy.getStock(), grocy.getShoppingList()])
+      const [stock, sl, allLogs] = await Promise.all([
+        grocy.getStock(),
+        grocy.getShoppingList(),
+        grocy.getAllStockLog(),
+      ])
       const despensaItems = stock.filter(s => s.product.product_group_id === DESPENSA_GROUP_ID)
       setItems(despensaItems)
       setShoppingList(sl)
-      const logEntries = await Promise.all(despensaItems.map(item => grocy.getStockLog(item.product_id)))
+      const productIds = new Set(despensaItems.map((item) => item.product_id))
       const logMap: Record<number, StockLogEntry[]> = {}
-      despensaItems.forEach((item, i) => { logMap[item.product_id] = logEntries[i] })
+      for (const entry of allLogs) {
+        if (productIds.has(entry.product_id)) {
+          if (!logMap[entry.product_id]) logMap[entry.product_id] = []
+          logMap[entry.product_id].push(entry)
+        }
+      }
       setLogs(logMap)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao carregar')
@@ -196,7 +156,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
 
   const handleAdd = async (id: number) => {
     const product = items.find(s => s.product_id === id)!.product
-    const amount = getBuyAmount(product)
+    const amount = getBuyAmountFromDesc(product.description, product.id)
     setItems(prev => prev.map(s => s.product_id === id ? { ...s, amount: s.amount + amount } : s))
     try {
       await grocy.addStock(id, amount)
@@ -209,7 +169,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   const handleAddToShoppingList = async (id: number) => {
     const product = items.find(s => s.product_id === id)!.product
     try {
-      await grocy.addToShoppingList(id, getBuyAmount(product))
+      await grocy.addToShoppingList(id, getBuyAmountFromDesc(product.description, product.id))
       setShoppingList(await grocy.getShoppingList())
     } catch { /* silent */ }
   }

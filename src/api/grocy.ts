@@ -154,6 +154,8 @@ export const grocy = {
     return apiFetch<StockLogEntry[]>(`/objects/stock_log?${params.toString()}`)
   },
 
+  getAllStockLog: () => apiFetch<StockLogEntry[]>('/objects/stock_log'),
+
   getShoppingList: () => apiFetch<ShoppingListItem[]>('/objects/shopping_list'),
 
   addToShoppingList: (productId: number, amount: number) =>
