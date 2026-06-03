@@ -1,14 +1,11 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
-import { grocyConfig } from '../config/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
 import { fetchHomelabMetrics } from '../api/homelabMetrics'
 import { computeDespensaAnalytics, getBuyAmountFromDesc } from '../utils/despensaAnalytics'
-
-const { despensaGroupId: DESPENSA_GROUP_ID } = grocyConfig
 
 interface DespensaCardProps {
   item: StockItem
@@ -143,12 +140,11 @@ export function DespensaSection({ query = '' }: { query?: string }) {
 
   const load = useCallback(async () => {
     try {
-      const [stock, sl, allLogs] = await Promise.all([
-        grocy.getStock(),
+      const [despensaItems, sl, allLogs] = await Promise.all([
+        grocy.getDespensaStock(),
         grocy.getShoppingList(),
         grocy.getAllStockLog(),
       ])
-      const despensaItems = stock.filter(s => s.product.product_group_id === DESPENSA_GROUP_ID)
       setItems(despensaItems)
       setShoppingList(sl)
       const productIds = new Set(despensaItems.map((item) => item.product_id))
@@ -247,6 +243,11 @@ export function DespensaSection({ query = '' }: { query?: string }) {
 
       {visible.length === 0 && items.length > 0 && (
         <p className="text-nourish-text-dim text-sm text-center pt-8">Sem resultados</p>
+      )}
+      {items.length === 0 && (
+        <p className="text-nourish-text-dim text-sm text-center pt-8">
+          Ainda não há produtos de despensa. Usa + para adicionar um.
+        </p>
       )}
     </div>
   )

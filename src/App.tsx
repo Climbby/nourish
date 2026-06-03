@@ -8,6 +8,7 @@ import { History } from './pages/History'
 import { Profile } from './pages/Profile'
 import { AddProduct } from './pages/AddProduct'
 import { ProductDetail } from './pages/ProductDetail'
+import { ReceiptScanPage } from './features/receipt/ReceiptScanPage'
 import { UpdatePrompt } from './components/UpdatePrompt'
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/profile" element={<Profile />} />
           <Route path="/add-product" element={<AddProduct />} />
           <Route path="/product/:id" element={<ProductDetail />} />
+          <Route path="/receipt" element={<ReceiptScanPage />} />
         </Routes>
       </div>
     </BrowserRouter>

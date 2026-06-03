@@ -22,7 +22,8 @@ export function computeDespensaAnalytics(
   currentAmount: number,
   daysUntilNextShop?: number | null
 ): DespensaAnalytics | null {
-  const consumes = log.filter((e) => e.transaction_type === 'consume' && e.amount < 0)
+  const active = log.filter((e) => !e.undone)
+  const consumes = active.filter((e) => e.transaction_type === 'consume' && e.amount < 0)
   if (consumes.length < 2) return null
 
   const sorted = [...consumes].sort(
@@ -39,7 +40,7 @@ export function computeDespensaAnalytics(
   const dailyAvg = totalConsumed / spanDays
   const daysRemaining = dailyAvg > 0 ? currentAmount / dailyAvg : null
 
-  const purchases = log
+  const purchases = active
     .filter((e) => e.transaction_type === 'purchase' && e.amount > 0)
     .map((e) => new Date(e.row_created_timestamp).getTime())
     .sort((a, b) => a - b)

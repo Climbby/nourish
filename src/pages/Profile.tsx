@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { BottomNav } from '../components/BottomNav'
+import { NumericInput } from '../components/NumericInput'
 import { Spinner } from '../components/Spinner'
 import { useFavourites } from '../hooks/useFavourites'
 import { useNutritionTargets, DEFAULT_TARGETS } from '../hooks/useNutritionTargets'
@@ -193,13 +194,14 @@ export function Profile() {
                 <div className="grid grid-cols-2 gap-3 pt-1 border-t border-nourish-border">
                   <label className="text-xs text-nourish-text-dim col-span-1">
                     Idade
-                    <input
-                      type="number"
+                    <NumericInput
+                      integer
                       min={14}
                       max={99}
+                      fallback={DEFAULT_USER_PROFILE.age}
                       className={`${inputClass} mt-1`}
                       value={profile.age}
-                      onChange={(e) => updateField('age', Number(e.target.value) || DEFAULT_USER_PROFILE.age)}
+                      onChange={(n) => updateField('age', n)}
                     />
                   </label>
                   <label className="text-xs text-nourish-text-dim col-span-1">
@@ -215,20 +217,24 @@ export function Profile() {
                   </label>
                   <label className="text-xs text-nourish-text-dim">
                     Peso (kg)
-                    <input
-                      type="number"
+                    <NumericInput
+                      integer
+                      min={1}
+                      fallback={DEFAULT_USER_PROFILE.weightKg}
                       className={`${inputClass} mt-1`}
                       value={profile.weightKg}
-                      onChange={(e) => updateField('weightKg', Number(e.target.value) || 0)}
+                      onChange={(n) => updateField('weightKg', n)}
                     />
                   </label>
                   <label className="text-xs text-nourish-text-dim">
                     Altura (cm)
-                    <input
-                      type="number"
+                    <NumericInput
+                      integer
+                      min={1}
+                      fallback={DEFAULT_USER_PROFILE.heightCm}
                       className={`${inputClass} mt-1`}
                       value={profile.heightCm}
-                      onChange={(e) => updateField('heightCm', Number(e.target.value) || 0)}
+                      onChange={(n) => updateField('heightCm', n)}
                     />
                   </label>
                   <label className="text-xs text-nourish-text-dim col-span-2">
@@ -347,46 +353,46 @@ export function Profile() {
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-xs text-nourish-text-dim">
                     kcal/dia
-                    <input
-                      type="number"
+                    <NumericInput
+                      integer
+                      min={0}
+                      fallback={DEFAULT_TARGETS.caloriesPerDay}
                       className={`${inputClass} mt-1`}
                       value={targets.caloriesPerDay}
-                      onChange={(e) =>
-                        setTargets({ ...targets, caloriesPerDay: Number(e.target.value) || 0 })
-                      }
+                      onChange={(n) => setTargets({ ...targets, caloriesPerDay: n })}
                     />
                   </label>
                   <label className="text-xs text-nourish-text-dim">
                     Proteína g/dia
-                    <input
-                      type="number"
+                    <NumericInput
+                      integer
+                      min={0}
+                      fallback={DEFAULT_TARGETS.proteinPerDay}
                       className={`${inputClass} mt-1`}
                       value={targets.proteinPerDay}
-                      onChange={(e) =>
-                        setTargets({ ...targets, proteinPerDay: Number(e.target.value) || 0 })
-                      }
+                      onChange={(n) => setTargets({ ...targets, proteinPerDay: n })}
                     />
                   </label>
                   <label className="text-xs text-nourish-text-dim">
                     Hidratos g/dia
-                    <input
-                      type="number"
+                    <NumericInput
+                      integer
+                      min={0}
+                      fallback={DEFAULT_TARGETS.carbsPerDay}
                       className={`${inputClass} mt-1`}
                       value={targets.carbsPerDay}
-                      onChange={(e) =>
-                        setTargets({ ...targets, carbsPerDay: Number(e.target.value) || 0 })
-                      }
+                      onChange={(n) => setTargets({ ...targets, carbsPerDay: n })}
                     />
                   </label>
                   <label className="text-xs text-nourish-text-dim">
                     Gordura g/dia
-                    <input
-                      type="number"
+                    <NumericInput
+                      integer
+                      min={0}
+                      fallback={DEFAULT_TARGETS.fatPerDay}
                       className={`${inputClass} mt-1`}
                       value={targets.fatPerDay}
-                      onChange={(e) =>
-                        setTargets({ ...targets, fatPerDay: Number(e.target.value) || 0 })
-                      }
+                      onChange={(n) => setTargets({ ...targets, fatPerDay: n })}
                     />
                   </label>
                 </div>
@@ -480,7 +486,14 @@ export function Profile() {
                 ver <code className="text-[10px]">docs/homelab-smart-shopping.md</code> no projeto.
               </p>
               <Link to="/history" className="inline-block text-sm text-nourish-primary font-medium">
-                Ver historial →
+                Ver historial de refeições →
+              </Link>
+              <Link
+                to="/history"
+                state={{ tab: 'supermarket' }}
+                className="inline-block text-sm text-nourish-primary font-medium"
+              >
+                Ver historial do supermercado →
               </Link>
             </section>
           </>

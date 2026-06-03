@@ -43,11 +43,7 @@ guest("mkdir -p /mnt/data/supervisor/homeassistant/packages")
 pkg_path = os.path.join(os.environ["ROOT"], "homelab/ha-packages/nourish_smart_shopping.yaml")
 with open(pkg_path) as f:
     guest_write("/mnt/data/supervisor/homeassistant/packages/nourish_smart_shopping.yaml", f.read())
-metrics_path = os.path.join(os.environ["ROOT"], "homelab/ha-packages/nourish_supermarket_metrics.yaml")
-if os.path.isfile(metrics_path):
-    with open(metrics_path) as f:
-        guest_write("/mnt/data/supervisor/homeassistant/packages/nourish_supermarket_metrics.yaml", f.read())
-guest("rm -f /mnt/data/supervisor/homeassistant/packages/nourish-smart-shopping.yaml /mnt/data/supervisor/homeassistant/packages/nourish-supermarket-metrics.yaml")
+guest("rm -f /mnt/data/supervisor/homeassistant/packages/nourish-smart-shopping.yaml /mnt/data/supervisor/homeassistant/packages/nourish-supermarket-metrics.yaml /mnt/data/supervisor/homeassistant/packages/nourish_supermarket_metrics.yaml")
 
 cfg = guest("cat /mnt/data/supervisor/homeassistant/configuration.yaml")
 if "include_dir_named packages" not in cfg:

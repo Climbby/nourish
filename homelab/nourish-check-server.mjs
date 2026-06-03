@@ -6,6 +6,7 @@ import http from 'http'
 import { spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
+import { buildSupermarketVisits } from './supermarket-visits.mjs'
 
 const PORT = 8787
 const HOST = '0.0.0.0'
@@ -119,11 +120,22 @@ const server = http.createServer(async (req, res) => {
       return send(200, computeMetrics(events))
     }
 
+    if (req.method === 'GET' && (req.url === '/supermarket-visits' || req.url?.startsWith('/supermarket-visits?'))) {
+      const url = new URL(req.url, 'http://localhost')
+      const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get('days') || '90', 10) || 90))
+      const events = loadEvents(days).filter(
+        (e) => e.type === 'supermarket_enter' || e.type === 'supermarket_leave'
+      )
+      return send(200, { visits: buildSupermarketVisits(events), days })
+    }
+
     if (req.method === 'POST' && req.url === '/event') {
       const body = await readBody(req)
       const j = JSON.parse(body || '{}')
-      if (!['supermarket_enter', 'leave_home'].includes(j.type)) {
-        return send(400, { error: 'type must be supermarket_enter or leave_home' })
+      if (!['supermarket_enter', 'supermarket_leave', 'leave_home'].includes(j.type)) {
+        return send(400, {
+          error: 'type must be supermarket_enter, supermarket_leave, or leave_home',
+        })
       }
       appendEvent(j.type)
       return send(200, { ok: true })

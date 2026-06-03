@@ -42,11 +42,12 @@ echo "Testing check on CT$CT_NOURISH..."
 ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- /opt/nourish/check.sh" | head -20
 
 # HTTP API for n8n (port 8787 on nourish CT)
-tar czf - -C "$ROOT/homelab" nourish-check-server.mjs nourish-check.service 2>/dev/null | \
+tar czf - -C "$ROOT/homelab" nourish-check-server.mjs supermarket-visits.mjs nourish-check.service 2>/dev/null | \
   ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- tar xzf - -C /opt/nourish" 2>/dev/null || true
 ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- bash -c '
   cp /opt/nourish/nourish-check.service /etc/systemd/system/nourish-check.service
   cp /opt/nourish/nourish-check-server.mjs /opt/nourish/check-server.mjs
+  cp /opt/nourish/supermarket-visits.mjs /opt/nourish/supermarket-visits.mjs
   systemctl daemon-reload
   systemctl enable nourish-check
   systemctl restart nourish-check

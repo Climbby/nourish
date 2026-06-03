@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
-import type { Product, StockLogEntry } from '../types/grocy'
+import type { PriceHistoryPoint, Product, StockLogEntry } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
+import { PriceHistoryChart } from '../components/PriceHistoryChart'
 import { getBuyAmountFromDesc } from '../utils/despensaAnalytics'
 
 function formatLogDate(ts: string): string {
@@ -41,6 +42,8 @@ export function ProductDetail() {
   const [product, setProduct] = useState<Product | null>(null)
   const [amount, setAmount] = useState(0)
   const [log, setLog] = useState<StockLogEntry[]>([])
+  const [priceHistory, setPriceHistory] = useState<PriceHistoryPoint[]>([])
+  const [stockValue, setStockValue] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [imgError, setImgError] = useState(false)
@@ -59,22 +62,37 @@ export function ProductDetail() {
       setLoading(false)
       return
     }
-    Promise.all([grocy.getProduct(numId), grocy.getStock(), grocy.getStockLog(numId)])
-      .then(([prod, stock, logEntries]) => {
+    Promise.all([
+      grocy.getProduct(numId),
+      grocy.getProductStockAmount(numId),
+      grocy.getStockLog(numId),
+      grocy.getPriceHistory(numId).catch(() => [] as PriceHistoryPoint[]),
+    ])
+      .then(([prod, stockSummary, logEntries, history]) => {
         setProduct(prod)
-        const item = stock.find((s) => s.product_id === numId)
-        setAmount(item?.amount ?? 0)
+        setAmount(stockSummary.amount)
+        setStockValue(
+          stockSummary.amount > 0 ? stockSummary.value / stockSummary.amount : null
+        )
         setLog(sortLog(logEntries))
+        setPriceHistory(history)
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
   }, [numId])
 
   async function reloadStockAndLog() {
-    const [stock, newLog] = await Promise.all([grocy.getStock(), grocy.getStockLog(numId)])
-    const item = stock.find((s) => s.product_id === numId)
-    setAmount(item?.amount ?? 0)
+    const [stockSummary, newLog, history] = await Promise.all([
+      grocy.getProductStockAmount(numId),
+      grocy.getStockLog(numId),
+      grocy.getPriceHistory(numId).catch(() => [] as PriceHistoryPoint[]),
+    ])
+    setAmount(stockSummary.amount)
+    setStockValue(
+      stockSummary.amount > 0 ? stockSummary.value / stockSummary.amount : null
+    )
     setLog(sortLog(newLog))
+    setPriceHistory(history)
   }
 
   async function handleConsume() {
@@ -99,15 +117,14 @@ export function ProductDetail() {
     }
   }
 
-  async function handleDeleteEntry(entry: StockLogEntry) {
+  async function handleUndoEntry(entry: StockLogEntry) {
+    if (!entry.transaction_id || entry.undone) return
     setLog((prev) => prev.filter((e) => e.id !== entry.id))
     try {
-      await grocy.deleteStockLogEntry(entry.id)
-      const stock = await grocy.getStock()
-      const item = stock.find((s) => s.product_id === numId)
-      setAmount(item?.amount ?? 0)
+      await grocy.undoStockTransaction(entry.transaction_id)
+      await reloadStockAndLog()
     } catch {
-      setLog((prev) => sortLog([...prev, entry]))
+      await reloadStockAndLog()
     }
   }
 
@@ -149,8 +166,9 @@ export function ProductDetail() {
   }
 
   const buyAmount = getBuyAmountFromDesc(product.description, product.id)
-  const consumes = log.filter((e) => e.transaction_type === 'consume').slice(0, HISTORY_LIMIT)
-  const purchases = log.filter((e) => e.transaction_type === 'purchase').slice(0, HISTORY_LIMIT)
+  const activeLog = log.filter((e) => !e.undone)
+  const consumes = activeLog.filter((e) => e.transaction_type === 'consume').slice(0, HISTORY_LIMIT)
+  const purchases = activeLog.filter((e) => e.transaction_type === 'purchase').slice(0, HISTORY_LIMIT)
 
   return (
     <div
@@ -187,8 +205,16 @@ export function ProductDetail() {
               <p className="text-2xl font-bold text-nourish-text tabular-nums">+{buyAmount}</p>
               <p className="text-xs text-nourish-text-dim mt-0.5">por compra</p>
             </div>
+            {stockValue !== null && (
+              <div className="text-center">
+                <p className="text-2xl font-bold text-nourish-primary tabular-nums">€{stockValue.toFixed(2)}</p>
+                <p className="text-xs text-nourish-text-dim mt-0.5">preço/un</p>
+              </div>
+            )}
           </div>
         </div>
+
+        <PriceHistoryChart points={priceHistory} />
 
         {consumes.length > 0 && (
           <section>
@@ -208,9 +234,9 @@ export function ProductDetail() {
                   </span>
                   <button
                     type="button"
-                    onClick={() => handleDeleteEntry(entry)}
+                    onClick={() => handleUndoEntry(entry)}
                     className="p-3 pr-3 text-nourish-border hover:text-red-400 transition-colors focus:outline-none"
-                    aria-label="Apagar registo"
+                    aria-label="Anular registo"
                   >
                     <TrashIcon />
                   </button>
@@ -233,14 +259,21 @@ export function ProductDetail() {
                     <p className="text-sm text-nourish-text">{formatLogDate(entry.row_created_timestamp)}</p>
                     <p className="text-xs text-nourish-text-dim">{formatLogTime(entry.row_created_timestamp)}</p>
                   </div>
-                  <span className="text-sm font-semibold text-nourish-primary tabular-nums px-3">
-                    +{entry.amount}
-                  </span>
+                  <div className="text-right px-3">
+                    <span className="text-sm font-semibold text-nourish-primary tabular-nums block">
+                      +{entry.amount}
+                    </span>
+                    {(entry.price ?? 0) > 0 && (
+                      <span className="text-xs text-nourish-text-dim tabular-nums">
+                        €{entry.price!.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
                   <button
                     type="button"
-                    onClick={() => handleDeleteEntry(entry)}
+                    onClick={() => handleUndoEntry(entry)}
                     className="p-3 pr-3 text-nourish-border hover:text-red-400 transition-colors focus:outline-none"
-                    aria-label="Apagar registo"
+                    aria-label="Anular registo"
                   >
                     <TrashIcon />
                   </button>
@@ -250,7 +283,7 @@ export function ProductDetail() {
           </section>
         )}
 
-        {log.length === 0 && (
+        {activeLog.length === 0 && (
           <p className="text-nourish-text-dim text-sm text-center py-4">Sem historial ainda</p>
         )}
       </div>

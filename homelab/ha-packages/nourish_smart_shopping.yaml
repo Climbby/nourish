@@ -1,10 +1,56 @@
-# rest_command only — input_number + nourish_despensa_check live in configuration.yaml
+# rest_command + supermarket zone automations
+# nourish_despensa_check + input_number live in configuration.yaml
 
 rest_command:
   nourish_at_supermarket:
     url: "http://192.168.1.24:5678/webhook/nourish-at-supermarket"
     method: POST
-    headers:
-      Content-Type: application/json
+    content_type: "application/json"
     payload: "{}"
     timeout: 60
+  nourish_event_supermarket_enter:
+    url: "http://192.168.1.27:8787/event"
+    method: POST
+    content_type: "application/json"
+    payload: '{"type":"supermarket_enter"}'
+    timeout: 15
+  nourish_event_supermarket_leave:
+    url: "http://192.168.1.27:8787/event"
+    method: POST
+    content_type: "application/json"
+    payload: '{"type":"supermarket_leave"}'
+    timeout: 15
+  nourish_event_leave_home:
+    url: "http://192.168.1.27:8787/event"
+    method: POST
+    content_type: "application/json"
+    payload: '{"type":"leave_home"}'
+    timeout: 15
+
+automation:
+  - id: nourish_supermarket_arrival
+    alias: "Nourish — chegada ao supermercado"
+    description: Regista visita e envia lista de compras ao telemovel
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: zone
+        entity_id: person.francisco_fernandes
+        zone: zone.auchan
+        event: enter
+    action:
+      - action: rest_command.nourish_event_supermarket_enter
+      - action: rest_command.nourish_at_supermarket
+
+  - id: nourish_supermarket_departure
+    alias: "Nourish — saída do supermercado"
+    description: Fecha visita no historial (hora de saída e duração)
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: zone
+        entity_id: person.francisco_fernandes
+        zone: zone.auchan
+        event: leave
+    action:
+      - action: rest_command.nourish_event_supermarket_leave

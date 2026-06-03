@@ -8,6 +8,13 @@ export interface HomelabMetrics {
   suggested_days_until_shop: number
 }
 
+export interface SupermarketVisit {
+  entered_at: string
+  left_at: string | null
+  duration_minutes: number | null
+  ongoing: boolean
+}
+
 const DEFAULT_DAYS_UNTIL_SHOP = 4
 
 export function defaultDaysUntilShop(): number {
@@ -30,6 +37,17 @@ export async function fetchHomelabMetrics(): Promise<HomelabMetrics | null> {
             ? days
             : DEFAULT_DAYS_UNTIL_SHOP,
     }
+  } catch {
+    return null
+  }
+}
+
+export async function fetchSupermarketVisits(days = 90): Promise<SupermarketVisit[] | null> {
+  try {
+    const res = await fetch(`/nourish/supermarket-visits?days=${days}`, { cache: 'no-store' })
+    if (!res.ok) return null
+    const data = (await res.json()) as { visits?: SupermarketVisit[] }
+    return Array.isArray(data.visits) ? data.visits : []
   } catch {
     return null
   }

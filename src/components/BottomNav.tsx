@@ -46,6 +46,7 @@ const ADD_OPTIONS = [
   { type: 'completa', label: 'Refeição completa', desc: 'Almoço, jantar ou prato principal' },
   { type: 'ligeira', label: 'Refeição ligeira', desc: 'Snack, petisco ou lanche' },
   { type: 'despensa', label: 'Produto de despensa', desc: 'Água, leite, pão, cereais…' },
+  { type: 'receipt', label: 'Compra (talão)', desc: 'Ler talão e atualizar stock com preços' },
 ]
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -59,7 +60,11 @@ export function BottomNav() {
 
   function handleOption(type: string) {
     setShowSheet(false)
-    navigate(`/add?type=${type}`)
+    if (type === 'receipt') {
+      navigate('/receipt')
+    } else {
+      navigate(`/add?type=${type}`)
+    }
   }
 
   return (

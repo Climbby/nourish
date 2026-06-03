@@ -21,7 +21,8 @@ Leave home also `POST /event` with `leave_home` (for Perfil metrics).
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/metrics` | Visits per week/month, median days between shops |
-| POST | `/event` | `{"type":"supermarket_enter"}` or `leave_home` |
+| GET | `/supermarket-visits?days=90` | Visit history (enter/leave times, duration) |
+| POST | `/event` | `supermarket_enter`, `supermarket_leave`, or `leave_home` |
 | POST | `/at-supermarket` | JSON shopping list summary |
 | POST | `/check` | Despensa check (existing) |
 
@@ -34,4 +35,4 @@ Leave home also `POST /event` with `leave_home` (for Perfil metrics).
 
 Import n8n workflow `homelab/n8n/nourish-at-supermarket-import.json`.
 
-Add HA package `homelab/ha-packages/nourish_supermarket_metrics.yaml` (underscore slug) and reload.
+Supermarket automations live in `homelab/ha-packages/nourish_smart_shopping.yaml` — reload HA packages after deploy.

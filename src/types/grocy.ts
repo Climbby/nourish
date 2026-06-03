@@ -42,8 +42,24 @@ export interface StockLogEntry {
   id: number
   product_id: number
   amount: number
+  price?: number | null
   transaction_type: string
+  transaction_id: string
+  undone?: number
   row_created_timestamp: string
+}
+
+export interface PriceHistoryPoint {
+  date: string
+  price: number
+  shopping_location: { id: number; name: string } | null
+}
+
+export interface AddStockOptions {
+  price?: number
+  purchased_date?: string
+  note?: string
+  shopping_location_id?: number
 }
 
 export interface ShoppingListItem {

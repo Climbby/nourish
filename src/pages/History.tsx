@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
+import { fetchSupermarketVisits, type SupermarketVisit } from '../api/homelabMetrics'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
+import { formatVisitDuration } from '../utils/supermarketVisits'
 
 function todayStr() {
   const d = new Date()
@@ -22,9 +24,17 @@ function formatDay(day: string): string {
 }
 
 function formatTime(ts: string): string {
-  const d = new Date(ts.replace(' ', 'T'))
+  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T'))
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
+
+function formatVisitDay(iso: string): string {
+  const d = new Date(iso)
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return formatDay(day)
+}
+
+type HistoryTab = 'meals' | 'supermarket'
 
 function mealType(ts: string): 'Almoço' | 'Jantar' {
   return new Date(ts.replace(' ', 'T')).getHours() < 17 ? 'Almoço' : 'Jantar'
@@ -74,8 +84,14 @@ function TrashIcon() {
 
 export function History() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const initialTab =
+    (location.state as { tab?: HistoryTab } | null)?.tab === 'supermarket' ? 'supermarket' : 'meals'
+  const [tab, setTab] = useState<HistoryTab>(initialTab)
   const [entries, setEntries] = useState<MealPlanEntry[]>([])
   const [recipes, setRecipes] = useState<Record<number, Recipe>>({})
+  const [visits, setVisits] = useState<SupermarketVisit[] | null>(null)
+  const [visitsError, setVisitsError] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -96,6 +112,19 @@ export function History() {
     return () => { mounted = false }
   }, [])
 
+  useEffect(() => {
+    if (tab !== 'supermarket') return
+    let mounted = true
+    setVisits(null)
+    setVisitsError(false)
+    fetchSupermarketVisits(180).then((list) => {
+      if (!mounted) return
+      if (list === null) setVisitsError(true)
+      else setVisits(list)
+    })
+    return () => { mounted = false }
+  }, [tab])
+
   // Group by date
   const grouped = entries.reduce<Record<string, MealPlanEntry[]>>((acc, entry) => {
     acc[entry.day] = acc[entry.day] ?? []
@@ -109,19 +138,121 @@ export function History() {
     <div className="min-h-screen bg-nourish-bg">
       <header className="px-4 pt-12 pb-4 border-b border-nourish-border">
         <h1 className="text-2xl font-bold text-nourish-text">Historial</h1>
-        <p className="text-nourish-text-dim text-sm mt-0.5">O que comeste</p>
+        <p className="text-nourish-text-dim text-sm mt-0.5">
+          {tab === 'meals' ? 'O que comeste' : 'Idas ao supermercado'}
+        </p>
+        <div className="flex gap-2 mt-4 p-1 rounded-xl bg-nourish-bg border border-nourish-border">
+          <button
+            type="button"
+            onClick={() => setTab('meals')}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+              tab === 'meals'
+                ? 'bg-nourish-surface text-nourish-text shadow-sm'
+                : 'text-nourish-text-dim'
+            }`}
+          >
+            Refeições
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('supermarket')}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+              tab === 'supermarket'
+                ? 'bg-nourish-surface text-nourish-text shadow-sm'
+                : 'text-nourish-text-dim'
+            }`}
+          >
+            Supermercado
+          </button>
+        </div>
       </header>
 
       <main className="p-4" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)' }}>
-        {loading && <Spinner />}
+        {tab === 'meals' && loading && <Spinner />}
 
-        {error && (
+        {tab === 'meals' && error && (
           <div className="p-3 bg-red-900/30 border border-red-800 text-red-400 rounded-xl text-sm">
             Erro ao carregar: {error}
           </div>
         )}
 
-        {!loading && !error && days.length === 0 && (
+        {tab === 'supermarket' && visits === null && !visitsError && <Spinner />}
+
+        {tab === 'supermarket' && visitsError && (
+          <div className="p-3 bg-amber-900/30 border border-amber-800 text-amber-200 rounded-xl text-sm">
+            Não foi possível carregar visitas. Confirma que o servidor homelab está activo e que entras/saí
+            da zona do super no Home Assistant.
+          </div>
+        )}
+
+        {tab === 'supermarket' && visits && visits.length === 0 && (
+          <div className="text-center py-16">
+            <div className="text-5xl mb-3">🛒</div>
+            <p className="font-medium text-nourish-text-dim">Sem visitas registadas</p>
+            <p className="text-sm text-nourish-border mt-1 max-w-xs mx-auto leading-snug">
+              Ao entrares e saíres da zona do super no Home Assistant, as idas aparecem aqui com hora e duração.
+            </p>
+          </div>
+        )}
+
+        {tab === 'supermarket' && visits && visits.length > 0 && (
+          <div className="space-y-6">
+            {Object.entries(
+              visits.reduce<Record<string, SupermarketVisit[]>>((acc, v) => {
+                const day = v.entered_at.slice(0, 10)
+                acc[day] = acc[day] ?? []
+                acc[day].push(v)
+                return acc
+              }, {})
+            )
+              .sort(([a], [b]) => b.localeCompare(a))
+              .map(([day, dayVisits]) => (
+                <div key={day}>
+                  <h2 className="text-xs font-semibold text-nourish-text-dim tracking-wider uppercase mb-2">
+                    {formatVisitDay(dayVisits[0].entered_at)}
+                  </h2>
+                  <div className="space-y-2">
+                    {dayVisits.map((visit) => (
+                      <div
+                        key={visit.entered_at}
+                        className="p-4 bg-nourish-surface border border-nourish-border rounded-2xl"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-nourish-text tabular-nums">
+                              {formatTime(visit.entered_at)}
+                              {visit.left_at && (
+                                <span className="text-nourish-text-dim font-normal">
+                                  {' '}
+                                  → {formatTime(visit.left_at)}
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-nourish-text-dim mt-1">
+                              {visit.ongoing
+                                ? 'Entrada registada — ainda no super'
+                                : visit.left_at
+                                  ? 'Entrada e saída'
+                                  : 'Visita incompleta (sem saída)'}
+                            </p>
+                          </div>
+                          <span
+                            className={`text-sm font-bold tabular-nums shrink-0 ${
+                              visit.ongoing ? 'text-nourish-primary' : 'text-nourish-text'
+                            }`}
+                          >
+                            {formatVisitDuration(visit.duration_minutes, visit.ongoing)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
+
+        {tab === 'meals' && !loading && !error && days.length === 0 && (
           <div className="text-center py-16">
             <div className="text-5xl mb-3">📋</div>
             <p className="font-medium text-nourish-text-dim">Sem registos ainda</p>
@@ -129,7 +260,7 @@ export function History() {
           </div>
         )}
 
-        {!loading && days.length > 0 && (
+        {tab === 'meals' && !loading && days.length > 0 && (
           <div className="space-y-6">
             {days.map((day) => (
               <div key={day}>

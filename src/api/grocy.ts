@@ -1,4 +1,16 @@
-import type { MealPlanEntry, Product, QuantityUnit, Recipe, RecipeIngredient, ShoppingListItem, StockItem, StockLogEntry } from '../types/grocy'
+import type {
+  AddStockOptions,
+  MealPlanEntry,
+  PriceHistoryPoint,
+  Product,
+  QuantityUnit,
+  Recipe,
+  RecipeIngredient,
+  ShoppingListItem,
+  StockItem,
+  StockLogEntry,
+} from '../types/grocy'
+import { grocyConfig } from '../config/grocy'
 
 function convertToWebP(file: File, quality = 0.85): Promise<Blob> {
   return new Promise((resolve, reject) => {
@@ -136,12 +148,51 @@ export const grocy = {
 
   getStock: () => apiFetch<StockItem[]>('/stock'),
 
-  addStock: (id: number, amount: number) =>
-    apiFetch<void>(`/stock/products/${id}/add`, {
+  async getProductStockAmount(productId: number): Promise<{ amount: number; value: number }> {
+    const item = (await this.getStock()).find((s) => s.product_id === productId)
+    if (item) return { amount: item.amount, value: item.value }
+    const detail = await apiFetch<{ stock_amount: number; stock_value: number }>(
+      `/stock/products/${productId}`
+    )
+    return { amount: detail.stock_amount ?? 0, value: detail.stock_value ?? 0 }
+  },
+
+  /** Despensa products, including those with zero stock (omitted from GET /stock). */
+  async getDespensaStock(): Promise<StockItem[]> {
+    const groupId = grocyConfig.despensaGroupId
+    const [products, stock] = await Promise.all([
+      this.getProducts(),
+      this.getStock(),
+    ])
+    const despensaProducts = products.filter((p) => p.product_group_id === groupId)
+    const stockByProductId = new Map(stock.map((s) => [s.product_id, s]))
+    return despensaProducts.map((product) => {
+      const existing = stockByProductId.get(product.id)
+      if (existing) return existing
+      return { product_id: product.id, amount: 0, value: 0, product }
+    })
+  },
+
+  addStock: (id: number, amount: number, opts?: AddStockOptions) => {
+    const body: Record<string, unknown> = { amount, transaction_type: 'purchase' }
+    if (opts?.price != null) body.price = opts.price
+    if (opts?.purchased_date) body.purchased_date = opts.purchased_date
+    if (opts?.note) body.note = opts.note
+    if (opts?.shopping_location_id != null) body.shopping_location_id = opts.shopping_location_id
+    return apiFetch<void>(`/stock/products/${id}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount, transaction_type: 'purchase' }),
-    }),
+      body: JSON.stringify(body),
+    })
+  },
+
+  getPriceHistory: (productId: number) =>
+    apiFetch<PriceHistoryPoint[]>(`/stock/products/${productId}/price-history`).then((rows) =>
+      rows.map((r) => ({
+        ...r,
+        price: typeof r.price === 'string' ? parseFloat(r.price) : r.price,
+      }))
+    ),
 
   consumeStock: (id: number, amount: number) =>
     apiFetch<void>(`/stock/products/${id}/consume`, {
@@ -156,8 +207,8 @@ export const grocy = {
     return apiFetch<StockLogEntry[]>(`/objects/stock_log?${params.toString()}`)
   },
 
-  deleteStockLogEntry: (id: number) =>
-    apiFetch<void>(`/objects/stock_log/${id}`, { method: 'DELETE' }),
+  undoStockTransaction: (transactionId: string) =>
+    apiFetch<void>(`/stock/transactions/${transactionId}/undo`, { method: 'POST' }),
 
   getAllStockLog: () => apiFetch<StockLogEntry[]>('/objects/stock_log'),
 
