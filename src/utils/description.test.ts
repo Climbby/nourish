@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseDescription, parseSteps } from './parseDescription'
 import { buildDescription, decrementPortions, addPortions, type IngredientRow } from './buildDescription'
+import type { VerifiedField } from './verification'
 
 const sampleRows: IngredientRow[] = [
   { id: 1, name: 'Atum', price: '1.50' },
@@ -30,12 +31,29 @@ describe('buildDescription + parseDescription round-trip', () => {
     expect(parsed.price).toBe(2.3)
     expect(parsed.category).toBe('Completa')
     expect(parsed.portions).toBe(3)
+    expect(parsed.verified).toEqual([])
+  })
+
+  it('round-trips verification flags', () => {
+    const verified = new Set<VerifiedField>(['preco', 'nutricao'])
+    const built = buildDescription(
+      sampleRows,
+      '',
+      { calories: '400', protein: '20', carbs: '40', fat: '10' },
+      '5.00',
+      0,
+      undefined,
+      undefined,
+      verified
+    )
+    expect(parseDescription(built).verified).toEqual(['nutricao', 'preco'])
   })
 
   it('treats unsectioned text as steps for legacy recipes', () => {
     const parsed = parseDescription('Passo um\nPasso dois')
     expect(parsed.steps).toBe('Passo um\nPasso dois')
     expect(parsed.ingredientItems).toEqual([])
+    expect(parsed.verified).toEqual([])
   })
 })
 

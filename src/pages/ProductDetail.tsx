@@ -5,7 +5,15 @@ import type { PriceHistoryPoint, Product, StockLogEntry } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { PriceHistoryChart } from '../components/PriceHistoryChart'
 import { NumericInput } from '../components/NumericInput'
-import { getBuyAmountFromDesc } from '../utils/despensaAnalytics'
+import { VerifiedBadge, VerifyCheckbox } from '../components/VerifiedBadge'
+import {
+  buildDespensaDescription,
+  getBuyAmountFromDesc,
+  getDespensaUnitPrice,
+  getPriceFromDesc,
+  purchaseTotalPrice,
+} from '../utils/despensaAnalytics'
+import { isVerified, parseVerifiedFields, type VerifiedField } from '../utils/verification'
 
 function formatLogDate(ts: string): string {
   const d = new Date(ts.replace(' ', 'T'))
@@ -44,12 +52,18 @@ export function ProductDetail() {
   const [amount, setAmount] = useState(0)
   const [log, setLog] = useState<StockLogEntry[]>([])
   const [priceHistory, setPriceHistory] = useState<PriceHistoryPoint[]>([])
-  const [stockValue, setStockValue] = useState<number | null>(null)
+  const [stockValueTotal, setStockValueTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [imgError, setImgError] = useState(false)
   const [editAmount, setEditAmount] = useState(0)
+  const [editBuyAmount, setEditBuyAmount] = useState('1')
+  const [editUnitPrice, setEditUnitPrice] = useState('')
+  const [editCalories, setEditCalories] = useState('')
+  const [verifyPrice, setVerifyPrice] = useState(false)
+  const [verifyCalories, setVerifyCalories] = useState(false)
   const [stockSaving, setStockSaving] = useState(false)
+  const [metaSaving, setMetaSaving] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
 
   function sortLog(entries: StockLogEntry[]): StockLogEntry[] {
@@ -75,9 +89,14 @@ export function ProductDetail() {
       .then(([prod, stockSummary, logEntries, history]) => {
         setProduct(prod)
         setAmount(stockSummary.amount)
-        setStockValue(
-          stockSummary.amount > 0 ? stockSummary.value / stockSummary.amount : null
-        )
+        setStockValueTotal(stockSummary.value)
+        setEditBuyAmount(String(getBuyAmountFromDesc(prod.description, prod.id)))
+        const catalogPrice = getPriceFromDesc(prod.description)
+        setEditUnitPrice(catalogPrice != null ? catalogPrice.toFixed(2) : '')
+        setEditCalories(prod.calories != null && prod.calories > 0 ? String(prod.calories) : '')
+        const verified = parseVerifiedFields(prod.description)
+        setVerifyPrice(verified.has('preco'))
+        setVerifyCalories(verified.has('calorias'))
         setLog(sortLog(logEntries))
         setPriceHistory(history)
       })
@@ -96,9 +115,7 @@ export function ProductDetail() {
       grocy.getPriceHistory(numId).catch(() => [] as PriceHistoryPoint[]),
     ])
     setAmount(stockSummary.amount)
-    setStockValue(
-      stockSummary.amount > 0 ? stockSummary.value / stockSummary.amount : null
-    )
+    setStockValueTotal(stockSummary.value)
     setLog(sortLog(newLog))
     setPriceHistory(history)
   }
@@ -116,12 +133,45 @@ export function ProductDetail() {
 
   async function handleAdd() {
     const ba = getBuyAmountFromDesc(product?.description ?? null, numId)
+    const unitPrice = getDespensaUnitPrice(amount, stockValueTotal, product?.description ?? null)
+    const totalPrice = purchaseTotalPrice(unitPrice, ba)
     setAmount((a) => a + ba)
     try {
-      await grocy.addStock(numId, ba)
+      await grocy.addStock(numId, ba, totalPrice != null ? { price: totalPrice } : undefined)
       await reloadStockAndLog()
     } catch {
       await reloadStockAndLog()
+    }
+  }
+
+  function buildVerifiedSet(): Set<VerifiedField> {
+    const v = new Set<VerifiedField>()
+    if (verifyPrice && editUnitPrice.trim() && parseFloat(editUnitPrice) > 0) v.add('preco')
+    if (verifyCalories && editCalories.trim() && parseFloat(editCalories) > 0) v.add('calorias')
+    return v
+  }
+
+  async function handleSaveMeta() {
+    if (!product) return
+    setMetaSaving(true)
+    try {
+      const description = buildDespensaDescription(editBuyAmount || '1', editUnitPrice, {
+        verified: buildVerifiedSet(),
+      })
+      const calories = editCalories.trim() ? parseFloat(editCalories) : null
+      await grocy.updateProduct(numId, {
+        description,
+        calories: calories != null && !isNaN(calories) ? calories : null,
+      })
+      setProduct({
+        ...product,
+        description,
+        calories: calories != null && !isNaN(calories) ? calories : null,
+      })
+    } catch {
+      /* keep form values */
+    } finally {
+      setMetaSaving(false)
     }
   }
 
@@ -198,6 +248,9 @@ export function ProductDetail() {
   }
 
   const buyAmount = getBuyAmountFromDesc(product.description, product.id)
+  const unitPrice = getDespensaUnitPrice(amount, stockValueTotal, product.description)
+  const priceVerified = isVerified(product.description, 'preco')
+  const caloriesVerified = isVerified(product.description, 'calorias')
   const activeLog = log.filter((e) => !e.undone)
   const consumes = activeLog.filter((e) => e.transaction_type === 'consume').slice(0, HISTORY_LIMIT)
   const purchases = activeLog.filter((e) => e.transaction_type === 'purchase').slice(0, HISTORY_LIMIT)
@@ -229,7 +282,10 @@ export function ProductDetail() {
             </div>
             {(product.calories ?? 0) > 0 && (
               <div className="text-center">
-                <p className="text-2xl font-bold text-nourish-text tabular-nums">{product.calories}</p>
+                <p className="text-2xl font-bold text-nourish-text tabular-nums flex items-center justify-center gap-1">
+                  {product.calories}
+                  <VerifiedBadge verified={caloriesVerified} />
+                </p>
                 <p className="text-xs text-nourish-text-dim mt-0.5">kcal/un</p>
               </div>
             )}
@@ -237,14 +293,95 @@ export function ProductDetail() {
               <p className="text-2xl font-bold text-nourish-text tabular-nums">+{buyAmount}</p>
               <p className="text-xs text-nourish-text-dim mt-0.5">por compra</p>
             </div>
-            {stockValue !== null && (
+            {unitPrice !== null && (
               <div className="text-center">
-                <p className="text-2xl font-bold text-nourish-primary tabular-nums">€{stockValue.toFixed(2)}</p>
+                <p className="text-2xl font-bold text-nourish-primary tabular-nums flex items-center justify-center gap-1">
+                  €{unitPrice.toFixed(2)}
+                  <VerifiedBadge verified={priceVerified} />
+                </p>
                 <p className="text-xs text-nourish-text-dim mt-0.5">preço/un</p>
               </div>
             )}
           </div>
         </div>
+
+        <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
+          <h3 className="font-semibold text-nourish-text text-sm">Compra habitual</h3>
+          <p className="text-xs text-nourish-text-dim">
+            Quantidade e preço por unidade usados no botão + e na lista da despensa. Marca como
+            verificado quando confirmares os valores (ex. no rótulo ou talão).
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-nourish-text-dim block mb-1">Quantidade</label>
+              <NumericInput
+                value={parseInt(editBuyAmount, 10) || 1}
+                onChange={(n) => setEditBuyAmount(String(Math.max(1, n)))}
+                integer
+                min={1}
+                className="w-full text-center font-semibold tabular-nums bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                aria-label="Quantidade por compra"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-nourish-text-dim block mb-1">Preço/un (€)</label>
+              <input
+                type="number"
+                value={editUnitPrice}
+                onChange={(e) => {
+                  setEditUnitPrice(e.target.value)
+                  setVerifyPrice(false)
+                }}
+                placeholder="—"
+                min="0"
+                step="0.01"
+                className="w-full text-center font-semibold tabular-nums bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                aria-label="Preço por unidade"
+              />
+              <div className="mt-1.5">
+                <VerifyCheckbox
+                  id="verify-price"
+                  checked={verifyPrice}
+                  onChange={setVerifyPrice}
+                  label="Preço verificado"
+                  disabled={!editUnitPrice.trim() || parseFloat(editUnitPrice) <= 0}
+                />
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-nourish-text-dim block mb-1">Calorias (por unidade)</label>
+            <input
+              type="number"
+              value={editCalories}
+              onChange={(e) => {
+                setEditCalories(e.target.value)
+                setVerifyCalories(false)
+              }}
+              placeholder="—"
+              min="0"
+              className="w-full text-center font-semibold tabular-nums bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+              aria-label="Calorias por unidade"
+            />
+            <div className="mt-1.5">
+              <VerifyCheckbox
+                id="verify-calories"
+                checked={verifyCalories}
+                onChange={setVerifyCalories}
+                label="Calorias verificadas"
+                disabled={!editCalories.trim() || parseFloat(editCalories) <= 0}
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={metaSaving}
+            onClick={handleSaveMeta}
+            className="w-full py-2.5 rounded-xl font-semibold text-sm bg-nourish-surface-high text-nourish-text disabled:opacity-40 active:bg-nourish-surface-highest"
+          >
+            {metaSaving ? '…' : 'Guardar'}
+          </button>
+        </section>
 
         <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
           <h3 className="font-semibold text-nourish-text text-sm">Corrigir stock</h3>

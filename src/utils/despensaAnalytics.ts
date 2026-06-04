@@ -1,4 +1,6 @@
 import type { StockLogEntry } from '../types/grocy'
+import type { VerifiedField } from './verification'
+import { parseVerifiedFields, upsertVerifiedSection } from './verification'
 
 export interface DespensaAnalytics {
   dailyAvg: number
@@ -15,6 +17,46 @@ export function getBuyAmountFromDesc(description: string | null, productId?: num
   const legacy: Record<number, number> = { 17: 6 }
   if (productId !== undefined && legacy[productId]) return legacy[productId]
   return 1
+}
+
+export function getPriceFromDesc(description: string | null): number | null {
+  if (!description) return null
+  const m = description.match(/\[Preco\]\s*([\d.]+)/)
+  if (!m) return null
+  const val = parseFloat(m[1])
+  return isNaN(val) || val <= 0 ? null : val
+}
+
+export function buildDespensaDescription(
+  buyAmount: number | string,
+  price?: number | string | null,
+  opts?: { verified?: Set<VerifiedField>; existingDescription?: string | null }
+): string {
+  const parts = [`[BuyAmount]\n${buyAmount}`]
+  if (price != null && price !== '') {
+    const val = typeof price === 'string' ? parseFloat(price) : price
+    if (!isNaN(val) && val > 0) parts.push(`[Preco]\n${val.toFixed(2)}`)
+  }
+  const core = parts.join('\n\n')
+  const verified =
+    opts?.verified ??
+    (opts?.existingDescription ? parseVerifiedFields(opts.existingDescription) : new Set())
+  return upsertVerifiedSection(core, verified)
+}
+
+/** Unit price from stock value, or catalog price in product description. */
+export function getDespensaUnitPrice(
+  amount: number,
+  value: number,
+  description: string | null
+): number | null {
+  if (amount > 0 && value > 0) return value / amount
+  return getPriceFromDesc(description)
+}
+
+export function purchaseTotalPrice(unitPrice: number | null, amount: number): number | undefined {
+  if (unitPrice == null || amount <= 0) return undefined
+  return Math.round(unitPrice * amount * 100) / 100
 }
 
 export function computeDespensaAnalytics(

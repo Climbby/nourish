@@ -3,10 +3,17 @@ import { useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
+import { VerifiedBadge } from '../components/VerifiedBadge'
 import { ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
 import { StockAmountSheet } from '../components/StockAmountSheet'
 import { fetchHomelabMetrics } from '../api/homelabMetrics'
-import { computeDespensaAnalytics, getBuyAmountFromDesc } from '../utils/despensaAnalytics'
+import {
+  computeDespensaAnalytics,
+  getBuyAmountFromDesc,
+  getDespensaUnitPrice,
+  purchaseTotalPrice,
+} from '../utils/despensaAnalytics'
+import { isVerified } from '../utils/verification'
 
 interface DespensaCardProps {
   item: StockItem
@@ -33,7 +40,10 @@ function DespensaCard({
   const [imgError, setImgError] = useState(false)
   const analytics = computeDespensaAnalytics(log, item.amount, daysUntilShop)
   const buyAmount = getBuyAmountFromDesc(item.product.description, item.product.id)
-  const pricePerUnit = item.amount > 0 && item.value > 0 ? item.value / item.amount : null
+  const pricePerUnit = getDespensaUnitPrice(item.amount, item.value, item.product.description)
+  const priceVerified = isVerified(item.product.description, 'preco')
+  const caloriesVerified = isVerified(item.product.description, 'calorias')
+  const hasCalories = (item.product.calories ?? 0) > 0
 
   return (
     <div className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border flex flex-col">
@@ -84,14 +94,18 @@ function DespensaCard({
           {item.product.name}
         </button>
 
-        {(pricePerUnit !== null || (item.product.calories ?? 0) > 0) && (
+        {(pricePerUnit !== null || hasCalories) && (
           <div className="flex items-center justify-between gap-1 flex-wrap">
             {pricePerUnit !== null && (
-              <span className="text-nourish-primary text-xs font-semibold">€{pricePerUnit.toFixed(2)}</span>
+              <span className="text-nourish-primary text-xs font-semibold inline-flex items-center gap-1">
+                €{pricePerUnit.toFixed(2)}
+                <VerifiedBadge verified={priceVerified} />
+              </span>
             )}
-            {(item.product.calories ?? 0) > 0 && (
-              <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums">
+            {hasCalories && (
+              <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums inline-flex items-center gap-1">
                 {item.product.calories} kcal
+                <VerifiedBadge verified={caloriesVerified} />
               </span>
             )}
           </div>
@@ -195,11 +209,14 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   }
 
   const handleAdd = async (id: number) => {
-    const product = items.find(s => s.product_id === id)!.product
+    const stockItem = items.find((s) => s.product_id === id)!
+    const product = stockItem.product
     const amount = getBuyAmountFromDesc(product.description, product.id)
+    const unitPrice = getDespensaUnitPrice(stockItem.amount, stockItem.value, product.description)
+    const totalPrice = purchaseTotalPrice(unitPrice, amount)
     setItems(prev => prev.map(s => s.product_id === id ? { ...s, amount: s.amount + amount } : s))
     try {
-      await grocy.addStock(id, amount)
+      await grocy.addStock(id, amount, totalPrice != null ? { price: totalPrice } : undefined)
       const [newLog, sl] = await Promise.all([grocy.getStockLog(id), grocy.getShoppingList()])
       setLogs(prev => ({ ...prev, [id]: newLog }))
       setShoppingList(sl)

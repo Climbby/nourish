@@ -1,3 +1,6 @@
+import type { VerifiedField } from './verification'
+import { formatVerifiedSection } from './verification'
+
 export interface IngredientRow {
   id: number
   name: string
@@ -18,7 +21,8 @@ export function buildDescription(
   priceOverride: string,
   autoTotal: number,
   category?: string,
-  portions?: number | null
+  portions?: number | null,
+  verified?: Set<VerifiedField>
 ): string {
   const parts: string[] = []
 
@@ -47,6 +51,7 @@ export function buildDescription(
 
   if (category?.trim()) parts.push(`[Categoria]\n${category.trim()}`)
   if (portions !== undefined && portions !== null && portions >= 0) parts.push(`[Porcoes]\n${portions}`)
+  if (verified && verified.size > 0) parts.push(formatVerifiedSection(verified))
 
   return parts.join('\n\n')
 }

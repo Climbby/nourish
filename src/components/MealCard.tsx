@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import type { Recipe } from '../types/grocy'
 import { grocy } from '../api/grocy'
 import { parseDescription } from '../utils/parseDescription'
+import { VerifiedBadge } from './VerifiedBadge'
 
 interface Props {
   recipe: Recipe
@@ -12,14 +13,16 @@ interface Props {
 export function MealCard({ recipe, showPortions }: Props) {
   const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
-  const { nutrition, price, portions } = parseDescription(recipe.description ?? '')
+  const { nutrition, price, portions, verified } = parseDescription(recipe.description ?? '')
+  const nutricaoOk = verified.includes('nutricao')
+  const precoOk = verified.includes('preco')
 
   return (
     <button
       onClick={() => navigate(`/meal/${recipe.id}`)}
-      className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border text-left w-full active:scale-95 transition-transform duration-100 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-1 focus:ring-offset-nourish-bg"
+      className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border text-left w-full h-full flex flex-col active:scale-95 transition-transform duration-100 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-1 focus:ring-offset-nourish-bg"
     >
-      <div className="relative">
+      <div className="relative flex-shrink-0">
         {recipe.picture_file_name && !imgError ? (
           <img
             src={grocy.pictureUrl(recipe.picture_file_name)}
@@ -42,16 +45,22 @@ export function MealCard({ recipe, showPortions }: Props) {
           </span>
         )}
       </div>
-      <div className="p-3 space-y-2">
-        <h3 className="font-semibold text-nourish-text text-sm leading-snug">{recipe.name}</h3>
+      <div className="p-3 flex flex-col flex-1 gap-2">
+        <h3 className="font-semibold text-nourish-text text-sm leading-snug line-clamp-2 min-h-[2.5rem]">
+          {recipe.name}
+        </h3>
 
         {(price !== null || nutrition) && (
-          <div className="flex items-center justify-between gap-1 flex-wrap">
+          <div className="mt-auto flex items-center justify-between gap-1 flex-wrap">
             {price !== null && (
-              <span className="text-nourish-primary text-xs font-semibold">€{price.toFixed(2)}</span>
+              <span className="text-nourish-primary text-xs font-semibold inline-flex items-center gap-1">
+                €{price.toFixed(2)}
+                <VerifiedBadge verified={precoOk} />
+              </span>
             )}
             {nutrition && (
-              <div className="flex gap-1">
+              <div className="flex gap-1 items-center">
+                <VerifiedBadge verified={nutricaoOk} className="mr-0.5" />
                 <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums">
                   {nutrition.protein}g P
                 </span>

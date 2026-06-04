@@ -1,4 +1,5 @@
 import { stripHtml } from './stripHtml'
+import { isVerifiedField, type VerifiedField } from './verification'
 
 export interface Nutrition {
   calories: number
@@ -20,6 +21,7 @@ export interface ParsedRecipe {
   price: number | null
   category: string | null
   portions: number | null
+  verified: VerifiedField[]
 }
 
 export function parseDescription(raw: string): ParsedRecipe {
@@ -29,7 +31,7 @@ export function parseDescription(raw: string): ParsedRecipe {
   let currentKey: string | null = null
 
   for (const line of text.split('\n')) {
-    const match = line.match(/^\[(Ingredientes|Passos|Nutricao|Preco|Categoria|Porcoes)\]$/)
+    const match = line.match(/^\[(Ingredientes|Passos|Nutricao|Preco|Categoria|Porcoes|Verificado)\]$/)
     if (match) {
       currentKey = match[1]
       sections[currentKey] = ''
@@ -39,7 +41,16 @@ export function parseDescription(raw: string): ParsedRecipe {
   }
 
   if (Object.keys(sections).length === 0) {
-    return { ingredients: null, ingredientItems: [], steps: text || null, nutrition: null, price: null, category: null, portions: null }
+    return {
+      ingredients: null,
+      ingredientItems: [],
+      steps: text || null,
+      nutrition: null,
+      price: null,
+      category: null,
+      portions: null,
+      verified: [],
+    }
   }
 
   const rawIngredients = sections['Ingredientes']?.trim() || null
@@ -82,6 +93,14 @@ export function parseDescription(raw: string): ParsedRecipe {
     if (!isNaN(val)) portions = val
   }
 
+  const verified: VerifiedField[] = []
+  if (sections['Verificado']) {
+    for (const line of sections['Verificado'].split('\n')) {
+      const key = line.trim().toLowerCase()
+      if (isVerifiedField(key)) verified.push(key)
+    }
+  }
+
   return {
     ingredients: rawIngredients,
     ingredientItems,
@@ -90,6 +109,7 @@ export function parseDescription(raw: string): ParsedRecipe {
     price,
     category,
     portions,
+    verified,
   }
 }
 

@@ -4,6 +4,9 @@ import { grocy } from '../api/grocy'
 import { analyzeMeal, analyzeProduct, suggestIngredients } from '../api/ai'
 import { grocyConfig } from '../config/grocy'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
+import { buildDespensaDescription } from '../utils/despensaAnalytics'
+import type { VerifiedField } from '../utils/verification'
+import { VerifyCheckbox } from '../components/VerifiedBadge'
 import { PhotoField } from '../components/PhotoField'
 
 const { despensaGroupId: DESPENSA_GROUP_ID, defaultLocationId: DEFAULT_LOCATION_ID, defaultQuId: DEFAULT_QU_ID } = grocyConfig
@@ -58,6 +61,11 @@ export function AddMeal() {
     return ''
   })
   const [buyAmount, setBuyAmount] = useState('1')
+  const [unitPrice, setUnitPrice] = useState('')
+  const [verifyPrice, setVerifyPrice] = useState(false)
+  const [verifyCalories, setVerifyCalories] = useState(false)
+  const [verifyNutricao, setVerifyNutricao] = useState(false)
+  const [verifyMealPrice, setVerifyMealPrice] = useState(false)
   const [priceOverride, setPriceOverride] = useState('')
   const [saving, setSaving] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
@@ -94,15 +102,28 @@ export function AddMeal() {
     try {
       if (isDespensa) {
         const result = await analyzeProduct(name.trim() || 'produto', photoFile)
-        if (result.calories !== null) setCalories(String(Math.round(result.calories)))
+        if (result.calories !== null) {
+          setCalories(String(Math.round(result.calories)))
+          setVerifyCalories(false)
+        }
+        if (result.price !== null) {
+          setUnitPrice(result.price.toFixed(2))
+          setVerifyPrice(false)
+        }
       } else {
         const ingredientNames = ingredientRows.map((r) => r.name.trim()).filter(Boolean)
         const result = await analyzeMeal(name.trim() || 'refeição', ingredientNames, photoFile)
-        if (result.calories !== null) setCalories(String(Math.round(result.calories)))
-        if (result.protein !== null) setProtein(String(Math.round(result.protein)))
-        if (result.carbs !== null) setCarbs(String(Math.round(result.carbs)))
-        if (result.fat !== null) setFat(String(Math.round(result.fat)))
-        if (result.totalPrice !== null) setPriceOverride(result.totalPrice.toFixed(2))
+        if (result.calories !== null || result.protein !== null || result.carbs !== null || result.fat !== null) {
+          if (result.calories !== null) setCalories(String(Math.round(result.calories)))
+          if (result.protein !== null) setProtein(String(Math.round(result.protein)))
+          if (result.carbs !== null) setCarbs(String(Math.round(result.carbs)))
+          if (result.fat !== null) setFat(String(Math.round(result.fat)))
+          setVerifyNutricao(false)
+        }
+        if (result.totalPrice !== null) {
+          setPriceOverride(result.totalPrice.toFixed(2))
+          setVerifyMealPrice(false)
+        }
 
         if (result.ingredients.length > 0) {
           const existingNames = new Set(
@@ -154,6 +175,26 @@ export function AddMeal() {
     })
   }
 
+  function buildDespensaVerified(): Set<VerifiedField> {
+    const v = new Set<VerifiedField>()
+    if (verifyPrice && unitPrice.trim() && parseFloat(unitPrice) > 0) v.add('preco')
+    if (verifyCalories && calories.trim() && parseFloat(calories) > 0) v.add('calorias')
+    return v
+  }
+
+  function buildMealVerified(): Set<VerifiedField> {
+    const v = new Set<VerifiedField>()
+    const hasNutricao =
+      (calories.trim() && parseFloat(calories) > 0) ||
+      (protein.trim() && parseFloat(protein) > 0) ||
+      (carbs.trim() && parseFloat(carbs) > 0) ||
+      (fat.trim() && parseFloat(fat) > 0)
+    const finalPrice = priceOverride !== '' ? parseFloat(priceOverride) : autoTotal
+    if (verifyNutricao && hasNutricao) v.add('nutricao')
+    if (verifyMealPrice && !isNaN(finalPrice) && finalPrice > 0) v.add('preco')
+    return v
+  }
+
   async function handleSave() {
     if (!name.trim()) { setNameError(true); return }
     setNameError(false)
@@ -173,7 +214,9 @@ export function AddMeal() {
           active: 1,
           quick_consume_amount: 1,
           default_best_before_days: 0,
-          description: `[BuyAmount]\n${buyAmount || '1'}`,
+          description: buildDespensaDescription(buyAmount || '1', unitPrice, {
+            verified: buildDespensaVerified(),
+          }),
         })
         if (photoFile) {
           const filename = await grocy.uploadProductPicture(photoFile, result.created_object_id)
@@ -190,7 +233,9 @@ export function AddMeal() {
           { calories, protein, carbs, fat },
           priceOverride,
           autoTotal,
-          category
+          category,
+          undefined,
+          buildMealVerified()
         )
 
         await grocy.createRecipe({
@@ -248,8 +293,50 @@ export function AddMeal() {
           <>
             <div>
               <label className={labelClass}>Calorias (por unidade)</label>
-              <input type="number" value={calories} onChange={(e) => setCalories(e.target.value)}
-                placeholder="ex: 52" min="0" className={inputClass} />
+              <input
+                type="number"
+                value={calories}
+                onChange={(e) => {
+                  setCalories(e.target.value)
+                  setVerifyCalories(false)
+                }}
+                placeholder="ex: 52"
+                min="0"
+                className={inputClass}
+              />
+              <div className="mt-1.5">
+                <VerifyCheckbox
+                  id="despensa-verify-calories"
+                  checked={verifyCalories}
+                  onChange={setVerifyCalories}
+                  label="Calorias verificadas"
+                  disabled={!calories.trim() || parseFloat(calories) <= 0}
+                />
+              </div>
+            </div>
+            <div>
+              <label className={labelClass}>Preço (por unidade, €)</label>
+              <input
+                type="number"
+                value={unitPrice}
+                onChange={(e) => {
+                  setUnitPrice(e.target.value)
+                  setVerifyPrice(false)
+                }}
+                placeholder="ex: 1.29"
+                min="0"
+                step="0.01"
+                className={inputClass}
+              />
+              <div className="mt-1.5">
+                <VerifyCheckbox
+                  id="despensa-verify-price"
+                  checked={verifyPrice}
+                  onChange={setVerifyPrice}
+                  label="Preço verificado"
+                  disabled={!unitPrice.trim() || parseFloat(unitPrice) <= 0}
+                />
+              </div>
             </div>
             <div>
               <label className={labelClass}>Quantidade que compras de cada vez</label>
@@ -277,13 +364,61 @@ export function AddMeal() {
                 rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
             </div>
             <NutritionSection
-              calories={calories} protein={protein} carbs={carbs} fat={fat}
-              onChange={{ calories: setCalories, protein: setProtein, carbs: setCarbs, fat: setFat }}
-              inputClass={inputClass} labelClass={labelClass}
+              calories={calories}
+              protein={protein}
+              carbs={carbs}
+              fat={fat}
+              onChange={{
+                calories: (v) => {
+                  setCalories(v)
+                  setVerifyNutricao(false)
+                },
+                protein: (v) => {
+                  setProtein(v)
+                  setVerifyNutricao(false)
+                },
+                carbs: (v) => {
+                  setCarbs(v)
+                  setVerifyNutricao(false)
+                },
+                fat: (v) => {
+                  setFat(v)
+                  setVerifyNutricao(false)
+                },
+              }}
+              inputClass={inputClass}
+              labelClass={labelClass}
+            />
+            <VerifyCheckbox
+              id="meal-verify-nutricao"
+              checked={verifyNutricao}
+              onChange={setVerifyNutricao}
+              label="Nutrição verificada"
+              disabled={
+                !(calories.trim() && parseFloat(calories) > 0) &&
+                !(protein.trim() && parseFloat(protein) > 0) &&
+                !(carbs.trim() && parseFloat(carbs) > 0) &&
+                !(fat.trim() && parseFloat(fat) > 0)
+              }
             />
             <PriceSection
-              autoTotal={autoTotal} priceOverride={priceOverride}
-              onOverrideChange={setPriceOverride} inputClass={inputClass} labelClass={labelClass}
+              autoTotal={autoTotal}
+              priceOverride={priceOverride}
+              onOverrideChange={(v) => {
+                setPriceOverride(v)
+                setVerifyMealPrice(false)
+              }}
+              inputClass={inputClass}
+              labelClass={labelClass}
+            />
+            <VerifyCheckbox
+              id="meal-verify-preco"
+              checked={verifyMealPrice}
+              onChange={setVerifyMealPrice}
+              label="Preço verificado"
+              disabled={
+                (priceOverride === '' || parseFloat(priceOverride) <= 0) && autoTotal <= 0
+              }
             />
           </>
         )}

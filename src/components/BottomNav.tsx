@@ -110,6 +110,10 @@ export function BottomNav() {
           <HomeIcon />
           Refeições
         </NavLink>
+        <NavLink to="/history" className={linkClass}>
+          <ClockIcon />
+          Historial
+        </NavLink>
         <button
           onClick={() => setShowSheet(true)}
           className="flex-1 flex flex-col items-center justify-center py-2 gap-0.5 text-[10px] font-medium text-nourish-text-dim transition-colors min-h-[56px] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-nourish-primary"
@@ -120,10 +124,6 @@ export function BottomNav() {
         <NavLink to="/favourites" className={linkClass}>
           <HeartIcon />
           Favoritos
-        </NavLink>
-        <NavLink to="/history" className={linkClass}>
-          <ClockIcon />
-          Historial
         </NavLink>
         <NavLink to="/profile" className={linkClass}>
           <UserIcon />

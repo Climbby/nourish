@@ -8,6 +8,8 @@ import { parseDescription } from '../utils/parseDescription'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
 import { IngredientSection, NutritionSection, PriceSection, PortionsSection, aiButtonClass } from './AddMeal'
 import { PhotoField } from '../components/PhotoField'
+import { VerifyCheckbox } from '../components/VerifiedBadge'
+import type { VerifiedField } from '../utils/verification'
 
 function BackIcon() {
   return (
@@ -44,6 +46,8 @@ export function EditMeal() {
   const [category, setCategory] = useState('')
   const [portions, setPortions] = useState('')
   const [priceOverride, setPriceOverride] = useState('')
+  const [verifyNutricao, setVerifyNutricao] = useState(false)
+  const [verifyMealPrice, setVerifyMealPrice] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [nameError, setNameError] = useState(false)
@@ -106,6 +110,8 @@ export function EditMeal() {
       }
 
       if (parsed.price !== null) setPriceOverride(parsed.price.toFixed(2))
+      setVerifyNutricao(parsed.verified.includes('nutricao'))
+      setVerifyMealPrice(parsed.verified.includes('preco'))
       setCategory(parsed.category ?? '')
       setPortions(parsed.portions !== null ? String(parsed.portions) : '')
 
@@ -142,11 +148,17 @@ export function EditMeal() {
     try {
       const ingredientNames = ingredientRows.map((r) => r.name.trim()).filter(Boolean)
       const result = await analyzeMeal(name.trim() || 'refeição', ingredientNames, await photoForAi())
-      if (result.calories !== null) setCalories(String(Math.round(result.calories)))
-      if (result.protein !== null) setProtein(String(Math.round(result.protein)))
-      if (result.carbs !== null) setCarbs(String(Math.round(result.carbs)))
-      if (result.fat !== null) setFat(String(Math.round(result.fat)))
-      if (result.totalPrice !== null) setPriceOverride(result.totalPrice.toFixed(2))
+      if (result.calories !== null || result.protein !== null || result.carbs !== null || result.fat !== null) {
+        if (result.calories !== null) setCalories(String(Math.round(result.calories)))
+        if (result.protein !== null) setProtein(String(Math.round(result.protein)))
+        if (result.carbs !== null) setCarbs(String(Math.round(result.carbs)))
+        if (result.fat !== null) setFat(String(Math.round(result.fat)))
+        setVerifyNutricao(false)
+      }
+      if (result.totalPrice !== null) {
+        setPriceOverride(result.totalPrice.toFixed(2))
+        setVerifyMealPrice(false)
+      }
       if (result.ingredients.length > 0) {
         const existingNames = new Set(
           ingredientRows.map((r) => r.name.trim().toLowerCase()).filter(Boolean)
@@ -201,6 +213,16 @@ export function EditMeal() {
       let pictureName = existingPhoto
       if (photoFile) pictureName = await grocy.uploadPicture(photoFile)
 
+      const verified = new Set<VerifiedField>()
+      const hasNutricao =
+        (calories.trim() && parseFloat(calories) > 0) ||
+        (protein.trim() && parseFloat(protein) > 0) ||
+        (carbs.trim() && parseFloat(carbs) > 0) ||
+        (fat.trim() && parseFloat(fat) > 0)
+      const finalPrice = priceOverride !== '' ? parseFloat(priceOverride) : autoTotal
+      if (verifyNutricao && hasNutricao) verified.add('nutricao')
+      if (verifyMealPrice && !isNaN(finalPrice) && finalPrice > 0) verified.add('preco')
+
       const description = buildDescription(
         ingredientRows,
         comoFazer,
@@ -208,7 +230,8 @@ export function EditMeal() {
         priceOverride,
         autoTotal,
         category,
-        portions === '' ? null : parseInt(portions, 10)
+        portions === '' ? null : parseInt(portions, 10),
+        verified
       )
 
       await grocy.updateRecipe(numId, {
@@ -309,12 +332,64 @@ export function EditMeal() {
             rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
         </div>
 
-        <NutritionSection calories={calories} protein={protein} carbs={carbs} fat={fat}
-          onChange={{ calories: setCalories, protein: setProtein, carbs: setCarbs, fat: setFat }}
-          inputClass={inputClass} labelClass={labelClass} />
+        <NutritionSection
+          calories={calories}
+          protein={protein}
+          carbs={carbs}
+          fat={fat}
+          onChange={{
+            calories: (v) => {
+              setCalories(v)
+              setVerifyNutricao(false)
+            },
+            protein: (v) => {
+              setProtein(v)
+              setVerifyNutricao(false)
+            },
+            carbs: (v) => {
+              setCarbs(v)
+              setVerifyNutricao(false)
+            },
+            fat: (v) => {
+              setFat(v)
+              setVerifyNutricao(false)
+            },
+          }}
+          inputClass={inputClass}
+          labelClass={labelClass}
+        />
+        <VerifyCheckbox
+          id="edit-verify-nutricao"
+          checked={verifyNutricao}
+          onChange={setVerifyNutricao}
+          label="Nutrição verificada"
+          disabled={
+            !(calories.trim() && parseFloat(calories) > 0) &&
+            !(protein.trim() && parseFloat(protein) > 0) &&
+            !(carbs.trim() && parseFloat(carbs) > 0) &&
+            !(fat.trim() && parseFloat(fat) > 0)
+          }
+        />
 
-        <PriceSection autoTotal={autoTotal} priceOverride={priceOverride} onOverrideChange={setPriceOverride}
-          inputClass={inputClass} labelClass={labelClass} />
+        <PriceSection
+          autoTotal={autoTotal}
+          priceOverride={priceOverride}
+          onOverrideChange={(v) => {
+            setPriceOverride(v)
+            setVerifyMealPrice(false)
+          }}
+          inputClass={inputClass}
+          labelClass={labelClass}
+        />
+        <VerifyCheckbox
+          id="edit-verify-preco"
+          checked={verifyMealPrice}
+          onChange={setVerifyMealPrice}
+          label="Preço verificado"
+          disabled={
+            (priceOverride === '' || parseFloat(priceOverride) <= 0) && autoTotal <= 0
+          }
+        />
 
         <PortionsSection portions={portions} onChange={setPortions}
           inputClass={inputClass} labelClass={labelClass} />

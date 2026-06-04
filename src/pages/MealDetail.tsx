@@ -4,6 +4,7 @@ import { grocy } from '../api/grocy'
 import type { Product, QuantityUnit, Recipe, RecipeIngredient } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription, parseSteps } from '../utils/parseDescription'
+import { VerifiedBadge } from '../components/VerifiedBadge'
 import { addPortions, decrementPortions } from '../utils/buildDescription'
 import { useFavourites } from '../hooks/useFavourites'
 
@@ -224,6 +225,8 @@ export function MealDetail() {
 
   const parsed = parseDescription(recipe.description ?? '')
   const { ingredients: parsedIngr, steps, nutrition, price } = parsed
+  const nutricaoOk = parsed.verified.includes('nutricao')
+  const precoOk = parsed.verified.includes('preco')
   const stepLines = parseSteps(steps)
   const tracksPortions = parsed.portions !== null
 
@@ -253,19 +256,27 @@ export function MealDetail() {
         {(nutrition || price !== null) && (
           <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
             {nutrition && (
-              <div className="grid grid-cols-4 gap-2 text-center">
-                {nutritionItems.map(({ label, value }) => (
-                  <div key={label} className="flex flex-col items-center gap-0.5">
-                    <span className="text-nourish-primary font-bold text-sm tabular-nums">{value}</span>
-                    <span className="text-nourish-text-dim text-xs tracking-wider">{label}</span>
-                  </div>
-                ))}
+              <div>
+                <div className="flex items-center justify-end mb-2">
+                  <VerifiedBadge verified={nutricaoOk} label="~est." />
+                </div>
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  {nutritionItems.map(({ label, value }) => (
+                    <div key={label} className="flex flex-col items-center gap-0.5">
+                      <span className="text-nourish-primary font-bold text-sm tabular-nums">{value}</span>
+                      <span className="text-nourish-text-dim text-xs tracking-wider">{label}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             {price !== null && (
               <div className={`flex items-center justify-between ${nutrition ? 'border-t border-nourish-border pt-3' : ''}`}>
                 <span className="text-nourish-text-dim text-sm">Custo estimado</span>
-                <span className="text-nourish-primary font-semibold">€{price.toFixed(2)}</span>
+                <span className="text-nourish-primary font-semibold inline-flex items-center gap-1.5">
+                  €{price.toFixed(2)}
+                  <VerifiedBadge verified={precoOk} />
+                </span>
               </div>
             )}
           </div>

@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { grocyConfig } from '../config/grocy'
 import { PhotoField } from '../components/PhotoField'
+import { buildDespensaDescription } from '../utils/despensaAnalytics'
+import type { VerifiedField } from '../utils/verification'
+import { VerifyCheckbox } from '../components/VerifiedBadge'
 
 const { despensaGroupId: DESPENSA_GROUP_ID, defaultLocationId: DEFAULT_LOCATION_ID, defaultQuId: DEFAULT_QU_ID } = grocyConfig
 
@@ -24,6 +27,9 @@ export function AddProduct() {
   const [name, setName] = useState('')
   const [calories, setCalories] = useState('')
   const [buyAmount, setBuyAmount] = useState('1')
+  const [unitPrice, setUnitPrice] = useState('')
+  const [verifyPrice, setVerifyPrice] = useState(false)
+  const [verifyCalories, setVerifyCalories] = useState(false)
   const [photoFile, setPhotoFile] = useState<File | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -47,7 +53,14 @@ export function AddProduct() {
         active: 1,
         quick_consume_amount: 1,
         default_best_before_days: 0,
-        description: `[BuyAmount]\n${buyAmount || '1'}`,
+        description: buildDespensaDescription(buyAmount || '1', unitPrice, {
+          verified: (() => {
+            const v = new Set<VerifiedField>()
+            if (verifyPrice && unitPrice.trim() && parseFloat(unitPrice) > 0) v.add('preco')
+            if (verifyCalories && calories.trim() && parseFloat(calories) > 0) v.add('calorias')
+            return v
+          })(),
+        }),
       })
 
       if (photoFile) {
@@ -96,11 +109,48 @@ export function AddProduct() {
           <input
             type="number"
             value={calories}
-            onChange={e => setCalories(e.target.value)}
+            onChange={e => {
+              setCalories(e.target.value)
+              setVerifyCalories(false)
+            }}
             placeholder="ex: 52"
             min="0"
             className={inputClass}
           />
+          <div className="mt-1.5">
+            <VerifyCheckbox
+              id="add-verify-calories"
+              checked={verifyCalories}
+              onChange={setVerifyCalories}
+              label="Calorias verificadas"
+              disabled={!calories.trim() || parseFloat(calories) <= 0}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className={labelClass}>Preço (por unidade, €)</label>
+          <input
+            type="number"
+            value={unitPrice}
+            onChange={e => {
+              setUnitPrice(e.target.value)
+              setVerifyPrice(false)
+            }}
+            placeholder="ex: 1.29"
+            min="0"
+            step="0.01"
+            className={inputClass}
+          />
+          <div className="mt-1.5">
+            <VerifyCheckbox
+              id="add-verify-price"
+              checked={verifyPrice}
+              onChange={setVerifyPrice}
+              label="Preço verificado"
+              disabled={!unitPrice.trim() || parseFloat(unitPrice) <= 0}
+            />
+          </div>
         </div>
 
         <div>
