@@ -151,266 +151,275 @@ export function Profile() {
 
         {!loading && !error && (
           <>
-            <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
-              <div>
-                <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-1">
-                  Objectivos recomendados para ti
-                </p>
-                <p className="text-xs text-nourish-text-dim leading-snug">{profileSummary(profile, recommended)}</p>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-center text-xs">
-                <div className="bg-nourish-surface-high rounded-lg py-2">
-                  <p className="text-nourish-text-dim">kcal/dia</p>
-                  <p className="font-bold text-nourish-text tabular-nums">{recommended.caloriesPerDay}</p>
-                </div>
-                <div className="bg-nourish-surface-high rounded-lg py-2">
-                  <p className="text-nourish-text-dim">Proteína</p>
-                  <p className="font-bold text-nourish-text tabular-nums">{recommended.proteinPerDay} g</p>
-                </div>
-                <div className="bg-nourish-surface-high rounded-lg py-2">
-                  <p className="text-nourish-text-dim">Hidratos</p>
-                  <p className="font-bold text-nourish-text tabular-nums">{recommended.carbsPerDay} g</p>
-                </div>
-                <div className="bg-nourish-surface-high rounded-lg py-2">
-                  <p className="text-nourish-text-dim">Gordura</p>
-                  <p className="font-bold text-nourish-text tabular-nums">{recommended.fatPerDay} g</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setTargets(recommended)}
-                className="w-full py-2.5 rounded-xl text-sm font-semibold bg-nourish-primary text-nourish-on-primary active:opacity-90 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-              >
-                Usar estes objectivos
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowBody((v) => !v)}
-                className="w-full text-xs text-nourish-text-dim underline focus:outline-none"
-              >
-                {showBody ? 'Ocultar dados pessoais' : 'Idade, peso e meta'}
-              </button>
-              {showBody && (
-                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-nourish-border">
-                  <label className="text-xs text-nourish-text-dim col-span-1">
-                    Idade
-                    <NumericInput
-                      integer
-                      min={14}
-                      max={99}
-                      fallback={DEFAULT_USER_PROFILE.age}
-                      className={`${inputClass} mt-1`}
-                      value={profile.age}
-                      onChange={(n) => updateField('age', n)}
-                    />
-                  </label>
-                  <label className="text-xs text-nourish-text-dim col-span-1">
-                    Sexo
-                    <select
-                      className={`${inputClass} mt-1`}
-                      value={profile.sex}
-                      onChange={(e) => updateField('sex', e.target.value as 'male' | 'female')}
-                    >
-                      <option value="male">Masculino</option>
-                      <option value="female">Feminino</option>
-                    </select>
-                  </label>
-                  <label className="text-xs text-nourish-text-dim">
-                    Peso (kg)
-                    <NumericInput
-                      integer
-                      min={1}
-                      fallback={DEFAULT_USER_PROFILE.weightKg}
-                      className={`${inputClass} mt-1`}
-                      value={profile.weightKg}
-                      onChange={(n) => updateField('weightKg', n)}
-                    />
-                  </label>
-                  <label className="text-xs text-nourish-text-dim">
-                    Altura (cm)
-                    <NumericInput
-                      integer
-                      min={1}
-                      fallback={DEFAULT_USER_PROFILE.heightCm}
-                      className={`${inputClass} mt-1`}
-                      value={profile.heightCm}
-                      onChange={(n) => updateField('heightCm', n)}
-                    />
-                  </label>
-                  <label className="text-xs text-nourish-text-dim col-span-2">
-                    Actividade
-                    <select
-                      className={`${inputClass} mt-1`}
-                      value={profile.activity}
-                      onChange={(e) => updateField('activity', e.target.value as typeof profile.activity)}
-                    >
-                      {(Object.keys(ACTIVITY_LABELS) as (keyof typeof ACTIVITY_LABELS)[]).map((k) => (
-                        <option key={k} value={k}>{ACTIVITY_LABELS[k]}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-xs text-nourish-text-dim col-span-2">
-                    Meta
-                    <select
-                      className={`${inputClass} mt-1`}
-                      value={profile.goal}
-                      onChange={(e) => updateField('goal', e.target.value as typeof profile.goal)}
-                    >
-                      {(Object.keys(GOAL_LABELS) as (keyof typeof GOAL_LABELS)[]).map((k) => (
-                        <option key={k} value={k}>{GOAL_LABELS[k]}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-              )}
-            </section>
+            <section className="space-y-3">
+              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
+                Resumo · {periodMeta.label.toLowerCase()}
+              </h2>
 
-            {surpluses.length > 0 && totals.mealsLogged > 0 && (
-              <section className="p-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 space-y-2">
-                <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
-                  Acima do objectivo ({periodMeta.label.toLowerCase()})
+              <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4">
+                <p className="text-3xl font-bold text-nourish-text tabular-nums">
+                  €{totals.spend.toFixed(2)}
                 </p>
-                {surpluses.map((s) => (
-                  <div key={s.key}>
-                    <p className="text-sm font-medium text-nourish-text">
-                      {s.label}: {s.percentOfExpected}% (+{Math.round(s.overBy)} {s.unit})
-                    </p>
-                    <p className="text-xs text-nourish-text-dim mt-0.5">{SURPLUS_ADVICE[s.key]}</p>
-                  </div>
-                ))}
-              </section>
-            )}
-
-            <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4">
-              <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-2">
-                {periodMeta.label}
-              </p>
-              <p className="text-3xl font-bold text-nourish-text tabular-nums">
-                €{totals.spend.toFixed(2)}
-              </p>
-              <p className="text-sm text-nourish-text-dim mt-0.5">
-                Gasto estimado em refeições registadas
-                {totals.mealsLogged > 0 && (
-                  <> · {totals.mealsLogged} registo{totals.mealsLogged !== 1 ? 's' : ''}</>
+                <p className="text-sm text-nourish-text-dim mt-0.5">
+                  Gasto estimado em refeições registadas
+                  {totals.mealsLogged > 0 && (
+                    <> · {totals.mealsLogged} registo{totals.mealsLogged !== 1 ? 's' : ''}</>
+                  )}
+                </p>
+                {totals.mealsLogged === 0 && (
+                  <p className="text-xs text-nourish-border mt-2">
+                    Regista refeições em Historial para ver totais. Só contam refeições com nutrição/preço no cartão.
+                  </p>
                 )}
-              </p>
-              {totals.mealsLogged === 0 && (
-                <p className="text-xs text-nourish-border mt-2">
-                  Regista refeições em Historial para ver totais. Só contam refeições com nutrição/preço no cartão.
+              </div>
+
+              {surpluses.length > 0 && totals.mealsLogged > 0 && (
+                <div className="p-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 space-y-2">
+                  <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
+                    Acima do objectivo
+                  </p>
+                  {surpluses.map((s) => (
+                    <div key={s.key}>
+                      <p className="text-sm font-medium text-nourish-text">
+                        {s.label}: {s.percentOfExpected}% (+{Math.round(s.overBy)} {s.unit})
+                      </p>
+                      <p className="text-xs text-nourish-text-dim mt-0.5">{SURPLUS_ADVICE[s.key]}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                {gaps.map((g) => {
+                  const pctRaw = g.expected > 0 ? (g.actual / g.expected) * 100 : 0
+                  const isOver = surplusKeys.has(g.key)
+                  const barPct = Math.min(100, Math.round(pctRaw))
+                  return (
+                    <div
+                      key={g.key}
+                      className={`bg-nourish-surface border rounded-xl p-3 ${
+                        isOver ? 'border-amber-500/50' : 'border-nourish-border'
+                      }`}
+                    >
+                      <p className="text-xs text-nourish-text-dim">{g.label}</p>
+                      <p className="text-lg font-bold text-nourish-text tabular-nums">
+                        {Math.round(g.actual)}
+                        <span className="text-xs font-normal text-nourish-text-dim"> {g.unit}</span>
+                      </p>
+                      <div className="mt-2 h-1.5 bg-nourish-surface-high rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            isOver ? 'bg-amber-500' : 'bg-nourish-primary'
+                          }`}
+                          style={{ width: `${barPct}%` }}
+                        />
+                      </div>
+                      <p className={`text-[10px] mt-1 tabular-nums ${isOver ? 'text-amber-400' : 'text-nourish-border'}`}>
+                        {Math.round(pctRaw)}% do objectivo ({Math.round(g.expected)} {g.unit})
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {avgPerDay && totals.mealsLogged > 0 && (
+                <p className="text-xs text-nourish-text-dim text-center">
+                  Média ~{avgPerDay.calories} kcal e {avgPerDay.protein} g proteína por dia no período
                 </p>
               )}
             </section>
 
-            <section className="grid grid-cols-2 gap-2">
-              {gaps.map((g) => {
-                const pctRaw = g.expected > 0 ? (g.actual / g.expected) * 100 : 0
-                const isOver = surplusKeys.has(g.key)
-                const barPct = Math.min(100, Math.round(pctRaw))
-                return (
-                  <div
-                    key={g.key}
-                    className={`bg-nourish-surface border rounded-xl p-3 ${
-                      isOver ? 'border-amber-500/50' : 'border-nourish-border'
-                    }`}
-                  >
-                    <p className="text-xs text-nourish-text-dim">{g.label}</p>
-                    <p className="text-lg font-bold text-nourish-text tabular-nums">
-                      {Math.round(g.actual)}
-                      <span className="text-xs font-normal text-nourish-text-dim"> {g.unit}</span>
-                    </p>
-                    <div className="mt-2 h-1.5 bg-nourish-surface-high rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          isOver ? 'bg-amber-500' : 'bg-nourish-primary'
-                        }`}
-                        style={{ width: `${barPct}%` }}
-                      />
-                    </div>
-                    <p className={`text-[10px] mt-1 tabular-nums ${isOver ? 'text-amber-400' : 'text-nourish-border'}`}>
-                      {Math.round(pctRaw)}% do objectivo ({Math.round(g.expected)} {g.unit})
-                    </p>
+            <section className="space-y-3">
+              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
+                Objectivos
+              </h2>
+
+              <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-nourish-text mb-1">
+                    Recomendados para ti
+                  </p>
+                  <p className="text-xs text-nourish-text-dim leading-snug">{profileSummary(profile, recommended)}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-center text-xs">
+                  <div className="bg-nourish-surface-high rounded-lg py-2">
+                    <p className="text-nourish-text-dim">kcal/dia</p>
+                    <p className="font-bold text-nourish-text tabular-nums">{recommended.caloriesPerDay}</p>
                   </div>
-                )
-              })}
-            </section>
-
-            {avgPerDay && totals.mealsLogged > 0 && (
-              <p className="text-xs text-nourish-text-dim text-center">
-                Média ~{avgPerDay.calories} kcal e {avgPerDay.protein} g proteína por dia no período
-              </p>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setShowTargets((v) => !v)}
-              className="w-full text-sm text-nourish-text-dim underline focus:outline-none"
-            >
-              {showTargets ? 'Ocultar objectivos diários' : 'Ajustar objectivos diários'}
-            </button>
-
-            {showTargets && (
-              <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="text-xs text-nourish-text-dim">
-                    kcal/dia
-                    <NumericInput
-                      integer
-                      min={0}
-                      fallback={DEFAULT_TARGETS.caloriesPerDay}
-                      className={`${inputClass} mt-1`}
-                      value={targets.caloriesPerDay}
-                      onChange={(n) => setTargets({ ...targets, caloriesPerDay: n })}
-                    />
-                  </label>
-                  <label className="text-xs text-nourish-text-dim">
-                    Proteína g/dia
-                    <NumericInput
-                      integer
-                      min={0}
-                      fallback={DEFAULT_TARGETS.proteinPerDay}
-                      className={`${inputClass} mt-1`}
-                      value={targets.proteinPerDay}
-                      onChange={(n) => setTargets({ ...targets, proteinPerDay: n })}
-                    />
-                  </label>
-                  <label className="text-xs text-nourish-text-dim">
-                    Hidratos g/dia
-                    <NumericInput
-                      integer
-                      min={0}
-                      fallback={DEFAULT_TARGETS.carbsPerDay}
-                      className={`${inputClass} mt-1`}
-                      value={targets.carbsPerDay}
-                      onChange={(n) => setTargets({ ...targets, carbsPerDay: n })}
-                    />
-                  </label>
-                  <label className="text-xs text-nourish-text-dim">
-                    Gordura g/dia
-                    <NumericInput
-                      integer
-                      min={0}
-                      fallback={DEFAULT_TARGETS.fatPerDay}
-                      className={`${inputClass} mt-1`}
-                      value={targets.fatPerDay}
-                      onChange={(n) => setTargets({ ...targets, fatPerDay: n })}
-                    />
-                  </label>
+                  <div className="bg-nourish-surface-high rounded-lg py-2">
+                    <p className="text-nourish-text-dim">Proteína</p>
+                    <p className="font-bold text-nourish-text tabular-nums">{recommended.proteinPerDay} g</p>
+                  </div>
+                  <div className="bg-nourish-surface-high rounded-lg py-2">
+                    <p className="text-nourish-text-dim">Hidratos</p>
+                    <p className="font-bold text-nourish-text tabular-nums">{recommended.carbsPerDay} g</p>
+                  </div>
+                  <div className="bg-nourish-surface-high rounded-lg py-2">
+                    <p className="text-nourish-text-dim">Gordura</p>
+                    <p className="font-bold text-nourish-text tabular-nums">{recommended.fatPerDay} g</p>
+                  </div>
                 </div>
                 <button
                   type="button"
-                  onClick={resetTargets}
-                  className="text-xs text-nourish-text-dim underline focus:outline-none"
+                  onClick={() => setTargets(recommended)}
+                  className="w-full py-2.5 rounded-xl text-sm font-semibold bg-nourish-primary text-nourish-on-primary active:opacity-90 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
                 >
-                  Repor predefinições ({DEFAULT_TARGETS.caloriesPerDay} kcal…)
+                  Usar estes objectivos
                 </button>
-              </section>
-            )}
+                <button
+                  type="button"
+                  onClick={() => setShowBody((v) => !v)}
+                  className="w-full text-xs text-nourish-text-dim underline focus:outline-none"
+                >
+                  {showBody ? 'Ocultar dados pessoais' : 'Idade, peso e meta'}
+                </button>
+                {showBody && (
+                  <div className="grid grid-cols-2 gap-3 pt-1 border-t border-nourish-border">
+                    <label className="text-xs text-nourish-text-dim col-span-1">
+                      Idade
+                      <NumericInput
+                        integer
+                        min={14}
+                        max={99}
+                        fallback={DEFAULT_USER_PROFILE.age}
+                        className={`${inputClass} mt-1`}
+                        value={profile.age}
+                        onChange={(n) => updateField('age', n)}
+                      />
+                    </label>
+                    <label className="text-xs text-nourish-text-dim col-span-1">
+                      Sexo
+                      <select
+                        className={`${inputClass} mt-1`}
+                        value={profile.sex}
+                        onChange={(e) => updateField('sex', e.target.value as 'male' | 'female')}
+                      >
+                        <option value="male">Masculino</option>
+                        <option value="female">Feminino</option>
+                      </select>
+                    </label>
+                    <label className="text-xs text-nourish-text-dim">
+                      Peso (kg)
+                      <NumericInput
+                        integer
+                        min={1}
+                        fallback={DEFAULT_USER_PROFILE.weightKg}
+                        className={`${inputClass} mt-1`}
+                        value={profile.weightKg}
+                        onChange={(n) => updateField('weightKg', n)}
+                      />
+                    </label>
+                    <label className="text-xs text-nourish-text-dim">
+                      Altura (cm)
+                      <NumericInput
+                        integer
+                        min={1}
+                        fallback={DEFAULT_USER_PROFILE.heightCm}
+                        className={`${inputClass} mt-1`}
+                        value={profile.heightCm}
+                        onChange={(n) => updateField('heightCm', n)}
+                      />
+                    </label>
+                    <label className="text-xs text-nourish-text-dim col-span-2">
+                      Actividade
+                      <select
+                        className={`${inputClass} mt-1`}
+                        value={profile.activity}
+                        onChange={(e) => updateField('activity', e.target.value as typeof profile.activity)}
+                      >
+                        {(Object.keys(ACTIVITY_LABELS) as (keyof typeof ACTIVITY_LABELS)[]).map((k) => (
+                          <option key={k} value={k}>{ACTIVITY_LABELS[k]}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs text-nourish-text-dim col-span-2">
+                      Meta
+                      <select
+                        className={`${inputClass} mt-1`}
+                        value={profile.goal}
+                        onChange={(e) => updateField('goal', e.target.value as typeof profile.goal)}
+                      >
+                        {(Object.keys(GOAL_LABELS) as (keyof typeof GOAL_LABELS)[]).map((k) => (
+                          <option key={k} value={k}>{GOAL_LABELS[k]}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowTargets((v) => !v)}
+                className="w-full text-sm text-nourish-text-dim underline focus:outline-none"
+              >
+                {showTargets ? 'Ocultar objectivos manuais' : 'Ajustar objectivos manualmente'}
+              </button>
+
+              {showTargets && (
+                <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="text-xs text-nourish-text-dim">
+                      kcal/dia
+                      <NumericInput
+                        integer
+                        min={0}
+                        fallback={DEFAULT_TARGETS.caloriesPerDay}
+                        className={`${inputClass} mt-1`}
+                        value={targets.caloriesPerDay}
+                        onChange={(n) => setTargets({ ...targets, caloriesPerDay: n })}
+                      />
+                    </label>
+                    <label className="text-xs text-nourish-text-dim">
+                      Proteína g/dia
+                      <NumericInput
+                        integer
+                        min={0}
+                        fallback={DEFAULT_TARGETS.proteinPerDay}
+                        className={`${inputClass} mt-1`}
+                        value={targets.proteinPerDay}
+                        onChange={(n) => setTargets({ ...targets, proteinPerDay: n })}
+                      />
+                    </label>
+                    <label className="text-xs text-nourish-text-dim">
+                      Hidratos g/dia
+                      <NumericInput
+                        integer
+                        min={0}
+                        fallback={DEFAULT_TARGETS.carbsPerDay}
+                        className={`${inputClass} mt-1`}
+                        value={targets.carbsPerDay}
+                        onChange={(n) => setTargets({ ...targets, carbsPerDay: n })}
+                      />
+                    </label>
+                    <label className="text-xs text-nourish-text-dim">
+                      Gordura g/dia
+                      <NumericInput
+                        integer
+                        min={0}
+                        fallback={DEFAULT_TARGETS.fatPerDay}
+                        className={`${inputClass} mt-1`}
+                        value={targets.fatPerDay}
+                        onChange={(n) => setTargets({ ...targets, fatPerDay: n })}
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={resetTargets}
+                    className="text-xs text-nourish-text-dim underline focus:outline-none"
+                  >
+                    Repor predefinições ({DEFAULT_TARGETS.caloriesPerDay} kcal…)
+                  </button>
+                </div>
+              )}
+            </section>
 
             {recommendation && (
-              <section>
-                <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-2">
+              <section className="space-y-2">
+                <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
                   Recomendação
-                </p>
+                </h2>
                 <button
                   type="button"
                   onClick={() => navigate(`/meal/${recommendation.recipe.id}`)}
@@ -422,79 +431,72 @@ export function Profile() {
               </section>
             )}
 
-            <section className="rounded-2xl border border-nourish-border bg-nourish-surface p-4">
-              <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-3">
+            <section className="space-y-3">
+              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
                 Casa e supermercado
-              </p>
-              <div className="text-center mb-4 py-2 rounded-xl bg-nourish-bg border border-nourish-border">
-                <p className="text-3xl font-bold text-nourish-primary tabular-nums">
-                  {homelabMetrics?.days_until_shop ?? defaultDaysUntilShop()}
-                </p>
-                <p className="text-xs text-nourish-text-dim mt-1">dias até à próxima ida ao super</p>
-                <p className="text-[10px] text-nourish-text-dim mt-1">
-                  (igual ao helper no Home Assistant; altera em Definições → Helpers)
-                </p>
-              </div>
-              {homelabMetricsError && (
-                <p className="text-xs text-amber-600/90 mb-3 text-center">
-                  Visitas e intervalos não carregaram — verifica ligação a /nourish/metrics
-                </p>
-              )}
-              {homelabMetrics && (
-                <>
-                  <div className="grid grid-cols-2 gap-3 text-center">
-                    <div>
-                      <p className="text-xl font-bold text-nourish-text tabular-nums">
-                        {homelabMetrics.supermarket_visits_week}
-                      </p>
-                      <p className="text-[10px] text-nourish-text-dim">visitas ao super / semana</p>
-                    </div>
-                    <div>
-                      <p className="text-xl font-bold text-nourish-text tabular-nums">
-                        {homelabMetrics.leave_home_week}
-                      </p>
-                      <p className="text-[10px] text-nourish-text-dim">saídas de casa / semana</p>
-                    </div>
-                    <div>
-                      <p className="text-xl font-bold text-nourish-text tabular-nums">
-                        {homelabMetrics.supermarket_visits_month}
-                      </p>
-                      <p className="text-[10px] text-nourish-text-dim">visitas / mês</p>
-                    </div>
-                    <div>
-                      <p className="text-xl font-bold text-nourish-text tabular-nums">
-                        {homelabMetrics.avg_days_between_shops ?? '—'}
-                      </p>
-                      <p className="text-[10px] text-nourish-text-dim">dias entre compras (mediana)</p>
-                    </div>
-                  </div>
-                  <p className="text-xs text-nourish-text-dim mt-3 text-center">
-                    Lista automática ao sair: ~{homelabMetrics.suggested_days_until_shop} dias de despensa
+              </h2>
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4">
+                <div className="text-center mb-4 py-2 rounded-xl bg-nourish-bg border border-nourish-border">
+                  <p className="text-3xl font-bold text-nourish-primary tabular-nums">
+                    {homelabMetrics?.days_until_shop ?? defaultDaysUntilShop()}
                   </p>
-                </>
-              )}
+                  <p className="text-xs text-nourish-text-dim mt-1">dias até à próxima ida ao super</p>
+                </div>
+                {homelabMetricsError && (
+                  <p className="text-xs text-amber-600/90 mb-3 text-center">
+                    Visitas e intervalos não carregaram — verifica ligação a /nourish/metrics
+                  </p>
+                )}
+                {homelabMetrics && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3 text-center">
+                      <div>
+                        <p className="text-xl font-bold text-nourish-text tabular-nums">
+                          {homelabMetrics.supermarket_visits_week}
+                        </p>
+                        <p className="text-[10px] text-nourish-text-dim">visitas ao super / semana</p>
+                      </div>
+                      <div>
+                        <p className="text-xl font-bold text-nourish-text tabular-nums">
+                          {homelabMetrics.leave_home_week}
+                        </p>
+                        <p className="text-[10px] text-nourish-text-dim">saídas de casa / semana</p>
+                      </div>
+                      <div>
+                        <p className="text-xl font-bold text-nourish-text tabular-nums">
+                          {homelabMetrics.supermarket_visits_month}
+                        </p>
+                        <p className="text-[10px] text-nourish-text-dim">visitas / mês</p>
+                      </div>
+                      <div>
+                        <p className="text-xl font-bold text-nourish-text tabular-nums">
+                          {homelabMetrics.avg_days_between_shops ?? '—'}
+                        </p>
+                        <p className="text-[10px] text-nourish-text-dim">dias entre compras (mediana)</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-nourish-text-dim mt-3 text-center">
+                      Lista automática ao sair: ~{homelabMetrics.suggested_days_until_shop} dias de despensa
+                    </p>
+                  </>
+                )}
+              </div>
             </section>
 
             <section className="rounded-xl border border-nourish-border bg-nourish-surface/50 p-3 space-y-2">
-              <p className="text-xs text-nourish-text-dim leading-snug">
-                <span className="font-semibold text-nourish-text">Sugestão na página inicial</span> usa regras
-                simples (porções prontas, favoritos, evitar repetir nas últimas 48 h). A recomendação aqui cruza isso
-                com o que registaste, excessos de nutrientes e os teus objectivos.
-              </p>
-              <p className="text-xs text-nourish-text-dim leading-snug">
-                <span className="font-semibold text-nourish-text">Lista ao sair de casa</span> (Home Assistant + n8n):
-                ver <code className="text-[10px]">docs/homelab-smart-shopping.md</code> no projeto.
-              </p>
-              <Link to="/history" className="inline-block text-sm text-nourish-primary font-medium">
-                Ver historial de refeições →
-              </Link>
-              <Link
-                to="/history"
-                state={{ tab: 'supermarket' }}
-                className="inline-block text-sm text-nourish-primary font-medium"
-              >
-                Ver historial do supermercado →
-              </Link>
+              <p className="text-xs font-semibold text-nourish-text">Atalhos</p>
+              <div className="flex flex-col gap-1">
+                <Link to="/history" className="text-sm text-nourish-primary font-medium">
+                  Historial de refeições →
+                </Link>
+                <Link
+                  to="/history"
+                  state={{ tab: 'supermarket' }}
+                  className="text-sm text-nourish-primary font-medium"
+                >
+                  Historial do supermercado →
+                </Link>
+              </div>
             </section>
           </>
         )}

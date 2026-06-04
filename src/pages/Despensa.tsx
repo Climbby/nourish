@@ -46,32 +46,31 @@ function DespensaCard({
   const hasCalories = (item.product.calories ?? 0) > 0
 
   return (
-    <div className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border flex flex-col">
+    <div className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border flex flex-col h-full">
       {/* Image */}
-      <button
-        type="button"
-        className="relative flex-shrink-0 w-full text-left focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-inset rounded-t-2xl"
-        onClick={() => navigate(`/product/${item.product_id}`)}
-      >
-        {item.product.picture_file_name && !imgError ? (
-          <img
-            src={grocy.productPictureUrl(item.product.picture_file_name)}
-            alt={item.product.name}
-            className="w-full object-cover"
-            style={{ aspectRatio: '4/3' }}
-            onError={() => setImgError(true)}
-          />
-        ) : (
-          <div className="w-full bg-nourish-surface-high flex items-center justify-center text-4xl" style={{ aspectRatio: '4/3' }}>
-            🛒
-          </div>
-        )}
+      <div className="relative flex-shrink-0">
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onAdjustStock(item.product_id)
-          }}
+          className="block w-full text-left focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-inset rounded-t-2xl"
+          onClick={() => navigate(`/product/${item.product_id}`)}
+        >
+          {item.product.picture_file_name && !imgError ? (
+            <img
+              src={grocy.productPictureUrl(item.product.picture_file_name)}
+              alt={item.product.name}
+              className="w-full object-cover"
+              style={{ aspectRatio: '4/3' }}
+              onError={() => setImgError(true)}
+            />
+          ) : (
+            <div className="w-full bg-nourish-surface-high flex items-center justify-center text-4xl" style={{ aspectRatio: '4/3' }}>
+              🛒
+            </div>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => onAdjustStock(item.product_id)}
           className="absolute top-2 right-2 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full focus:outline-none focus:ring-2 focus:ring-white/50"
           aria-label={`Stock: ${item.amount}. Toca para corrigir`}
         >
@@ -82,14 +81,14 @@ function DespensaCard({
             ⚠
           </span>
         )}
-      </button>
+      </div>
 
       {/* Info */}
       <div className="p-3 space-y-2 flex flex-col flex-1">
         <button
           type="button"
           onClick={() => navigate(`/product/${item.product_id}`)}
-          className="font-semibold text-nourish-text text-sm leading-snug text-left focus:outline-none focus:underline"
+          className="font-semibold text-nourish-text text-sm leading-snug line-clamp-2 min-h-[2.5rem] text-left focus:outline-none focus:underline"
         >
           {item.product.name}
         </button>
@@ -132,20 +131,23 @@ function DespensaCard({
           <p className="text-xs text-amber-400/70 text-center">Na lista de compras</p>
         )}
 
-        {/* +/- buttons always at bottom */}
+        {/* Stock actions */}
         <div className="flex gap-1.5 pt-1 mt-auto">
           <button
+            type="button"
             onClick={() => onConsume(item.product.id)}
             disabled={item.amount <= 0}
-            className="flex-1 py-2 rounded-xl text-xs font-bold bg-nourish-surface-high text-nourish-text disabled:opacity-30 active:bg-nourish-surface-highest transition-colors"
+            className="flex-1 py-2 rounded-xl text-xs font-semibold bg-nourish-surface-high text-nourish-text disabled:opacity-30 active:bg-nourish-surface-highest transition-colors"
           >
-            −1
+            Consumir
           </button>
           <button
+            type="button"
             onClick={() => onAdd(item.product.id)}
-            className="flex-1 py-2 rounded-xl text-xs font-bold bg-nourish-primary text-nourish-on-primary active:bg-nourish-primary-dim transition-colors"
+            className="flex-1 py-2 rounded-xl text-xs font-semibold bg-nourish-primary text-nourish-on-primary active:bg-nourish-primary-dim transition-colors"
           >
-            +{buyAmount}
+            Comprar
+            <span className="block text-[10px] font-normal opacity-80 tabular-nums">+{buyAmount}</span>
           </button>
         </div>
       </div>
@@ -320,7 +322,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
       )}
       {items.length === 0 && (
         <p className="text-nourish-text-dim text-sm text-center pt-8">
-          Ainda não há produtos de despensa. Usa + para adicionar um.
+          Ainda não há produtos de despensa. Usa Adicionar → Produto de despensa.
         </p>
       )}
     </div>

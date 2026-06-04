@@ -530,14 +530,15 @@ export function ProductDetail() {
             disabled={amount <= 0}
             className="flex-1 py-3.5 rounded-xl font-semibold text-sm bg-nourish-surface-high text-nourish-text disabled:opacity-30 active:bg-nourish-surface-highest transition-colors focus:outline-none"
           >
-            −1
+            Consumir
           </button>
           <button
             type="button"
             onClick={handleAdd}
             className="flex-1 py-3.5 rounded-xl font-semibold text-sm bg-nourish-primary text-nourish-on-primary active:bg-nourish-primary-dim transition-colors focus:outline-none"
           >
-            +{buyAmount}
+            Comprar
+            <span className="block text-[10px] font-normal opacity-80 tabular-nums">+{buyAmount}</span>
           </button>
         </div>
       </div>
