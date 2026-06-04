@@ -4,6 +4,7 @@ import { grocy } from '../api/grocy'
 import type { PriceHistoryPoint, Product, StockLogEntry } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { PriceHistoryChart } from '../components/PriceHistoryChart'
+import { NumericInput } from '../components/NumericInput'
 import { getBuyAmountFromDesc } from '../utils/despensaAnalytics'
 
 function formatLogDate(ts: string): string {
@@ -47,6 +48,9 @@ export function ProductDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [imgError, setImgError] = useState(false)
+  const [editAmount, setEditAmount] = useState(0)
+  const [stockSaving, setStockSaving] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
 
   function sortLog(entries: StockLogEntry[]): StockLogEntry[] {
     return [...entries].sort(
@@ -81,6 +85,10 @@ export function ProductDetail() {
       .finally(() => setLoading(false))
   }, [numId])
 
+  useEffect(() => {
+    setEditAmount(amount)
+  }, [amount])
+
   async function reloadStockAndLog() {
     const [stockSummary, newLog, history] = await Promise.all([
       grocy.getProductStockAmount(numId),
@@ -114,6 +122,30 @@ export function ProductDetail() {
       await reloadStockAndLog()
     } catch {
       await reloadStockAndLog()
+    }
+  }
+
+  async function handleSaveStock() {
+    setStockSaving(true)
+    try {
+      await grocy.setStockAmount(numId, editAmount)
+      await reloadStockAndLog()
+    } catch {
+      await reloadStockAndLog()
+    } finally {
+      setStockSaving(false)
+    }
+  }
+
+  async function handleRemoveProduct() {
+    setStockSaving(true)
+    try {
+      await grocy.deleteProduct(numId)
+      navigate('/?filter=despensa', { replace: true })
+    } catch {
+      setConfirmRemove(false)
+    } finally {
+      setStockSaving(false)
     }
   }
 
@@ -173,7 +205,7 @@ export function ProductDetail() {
   return (
     <div
       className="min-h-screen bg-nourish-bg"
-      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 140px)' }}
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 200px)' }}
     >
       {header}
 
@@ -213,6 +245,31 @@ export function ProductDetail() {
             )}
           </div>
         </div>
+
+        <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
+          <h3 className="font-semibold text-nourish-text text-sm">Corrigir stock</h3>
+          <p className="text-xs text-nourish-text-dim">
+            Define a quantidade real em casa. Usa isto se o valor estiver errado (ex.: diz 8 mas tens 2).
+          </p>
+          <div className="flex items-center gap-2">
+            <NumericInput
+              value={editAmount}
+              onChange={setEditAmount}
+              integer
+              min={0}
+              className="flex-1 text-center text-xl font-bold text-nourish-primary tabular-nums bg-nourish-surface-high border border-nourish-border rounded-xl py-3 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+              aria-label="Quantidade em stock"
+            />
+            <button
+              type="button"
+              disabled={stockSaving || editAmount === amount}
+              onClick={handleSaveStock}
+              className="px-4 py-3 rounded-xl font-semibold text-sm bg-nourish-primary text-nourish-on-primary disabled:opacity-40 active:bg-nourish-primary-dim"
+            >
+              {stockSaving ? '…' : 'Guardar'}
+            </button>
+          </div>
+        </section>
 
         <PriceHistoryChart points={priceHistory} />
 
@@ -286,6 +343,43 @@ export function ProductDetail() {
         {activeLog.length === 0 && (
           <p className="text-nourish-text-dim text-sm text-center py-4">Sem historial ainda</p>
         )}
+
+        <section className="pt-2 pb-4">
+          {!confirmRemove ? (
+            <button
+              type="button"
+              disabled={stockSaving}
+              onClick={() => setConfirmRemove(true)}
+              className="w-full py-3 rounded-xl text-sm font-semibold text-red-400 border border-red-800/50 bg-red-900/10 active:bg-red-900/20"
+            >
+              Remover da despensa
+            </button>
+          ) : (
+            <div className="space-y-2 p-3 rounded-xl bg-red-900/20 border border-red-800/50">
+              <p className="text-sm text-red-300 text-center">
+                O produto é apagado permanentemente do Grocy. Esta ação não pode ser desfeita.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={stockSaving}
+                  onClick={() => setConfirmRemove(false)}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-nourish-surface-high text-nourish-text"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={stockSaving}
+                  onClick={handleRemoveProduct}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-red-600 text-white disabled:opacity-40"
+                >
+                  {stockSaving ? '…' : 'Remover'}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
       </div>
 
       <div

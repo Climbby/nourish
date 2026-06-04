@@ -233,7 +233,7 @@ export function History() {
                                 ? 'Entrada registada — ainda no super'
                                 : visit.left_at
                                   ? 'Entrada e saída'
-                                  : 'Visita incompleta (sem saída)'}
+                                  : 'Saída não registada'}
                             </p>
                           </div>
                           <span

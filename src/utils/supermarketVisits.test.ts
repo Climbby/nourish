@@ -13,12 +13,23 @@ describe('buildSupermarketVisits', () => {
     expect(visits[0].left_at).toBe('2026-06-01T10:45:00.000Z')
   })
 
-  it('marks open visit as ongoing', () => {
-    const visits = buildSupermarketVisits([
-      { type: 'supermarket_enter', at: '2026-06-03T14:00:00.000Z' },
-    ])
+  it('marks recent open visit as ongoing', () => {
+    const now = new Date('2026-06-03T15:00:00.000Z').getTime()
+    const visits = buildSupermarketVisits(
+      [{ type: 'supermarket_enter', at: '2026-06-03T14:00:00.000Z' }],
+      now
+    )
     expect(visits[0].ongoing).toBe(true)
     expect(visits[0].left_at).toBeNull()
+  })
+
+  it('stops showing ongoing after max open duration without leave', () => {
+    const now = new Date('2026-06-03T20:00:00.000Z').getTime()
+    const visits = buildSupermarketVisits(
+      [{ type: 'supermarket_enter', at: '2026-06-03T14:00:00.000Z' }],
+      now
+    )
+    expect(visits[0].ongoing).toBe(false)
   })
 
   it('returns newest first', () => {

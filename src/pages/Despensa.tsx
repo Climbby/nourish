@@ -4,6 +4,7 @@ import { grocy } from '../api/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
+import { StockAmountSheet } from '../components/StockAmountSheet'
 import { fetchHomelabMetrics } from '../api/homelabMetrics'
 import { computeDespensaAnalytics, getBuyAmountFromDesc } from '../utils/despensaAnalytics'
 
@@ -14,6 +15,7 @@ interface DespensaCardProps {
   onConsume: (id: number) => void
   onAdd: (id: number) => void
   onAddToShoppingList: (id: number) => void
+  onAdjustStock: (id: number) => void
   daysUntilShop: number | null
 }
 
@@ -24,6 +26,7 @@ function DespensaCard({
   onConsume,
   onAdd,
   onAddToShoppingList,
+  onAdjustStock,
   daysUntilShop,
 }: DespensaCardProps) {
   const navigate = useNavigate()
@@ -53,10 +56,17 @@ function DespensaCard({
             🛒
           </div>
         )}
-        {/* Stock quantity badge */}
-        <span className="absolute top-2 right-2 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onAdjustStock(item.product_id)
+          }}
+          className="absolute top-2 right-2 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full focus:outline-none focus:ring-2 focus:ring-white/50"
+          aria-label={`Stock: ${item.amount}. Toca para corrigir`}
+        >
           {item.amount}
-        </span>
+        </button>
         {analytics?.isLow && !onShoppingList && (
           <span className="absolute top-2 left-2 bg-amber-500/90 text-white text-xs font-bold px-2 py-0.5 rounded-full">
             ⚠
@@ -135,8 +145,12 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>([])
   const [daysUntilShop, setDaysUntilShop] = useState<number | null>(null)
   const [showList, setShowList] = useState(false)
+  const [stockEditId, setStockEditId] = useState<number | null>(null)
+  const [stockSaving, setStockSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const stockEditItem = stockEditId != null ? items.find((i) => i.product_id === stockEditId) : null
 
   const load = useCallback(async () => {
     try {
@@ -192,6 +206,38 @@ export function DespensaSection({ query = '' }: { query?: string }) {
     } catch { load() }
   }
 
+  const handleSaveStock = async (newAmount: number) => {
+    if (stockEditId == null) return
+    setStockSaving(true)
+    try {
+      await grocy.setStockAmount(stockEditId, newAmount)
+      setItems((prev) =>
+        prev.map((s) => (s.product_id === stockEditId ? { ...s, amount: newAmount } : s))
+      )
+      const newLog = await grocy.getStockLog(stockEditId)
+      setLogs((prev) => ({ ...prev, [stockEditId]: newLog }))
+      setStockEditId(null)
+    } catch {
+      load()
+    } finally {
+      setStockSaving(false)
+    }
+  }
+
+  const handleRemoveProduct = async () => {
+    if (stockEditId == null) return
+    setStockSaving(true)
+    try {
+      await grocy.deleteProduct(stockEditId)
+      setStockEditId(null)
+      await load()
+    } catch {
+      load()
+    } finally {
+      setStockSaving(false)
+    }
+  }
+
   const handleAddToShoppingList = async (id: number) => {
     const product = items.find(s => s.product_id === id)!.product
     try {
@@ -226,6 +272,16 @@ export function DespensaSection({ query = '' }: { query?: string }) {
         onListChange={() => grocy.getShoppingList().then(setShoppingList)}
       />
 
+      <StockAmountSheet
+        open={stockEditItem != null}
+        productName={stockEditItem?.product.name ?? ''}
+        amount={stockEditItem?.amount ?? 0}
+        saving={stockSaving}
+        onClose={() => setStockEditId(null)}
+        onSave={handleSaveStock}
+        onRemove={handleRemoveProduct}
+      />
+
       <div className="grid grid-cols-2 gap-3">
         {visible.map(item => (
           <DespensaCard
@@ -236,6 +292,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
             onConsume={handleConsume}
             onAdd={handleAdd}
             onAddToShoppingList={handleAddToShoppingList}
+            onAdjustStock={setStockEditId}
             daysUntilShop={daysUntilShop}
           />
         ))}

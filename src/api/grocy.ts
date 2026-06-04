@@ -164,7 +164,9 @@ export const grocy = {
       this.getProducts(),
       this.getStock(),
     ])
-    const despensaProducts = products.filter((p) => p.product_group_id === groupId)
+    const despensaProducts = products.filter(
+      (p) => p.product_group_id === groupId && (p.active ?? 1) === 1
+    )
     const stockByProductId = new Map(stock.map((s) => [s.product_id, s]))
     return despensaProducts.map((product) => {
       const existing = stockByProductId.get(product.id)
@@ -200,6 +202,16 @@ export const grocy = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount, transaction_type: 'consume', spoiled: false }),
     }),
+
+  setStockAmount: (id: number, newAmount: number) =>
+    apiFetch<void>(`/stock/products/${id}/inventory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_amount: newAmount }),
+    }),
+
+  deleteProduct: (id: number) =>
+    apiFetch<void>(`/objects/products/${id}`, { method: 'DELETE' }),
 
   getStockLog: (productId: number) => {
     const params = new URLSearchParams()

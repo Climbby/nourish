@@ -29,6 +29,7 @@ export interface Product {
   qu_id_purchase: number
   picture_file_name: string | null
   calories: number | null
+  active?: number
 }
 
 export interface StockItem {

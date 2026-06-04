@@ -12,7 +12,20 @@ export interface SupermarketVisit {
   ongoing: boolean
 }
 
-export function buildSupermarketVisits(events: SupermarketEvent[]): SupermarketVisit[] {
+/** Open visit older than this is treated as incomplete (no leave event), not still in store. */
+export const ONGOING_MAX_MS = 4 * 60 * 60 * 1000
+
+function finalizeOpenVisit(visit: SupermarketVisit, nowMs: number): SupermarketVisit {
+  if (!visit.ongoing) return visit
+  const enteredMs = new Date(visit.entered_at).getTime()
+  if (!Number.isFinite(enteredMs) || nowMs - enteredMs <= ONGOING_MAX_MS) return visit
+  return { ...visit, ongoing: false }
+}
+
+export function buildSupermarketVisits(
+  events: SupermarketEvent[],
+  nowMs: number = Date.now()
+): SupermarketVisit[] {
   const shopEvents = events
     .filter((e) => e.type === 'supermarket_enter' || e.type === 'supermarket_leave')
     .map((e) => ({ type: e.type, at: e.at, t: new Date(e.at).getTime() }))
@@ -57,7 +70,9 @@ export function buildSupermarketVisits(events: SupermarketEvent[]): SupermarketV
 
   if (openEnter) closeOpen(null)
 
-  return visits.sort((a, b) => b.entered_at.localeCompare(a.entered_at))
+  return visits
+    .map((v) => finalizeOpenVisit(v, nowMs))
+    .sort((a, b) => b.entered_at.localeCompare(a.entered_at))
 }
 
 export function formatVisitDuration(minutes: number | null, ongoing: boolean): string {
