@@ -97,11 +97,11 @@ export function PhotoField({ preview, onChange, labelClass }: Props) {
         <button
           type="button"
           onClick={() => setShowSheet(true)}
-          className="w-full bg-nourish-surface border-2 border-dashed border-nourish-border rounded-2xl overflow-hidden flex flex-col items-center justify-center gap-2 active:bg-nourish-surface-high transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+          className="relative w-full bg-nourish-surface border-2 border-dashed border-nourish-border rounded-2xl overflow-hidden flex flex-col items-center justify-center gap-2 active:bg-nourish-surface-high transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary"
           style={{ aspectRatio: '4/3' }}
         >
           {preview
-            ? <img src={preview} className="w-full h-full object-cover" alt="preview" />
+            ? <img src={preview} className="absolute inset-0 w-full h-full object-cover" alt="preview" />
             : <><BigCameraIcon /><p className="text-sm text-nourish-text-dim">Toca para adicionar foto</p></>
           }
         </button>

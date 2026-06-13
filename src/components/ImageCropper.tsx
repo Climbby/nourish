@@ -171,12 +171,11 @@ export function ImageCropper({ src, onConfirm, onCancel }: Props) {
           alt=""
           className="absolute pointer-events-none"
           style={ready ? {
-            width: natW.current,
-            height: natH.current,
-            left: '50%',
-            top: '50%',
-            transform: `translate(calc(-50% + ${off.x}px), calc(-50% + ${off.y}px)) scale(${scale})`,
-            transformOrigin: '50% 50%',
+            width: natW.current * scale,
+            height: natH.current * scale,
+            left: `calc(50% + ${off.x}px)`,
+            top: `calc(50% + ${off.y}px)`,
+            transform: 'translate(-50%, -50%)',
           } : { opacity: 0 }}
         />
 
