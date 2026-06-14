@@ -1,0 +1,16 @@
+{
+  "home_zone": "zone.home",
+  "default_supermarket_zone": "zone.auchan",
+  "zones": {
+    "zone.home": {
+      "latitude": 41.0,
+      "longitude": -8.0,
+      "name": "Casa"
+    },
+    "zone.auchan": {
+      "latitude": 41.0,
+      "longitude": -8.0,
+      "name": "Auchan"
+    }
+  }
+}

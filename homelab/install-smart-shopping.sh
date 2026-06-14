@@ -42,12 +42,30 @@ echo "Testing check on CT$CT_NOURISH..."
 ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- /opt/nourish/check.sh" | head -20
 
 # HTTP API for n8n (port 8787 on nourish CT)
-tar czf - -C "$ROOT/homelab" nourish-check-server.mjs supermarket-visits.mjs nourish-check.service 2>/dev/null | \
+tar czf - -C "$ROOT/homelab" \
+  nourish-check-server.mjs \
+  supermarket-visits.mjs \
+  fuel-prices.mjs \
+  trip-distance.mjs \
+  zone-coords.mjs \
+  supermarkets.mjs \
+  ha-supermarket-zone.mjs \
+  zone-coords.example.json \
+  nourish-check.service 2>/dev/null | \
   ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- tar xzf - -C /opt/nourish" 2>/dev/null || true
 ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- bash -c '
   cp /opt/nourish/nourish-check.service /etc/systemd/system/nourish-check.service
   cp /opt/nourish/nourish-check-server.mjs /opt/nourish/check-server.mjs
   cp /opt/nourish/supermarket-visits.mjs /opt/nourish/supermarket-visits.mjs
+  cp /opt/nourish/fuel-prices.mjs /opt/nourish/fuel-prices.mjs
+  cp /opt/nourish/trip-distance.mjs /opt/nourish/trip-distance.mjs
+  cp /opt/nourish/zone-coords.mjs /opt/nourish/zone-coords.mjs
+  cp /opt/nourish/supermarkets.mjs /opt/nourish/supermarkets.mjs
+  cp /opt/nourish/ha-supermarket-zone.mjs /opt/nourish/ha-supermarket-zone.mjs
+  mkdir -p /opt/nourish/data
+  if [ ! -f /opt/nourish/data/zone-coords.json ]; then
+    cp /opt/nourish/zone-coords.example.json /opt/nourish/data/zone-coords.json
+  fi
   systemctl daemon-reload
   systemctl enable nourish-check
   systemctl restart nourish-check

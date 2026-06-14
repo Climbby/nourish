@@ -10,7 +10,6 @@ export function VerifiedBadge({ verified, label = '~est.', className = '' }: Ver
     return (
       <span
         className={`inline-flex items-center gap-0.5 text-emerald-400 text-[10px] font-semibold uppercase tracking-wide ${className}`}
-        title="Verificado manualmente"
       >
         <span aria-hidden>✓</span>
         <span className="sr-only">Verificado</span>
@@ -20,7 +19,6 @@ export function VerifiedBadge({ verified, label = '~est.', className = '' }: Ver
   return (
     <span
       className={`inline-flex text-amber-400/90 text-[10px] font-medium ${className}`}
-      title="Estimativa — confirma nos dados do produto"
     >
       {label}
     </span>

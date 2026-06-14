@@ -1,0 +1,142 @@
+# Supermarket discovery — after ~3 min at an unknown shop, ask to track or block.
+# Requires: Mobile App companion + geocoded location sensor.
+# Adjust entity IDs below to match your HA instance.
+
+input_text:
+  nourish_supermarket_pending:
+    name: Nourish — super pendente
+    max: 255
+    initial: ""
+
+rest_command:
+  nourish_supermarket_prompt_check:
+    url: "http://192.168.1.27:8787/supermarket-prompt"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"place":"{{ states('sensor.nourish_geocoded_place') }}",
+       "latitude":{{ state_attr('device_tracker.francisco_fernandes','latitude') | default(0) | float }},
+       "longitude":{{ state_attr('device_tracker.francisco_fernandes','longitude') | default(0) | float }}}
+    timeout: 15
+
+  nourish_supermarket_respond_track:
+    url: "http://192.168.1.27:8787/supermarkets/respond"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"place":"{{ states('input_text.nourish_supermarket_pending') }}",
+       "action":"track",
+       "latitude":{{ state_attr('device_tracker.francisco_fernandes','latitude') | default(0) | float }},
+       "longitude":{{ state_attr('device_tracker.francisco_fernandes','longitude') | default(0) | float }},
+       "radius":130,
+       "create_ha_zone":true}
+    timeout: 30
+
+  nourish_supermarket_respond_block:
+    url: "http://192.168.1.27:8787/supermarkets/respond"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"place":"{{ states('input_text.nourish_supermarket_pending') }}","action":"block"}
+    timeout: 15
+
+template:
+  - sensor:
+      - name: Nourish geocoded place
+        unique_id: nourish_geocoded_place
+        state: >
+          {{ state_attr('sensor.francisco_fernandes_geocoded_location', 'place') | default('', true) }}
+      - name: Nourish is supermarket place
+        unique_id: nourish_is_supermarket_place
+        state: >
+          {% set p = states('sensor.nourish_geocoded_place') | lower %}
+          {% set keywords = ['continente','auchan','pingo','lidl','aldi','intermarch','minipreço','minipreco','supermercado','mercadona','el corte','pão de açúcar','pao de acucar'] %}
+          {{ keywords | select('in', p) | list | count > 0 }}
+
+automation:
+  - id: nourish_unknown_supermarket_detect
+    alias: "Nourish — detetar supermercado desconhecido (3 min)"
+    description: Após 3 min num super não registado, pergunta se queres acompanhar visitas
+    mode: restart
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: sensor.nourish_geocoded_place
+    condition:
+      - condition: template
+        value_template: >
+          {{ states('sensor.nourish_is_supermarket_place') == 'True'
+             and states('sensor.nourish_geocoded_place') | length > 0
+             and states('person.francisco_fernandes') == 'not_home' }}
+    action:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.nourish_supermarket_pending
+        data:
+          value: "{{ states('sensor.nourish_geocoded_place') }}"
+      - delay: "00:03:00"
+      - condition: template
+        value_template: >
+          {{ states('sensor.nourish_geocoded_place') == states('input_text.nourish_supermarket_pending')
+             and states('sensor.nourish_is_supermarket_place') == 'True' }}
+      - action: rest_command.nourish_supermarket_prompt_check
+        response_variable: nourish_prompt
+      - condition: template
+        value_template: "{{ nourish_prompt is defined and nourish_prompt.prompt == true }}"
+      - action: notify.mobile_app_telemovel_francisco
+        data:
+          title: "Novo supermercado?"
+          message: >
+            Estiveste ~3 min em {{ states('input_text.nourish_supermarket_pending') }}.
+            Queres acompanhar visitas e km neste local?
+          actions:
+            - action: NOURISH_TRACK_SUPER
+              title: Acompanhar
+            - action: NOURISH_BLOCK_SUPER
+              title: Ignorar
+
+  - id: nourish_supermarket_track_action
+    alias: "Nourish — acompanhar super"
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NOURISH_TRACK_SUPER
+    action:
+      - action: zone.create
+        data:
+          name: "{{ states('input_text.nourish_supermarket_pending') }}"
+          latitude: "{{ state_attr('device_tracker.francisco_fernandes', 'latitude') | float(0) }}"
+          longitude: "{{ state_attr('device_tracker.francisco_fernandes', 'longitude') | float(0) }}"
+          radius: 130
+          icon: mdi:cart
+      - action: rest_command.nourish_supermarket_respond_track
+        response_variable: nourish_track
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.nourish_supermarket_pending
+        data:
+          value: ""
+      - action: notify.mobile_app_telemovel_francisco
+        data:
+          message: >
+            {% if nourish_track is defined and nourish_track.ha_setup is defined and nourish_track.ha_setup.automations is defined %}
+            Super guardado — zona de ~130 m criada no HA e visitas passam a ser registadas automaticamente.
+            {% else %}
+            Super guardado no Nourish. Zona HA criada; para entradas/saídas automáticas, define HA_URL e HA_TOKEN no servidor Nourish.
+            {% endif %}
+
+  - id: nourish_supermarket_block_action
+    alias: "Nourish — ignorar super"
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: NOURISH_BLOCK_SUPER
+    action:
+      - action: rest_command.nourish_supermarket_respond_block
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.nourish_supermarket_pending
+        data:
+          value: ""

@@ -1,11 +1,30 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { fetchSupermarketVisits, type SupermarketVisit } from '../api/homelabMetrics'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
-import { formatVisitDuration } from '../utils/supermarketVisits'
+import { VisitCarSheet } from '../components/VisitCarSheet'
+import { VisitDateTime } from '../components/VisitDateTime'
+import { useCars } from '../hooks/useCars'
+import {
+  formatVisitDuration,
+  formatVisitMonthYear,
+  visitMonthYearKey,
+  visitStatusLabel,
+} from '../utils/supermarketVisits'
+import {
+  fetchVisitReceipts,
+  receiptMapByVisit,
+  type VisitReceiptLink,
+} from '../utils/visitReceipts'
+import {
+  fetchVisitCars,
+  visitCarMap,
+  type VisitCarLink,
+} from '../utils/visitCars'
+import { formatTripCost, tripKm, visitTripCostEur } from '../utils/visitTripCost'
 
 function todayStr() {
   const d = new Date()
@@ -34,7 +53,42 @@ function formatVisitDay(iso: string): string {
   return formatDay(day)
 }
 
+function CarIcon({ active }: { active?: boolean }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 17h14M6 17l-2-5h16l-2 5M7 11l1.5-4h7L17 11M8 17a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm8 0a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />
+      {active && <circle cx="18" cy="6" r="3" className="fill-nourish-primary stroke-none" />}
+    </svg>
+  )
+}
+
+function ReceiptIcon({ active }: { active?: boolean }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+      <path strokeLinecap="round" d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21 8 19.5 6 21V3Z" />
+      <path strokeLinecap="round" d="M9 8h6M9 12h6" />
+      {active && <circle cx="18" cy="6" r="3" className="fill-nourish-primary stroke-none" />}
+    </svg>
+  )
+}
+
 type HistoryTab = 'meals' | 'supermarket'
+
+const STORE_LABELS: Record<string, string> = {
+  mixed: 'Misto',
+  continente: 'Continente',
+  auchan: 'Auchan',
+}
+
+function receiptSummary(receipt: VisitReceiptLink): string {
+  const store = receipt.store ? STORE_LABELS[receipt.store] ?? receipt.store : null
+  const parts = [
+    `${receipt.item_count} produto${receipt.item_count !== 1 ? 's' : ''}`,
+    receipt.total_eur > 0 ? `€${receipt.total_eur.toFixed(2)}` : null,
+    store,
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
 
 function mealType(ts: string): 'Almoço' | 'Jantar' {
   return new Date(ts.replace(' ', 'T')).getHours() < 17 ? 'Almoço' : 'Jantar'
@@ -92,6 +146,10 @@ export function History() {
   const [recipes, setRecipes] = useState<Record<number, Recipe>>({})
   const [visits, setVisits] = useState<SupermarketVisit[] | null>(null)
   const [visitsError, setVisitsError] = useState(false)
+  const [visitReceipts, setVisitReceipts] = useState<VisitReceiptLink[]>([])
+  const [visitCars, setVisitCars] = useState<VisitCarLink[]>([])
+  const [carSheetVisit, setCarSheetVisit] = useState<SupermarketVisit | null>(null)
+  const { cars, refreshCars } = useCars()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -117,13 +175,26 @@ export function History() {
     let mounted = true
     setVisits(null)
     setVisitsError(false)
-    fetchSupermarketVisits(180).then((list) => {
+    Promise.all([fetchSupermarketVisits(180), fetchVisitReceipts(), fetchVisitCars()]).then(
+      ([list, receipts, carLinks]) => {
       if (!mounted) return
       if (list === null) setVisitsError(true)
       else setVisits(list)
+      setVisitReceipts(receipts)
+      setVisitCars(carLinks)
     })
     return () => { mounted = false }
   }, [tab])
+
+  const receiptByVisit = receiptMapByVisit(visitReceipts)
+  const carByVisit = visitCarMap(visitCars)
+  const carsById = useMemo(() => new Map(cars.map((c) => [c.id, c])), [cars])
+
+  useEffect(() => {
+    if (tab === 'supermarket') {
+      refreshCars()
+    }
+  }, [tab, refreshCars])
 
   // Group by date
   const grouped = entries.reduce<Record<string, MealPlanEntry[]>>((acc, entry) => {
@@ -199,53 +270,90 @@ export function History() {
           <div className="space-y-6">
             {Object.entries(
               visits.reduce<Record<string, SupermarketVisit[]>>((acc, v) => {
-                const day = v.entered_at.slice(0, 10)
-                acc[day] = acc[day] ?? []
-                acc[day].push(v)
+                const key = visitMonthYearKey(v.entered_at)
+                acc[key] = acc[key] ?? []
+                acc[key].push(v)
                 return acc
               }, {})
             )
               .sort(([a], [b]) => b.localeCompare(a))
-              .map(([day, dayVisits]) => (
-                <div key={day}>
+              .map(([monthKey, monthVisits]) => (
+                <div key={monthKey}>
                   <h2 className="text-xs font-semibold text-nourish-text-dim tracking-wider uppercase mb-2">
-                    {formatVisitDay(dayVisits[0].entered_at)}
+                    {formatVisitMonthYear(monthVisits[0].entered_at)}
                   </h2>
                   <div className="space-y-2">
-                    {dayVisits.map((visit) => (
+                    {monthVisits.map((visit) => {
+                      const statusLabel = visitStatusLabel(visit)
+                      const carLink = carByVisit.get(visit.entered_at)
+                      const car = carLink ? carsById.get(carLink.car_id) : undefined
+                      const km = tripKm(carLink, visit)
+                      const fuelCost = visitTripCostEur(carLink, visit, car)
+                      const receipt = receiptByVisit.get(visit.entered_at)
+
+                      return (
                       <div
                         key={visit.entered_at}
-                        className="p-4 bg-nourish-surface border border-nourish-border rounded-2xl"
+                        className="p-3 bg-nourish-surface border border-nourish-border rounded-2xl"
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-nourish-text tabular-nums">
-                              {formatTime(visit.entered_at)}
-                              {visit.left_at && (
-                                <span className="text-nourish-text-dim font-normal">
-                                  {' '}
-                                  → {formatTime(visit.left_at)}
-                                </span>
-                              )}
-                            </p>
-                            <p className="text-xs text-nourish-text-dim mt-1">
-                              {visit.ongoing
-                                ? 'Entrada registada — ainda no super'
-                                : visit.left_at
-                                  ? 'Entrada e saída'
-                                  : 'Saída não registada'}
-                            </p>
+                          <div className="min-w-0 flex-1">
+                            <VisitDateTime visit={visit} />
+                            {statusLabel && (
+                              <p className="text-xs text-nourish-text-dim mt-0.5">{statusLabel}</p>
+                            )}
+                            {car && km != null && fuelCost != null && (
+                              <p className="text-xs text-nourish-primary mt-1">
+                                {car.name} · {km} km · {formatTripCost(fuelCost)}
+                              </p>
+                            )}
+                            {receipt && (
+                              <p className="text-xs text-nourish-text-dim mt-0.5 truncate">
+                                Talão: {receiptSummary(receipt)}
+                              </p>
+                            )}
                           </div>
                           <span
-                            className={`text-sm font-bold tabular-nums shrink-0 ${
-                              visit.ongoing ? 'text-nourish-primary' : 'text-nourish-text'
+                            className={`text-xs font-bold tabular-nums shrink-0 ${
+                              visit.ongoing ? 'text-nourish-primary' : 'text-nourish-text-dim'
                             }`}
                           >
                             {formatVisitDuration(visit.duration_minutes, visit.ongoing)}
                           </span>
                         </div>
+
+                        <div className="flex items-center gap-2 mt-2.5 pt-2.5 border-t border-nourish-border/60">
+                          <button
+                            type="button"
+                            onClick={() => setCarSheetVisit(visit)}
+                            title={car ? car.name : 'Viatura'}
+                            className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                              car
+                                ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
+                                : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
+                            }`}
+                            aria-label={car ? `Viatura: ${car.name}` : 'Escolher viatura'}
+                          >
+                            <CarIcon active={!!car} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigate(`/receipt?visit=${encodeURIComponent(visit.entered_at)}`)
+                            }
+                            title={receipt ? 'Substituir talão' : 'Adicionar talão'}
+                            className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                              receipt
+                                ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
+                                : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
+                            }`}
+                            aria-label={receipt ? 'Talão associado' : 'Adicionar talão'}
+                          >
+                            <ReceiptIcon active={!!receipt} />
+                          </button>
+                        </div>
                       </div>
-                    ))}
+                    )})}
                   </div>
                 </div>
               ))}
@@ -347,6 +455,22 @@ export function History() {
           </div>
         )}
       </main>
+
+      {carSheetVisit && (
+        <VisitCarSheet
+          visit={carSheetVisit}
+          cars={cars}
+          currentLink={carByVisit.get(carSheetVisit.entered_at)}
+          onClose={() => setCarSheetVisit(null)}
+          onSaved={(link) => {
+            setVisitCars((prev) => {
+              const next = prev.filter((l) => l.visit_entered_at !== carSheetVisit.entered_at)
+              if (link) next.push(link)
+              return next
+            })
+          }}
+        />
+      )}
 
       <BottomNav />
     </div>

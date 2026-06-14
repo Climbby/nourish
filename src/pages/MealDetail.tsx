@@ -257,9 +257,11 @@ export function MealDetail() {
           <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
             {nutrition && (
               <div>
-                <div className="flex items-center justify-end mb-2">
-                  <VerifiedBadge verified={nutricaoOk} label="~est." />
-                </div>
+                {nutricaoOk && (
+                  <div className="flex items-center justify-end mb-2">
+                    <VerifiedBadge verified />
+                  </div>
+                )}
                 <div className="grid grid-cols-4 gap-2 text-center">
                   {nutritionItems.map(({ label, value }) => (
                     <div key={label} className="flex flex-col items-center gap-0.5">
@@ -275,7 +277,7 @@ export function MealDetail() {
                 <span className="text-nourish-text-dim text-sm">Custo estimado</span>
                 <span className="text-nourish-primary font-semibold inline-flex items-center gap-1.5">
                   €{price.toFixed(2)}
-                  <VerifiedBadge verified={precoOk} />
+                  {precoOk && <VerifiedBadge verified />}
                 </span>
               </div>
             )}

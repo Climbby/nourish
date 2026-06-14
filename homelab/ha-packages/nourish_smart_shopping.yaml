@@ -12,13 +12,19 @@ rest_command:
     url: "http://192.168.1.27:8787/event"
     method: POST
     content_type: "application/json"
-    payload: '{"type":"supermarket_enter"}'
+    payload: '{"type":"supermarket_enter","zone":"zone.auchan"}'
     timeout: 15
   nourish_event_supermarket_leave:
     url: "http://192.168.1.27:8787/event"
     method: POST
     content_type: "application/json"
     payload: '{"type":"supermarket_leave"}'
+    timeout: 15
+  nourish_event_supermarket_zone:
+    url: "http://192.168.1.27:8787/event"
+    method: POST
+    content_type: "application/json"
+    payload: "{{ body }}"
     timeout: 15
   nourish_event_leave_home:
     url: "http://192.168.1.27:8787/event"

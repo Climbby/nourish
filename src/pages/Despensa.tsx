@@ -39,7 +39,6 @@ function DespensaCard({
   const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
   const analytics = computeDespensaAnalytics(log, item.amount, daysUntilShop)
-  const buyAmount = getBuyAmountFromDesc(item.product.description, item.product.id)
   const pricePerUnit = getDespensaUnitPrice(item.amount, item.value, item.product.description)
   const priceVerified = isVerified(item.product.description, 'preco')
   const caloriesVerified = isVerified(item.product.description, 'calorias')
@@ -84,7 +83,7 @@ function DespensaCard({
       </div>
 
       {/* Info */}
-      <div className="p-3 space-y-2 flex flex-col flex-1">
+      <div className="p-3 flex flex-col flex-1 min-h-0">
         <button
           type="button"
           onClick={() => navigate(`/product/${item.product_id}`)}
@@ -93,61 +92,61 @@ function DespensaCard({
           {item.product.name}
         </button>
 
-        {(pricePerUnit !== null || hasCalories) && (
-          <div className="flex items-center justify-between gap-1 flex-wrap">
-            {pricePerUnit !== null && (
-              <span className="text-nourish-primary text-xs font-semibold inline-flex items-center gap-1">
-                €{pricePerUnit.toFixed(2)}
-                <VerifiedBadge verified={priceVerified} />
-              </span>
-            )}
-            {hasCalories && (
-              <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums inline-flex items-center gap-1">
-                {item.product.calories} kcal
-                <VerifiedBadge verified={caloriesVerified} />
-              </span>
-            )}
-          </div>
-        )}
+        <div className="min-h-[1.25rem] flex items-center justify-between gap-1 flex-wrap">
+          {pricePerUnit !== null && (
+            <span className="text-nourish-primary text-xs font-semibold inline-flex items-center gap-1">
+              €{pricePerUnit.toFixed(2)}
+              {priceVerified && <VerifiedBadge verified />}
+            </span>
+          )}
+          {hasCalories && (
+            <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums inline-flex items-center gap-1 ml-auto">
+              {item.product.calories} kcal
+              {caloriesVerified && <VerifiedBadge verified />}
+            </span>
+          )}
+        </div>
 
-        {analytics && (
-          <p className="text-xs text-nourish-text-dim">
-            {analytics.dailyAvg.toFixed(1)}/dia
-            {analytics.daysRemaining !== null && (
-              <> · <span className="text-nourish-text">{analytics.daysRemaining.toFixed(1)} dias</span></>
-            )}
-          </p>
-        )}
+        <div className="min-h-[1rem]">
+          {analytics && (
+            <p className="text-xs text-nourish-text-dim">
+              {analytics.dailyAvg.toFixed(1)}/dia
+              {analytics.daysRemaining !== null && (
+                <> · <span className="text-nourish-text">{analytics.daysRemaining.toFixed(1)} dias</span></>
+              )}
+            </p>
+          )}
+        </div>
 
-        {analytics?.isLow && !onShoppingList && (
-          <button
-            onClick={() => onAddToShoppingList(item.product.id)}
-            className="w-full text-xs py-1.5 px-2 rounded-xl border border-amber-500/50 text-amber-400 bg-amber-500/10 active:bg-amber-500/20 transition-colors"
-          >
-            Adicionar à lista
-          </button>
-        )}
-        {analytics?.isLow && onShoppingList && (
-          <p className="text-xs text-amber-400/70 text-center">Na lista de compras</p>
-        )}
+        <div className="min-h-[2rem] flex items-end">
+          {analytics?.isLow && !onShoppingList && (
+            <button
+              onClick={() => onAddToShoppingList(item.product.id)}
+              className="w-full text-xs py-1.5 px-2 rounded-xl border border-amber-500/50 text-amber-400 bg-amber-500/10 active:bg-amber-500/20 transition-colors"
+            >
+              Adicionar à lista
+            </button>
+          )}
+          {analytics?.isLow && onShoppingList && (
+            <p className="w-full text-xs text-amber-400/70 text-center">Na lista de compras</p>
+          )}
+        </div>
 
-        {/* Stock actions */}
-        <div className="flex gap-1.5 pt-1 mt-auto">
+        <div className="flex gap-1.5 pt-2 mt-auto">
           <button
             type="button"
             onClick={() => onConsume(item.product.id)}
             disabled={item.amount <= 0}
-            className="flex-1 py-2 rounded-xl text-xs font-semibold bg-nourish-surface-high text-nourish-text disabled:opacity-30 active:bg-nourish-surface-highest transition-colors"
+            className="flex-1 h-9 rounded-xl text-xs font-semibold bg-nourish-surface-high text-nourish-text disabled:opacity-30 active:bg-nourish-surface-highest transition-colors"
           >
             Consumir
           </button>
           <button
             type="button"
             onClick={() => onAdd(item.product.id)}
-            className="flex-1 py-2 rounded-xl text-xs font-semibold bg-nourish-primary text-nourish-on-primary active:bg-nourish-primary-dim transition-colors"
+            className="flex-1 h-9 rounded-xl text-xs font-semibold bg-nourish-primary text-nourish-on-primary active:bg-nourish-primary-dim transition-colors"
           >
             Comprar
-            <span className="block text-[10px] font-normal opacity-80 tabular-nums">+{buyAmount}</span>
           </button>
         </div>
       </div>
@@ -301,7 +300,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
         onRemove={handleRemoveProduct}
       />
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3 items-stretch">
         {visible.map(item => (
           <DespensaCard
             key={item.product_id}

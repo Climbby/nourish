@@ -319,7 +319,7 @@ export function ProductDetail() {
                 onChange={(n) => setEditBuyAmount(String(Math.max(1, n)))}
                 integer
                 min={1}
-                className="w-full text-center font-semibold tabular-nums bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                className="w-full text-center font-semibold tabular-nums text-nourish-text bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
                 aria-label="Quantidade por compra"
               />
             </div>
@@ -335,7 +335,7 @@ export function ProductDetail() {
                 placeholder="—"
                 min="0"
                 step="0.01"
-                className="w-full text-center font-semibold tabular-nums bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                className="w-full text-center font-semibold tabular-nums text-nourish-text bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
                 aria-label="Preço por unidade"
               />
               <div className="mt-1.5">
@@ -360,7 +360,7 @@ export function ProductDetail() {
               }}
               placeholder="—"
               min="0"
-              className="w-full text-center font-semibold tabular-nums bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+              className="w-full text-center font-semibold tabular-nums text-nourish-text bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
               aria-label="Calorias por unidade"
             />
             <div className="mt-1.5">
@@ -538,7 +538,6 @@ export function ProductDetail() {
             className="flex-1 py-3.5 rounded-xl font-semibold text-sm bg-nourish-primary text-nourish-on-primary active:bg-nourish-primary-dim transition-colors focus:outline-none"
           >
             Comprar
-            <span className="block text-[10px] font-normal opacity-80 tabular-nums">+{buyAmount}</span>
           </button>
         </div>
       </div>

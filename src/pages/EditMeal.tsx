@@ -6,7 +6,8 @@ import type { Recipe } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription } from '../utils/parseDescription'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
-import { IngredientSection, NutritionSection, PriceSection, PortionsSection, aiButtonClass } from './AddMeal'
+import { IngredientSection, NutritionSection, PriceSection, PortionsSection } from './AddMeal'
+import { AiGenerateButton } from '../components/AiGenerateButton'
 import { PhotoField } from '../components/PhotoField'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
 import type { VerifiedField } from '../utils/verification'
@@ -303,13 +304,7 @@ export function EditMeal() {
           <input type="text" value={name} onChange={(e) => { setName(e.target.value); setNameError(false) }}
             placeholder="Ex: Esparguete com atum" className={`${inputClass} ${nameError ? 'border-red-500' : ''}`} />
           {nameError && <p className="text-red-400 text-xs mt-1">Nome é obrigatório</p>}
-          <button type="button" onClick={handleAnalyze} disabled={analyzing || saving} className={aiButtonClass}>
-            {analyzing ? 'A gerar com IA…' : '✨ Gerar com IA'}
-          </button>
-          <p className="text-xs text-nourish-text-dim mt-1 leading-snug">
-            Usa o nome da refeição{photoPreview ? ', a foto' : ''} e ingredientes já escritos. Atualiza nutrição e preço;
-            acrescenta ingredientes em falta; preenche passos só se estiverem vazios. Não altera nome nem porções.
-          </p>
+          <AiGenerateButton loading={analyzing} disabled={saving} onClick={handleAnalyze} />
           {aiError && <p className="text-red-400 text-xs mt-1">{aiError}</p>}
         </div>
 

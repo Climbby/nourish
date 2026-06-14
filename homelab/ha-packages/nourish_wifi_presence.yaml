@@ -1,0 +1,15 @@
+# Wi-Fi presence helper for faster leave-home detection (low battery at home).
+# Requires: Companion app → Manage Sensors → Wi-Fi connection → ON
+# Verify sensor name under Settings → Devices → Mobile App → your phone.
+
+template:
+  - binary_sensor:
+      - name: "Francisco em WiFi de casa"
+        unique_id: francisco_em_wifi_casa
+        device_class: connectivity
+        state: >
+          {{ is_state('sensor.francisco_wi_fi_connection', 'NOS-2774')
+             or is_state('sensor.francisco_wi_fi_connection', 'NOS-2774-5')
+             or is_state('sensor.francisco_wi_fi_connection', 'NOS-2774_EXT') }}
+        delay_off:
+          seconds: 45

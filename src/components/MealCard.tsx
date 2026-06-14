@@ -55,12 +55,12 @@ export function MealCard({ recipe, showPortions }: Props) {
             {price !== null && (
               <span className="text-nourish-primary text-xs font-semibold inline-flex items-center gap-1">
                 €{price.toFixed(2)}
-                <VerifiedBadge verified={precoOk} />
+                {precoOk && <VerifiedBadge verified />}
               </span>
             )}
             {nutrition && (
               <div className="flex gap-1 items-center">
-                <VerifiedBadge verified={nutricaoOk} className="mr-0.5" />
+                {nutricaoOk && <VerifiedBadge verified className="mr-0.5" />}
                 <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums">
                   {nutrition.protein}g P
                 </span>

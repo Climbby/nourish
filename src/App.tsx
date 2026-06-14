@@ -5,6 +5,7 @@ import { MealDetail } from './pages/MealDetail'
 import { EditMeal } from './pages/EditMeal'
 import { Favourites } from './pages/Favourites'
 import { History } from './pages/History'
+import { WeeklyPlan } from './pages/WeeklyPlan'
 import { Profile } from './pages/Profile'
 import { AddProduct } from './pages/AddProduct'
 import { ProductDetail } from './pages/ProductDetail'
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/meal/:id/edit" element={<EditMeal />} />
           <Route path="/favourites" element={<Favourites />} />
           <Route path="/history" element={<History />} />
+          <Route path="/plan" element={<WeeklyPlan />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/add-product" element={<AddProduct />} />
           <Route path="/product/:id" element={<ProductDetail />} />

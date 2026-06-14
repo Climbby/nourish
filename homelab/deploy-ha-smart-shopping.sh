@@ -40,9 +40,10 @@ def guest_write(path: str, content: str) -> None:
 
 # Package file (optional duplicate; main config is patched below)
 guest("mkdir -p /mnt/data/supervisor/homeassistant/packages")
-pkg_path = os.path.join(os.environ["ROOT"], "homelab/ha-packages/nourish_smart_shopping.yaml")
-with open(pkg_path) as f:
-    guest_write("/mnt/data/supervisor/homeassistant/packages/nourish_smart_shopping.yaml", f.read())
+for pkg_name in ("nourish_smart_shopping.yaml", "nourish_wifi_presence.yaml", "nourish_supermarket_discovery.yaml"):
+    pkg_path = os.path.join(os.environ["ROOT"], f"homelab/ha-packages/{pkg_name}")
+    with open(pkg_path) as f:
+        guest_write(f"/mnt/data/supervisor/homeassistant/packages/{pkg_name}", f.read())
 guest("rm -f /mnt/data/supervisor/homeassistant/packages/nourish-smart-shopping.yaml /mnt/data/supervisor/homeassistant/packages/nourish-supermarket-metrics.yaml /mnt/data/supervisor/homeassistant/packages/nourish_supermarket_metrics.yaml")
 
 cfg = guest("cat /mnt/data/supervisor/homeassistant/configuration.yaml")
@@ -74,21 +75,55 @@ guest_write("/mnt/data/supervisor/homeassistant/configuration.yaml", cfg)
 import yaml
 
 autos = yaml.safe_load(guest("cat /mnt/data/supervisor/homeassistant/automations.yaml"))
+leave_home_triggers = [
+    {
+        "platform": "zone",
+        "entity_id": "person.francisco_fernandes",
+        "zone": "zone.home",
+        "event": "leave",
+    },
+    {
+        "platform": "state",
+        "entity_id": "binary_sensor.francisco_em_wifi_casa",
+        "from": "on",
+        "to": "off",
+    },
+]
+leave_home_actions = [
+    {
+        "action": "notify.send_message",
+        "target": {"entity_id": "notify.presence"},
+        "data": {
+            "title": "{{ state_attr('person.francisco_fernandes', 'friendly_name') | default('Francisco') }} saiu de casa",
+            "message": "{{ state_attr('person.francisco_fernandes', 'friendly_name') | default('Francisco') }} saiu de casa",
+        },
+    },
+    {"action": "rest_command.nourish_event_leave_home"},
+    {"action": "rest_command.nourish_despensa_check"},
+]
+
 for a in autos:
     if a.get("id") == "francisco_sai_de_casa":
-        acts = [
-            {
-                "action": "notify.send_message",
-                "target": {"entity_id": "notify.presence"},
-                "data": {
-                    "title": "{{ trigger.to_state.attributes.friendly_name }} saiu de casa",
-                    "message": "{{ trigger.to_state.attributes.friendly_name }} saiu de casa",
+        if "triggers" in a:
+            a["triggers"] = [
+                {
+                    "trigger": "zone",
+                    "entity_id": "person.francisco_fernandes",
+                    "zone": "zone.home",
+                    "event": "leave",
                 },
-            },
-            {"action": "rest_command.nourish_event_leave_home"},
-            {"action": "rest_command.nourish_despensa_check"},
-        ]
-        a["actions"] = acts
+                {
+                    "trigger": "state",
+                    "entity_id": "binary_sensor.francisco_em_wifi_casa",
+                    "from": "on",
+                    "to": "off",
+                },
+            ]
+            a["actions"] = leave_home_actions
+        else:
+            a["trigger"] = leave_home_triggers
+            a["action"] = leave_home_actions
+        a["mode"] = "single"
         break
 else:
     raise SystemExit("automation francisco_sai_de_casa not found")

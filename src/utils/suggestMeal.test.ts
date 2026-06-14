@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pickMealSuggestion } from './suggestMeal'
+import { pickMealSuggestion, pickWeeklySuggestions } from './suggestMeal'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 
 const base = (id: number, name: string, description: string): Recipe => ({
@@ -36,5 +36,27 @@ describe('pickMealSuggestion', () => {
     ]
     const pick = pickMealSuggestion({ recipes, favourites: new Set(), mealPlan })
     expect(pick?.id).toBe(2)
+  })
+})
+
+describe('pickWeeklySuggestions', () => {
+  it('returns unique recipes for each day', () => {
+    const recipes = [
+      base(1, 'A', '[Porcoes]\n2'),
+      base(2, 'B', ''),
+      base(3, 'C', '[Porcoes]\n1'),
+    ]
+    const week = pickWeeklySuggestions({ recipes, favourites: new Set(), mealPlan: [] }, 3)
+    expect(week).toHaveLength(3)
+    const ids = week.map((d) => d.recipe.id)
+    expect(new Set(ids).size).toBe(3)
+    expect(week[0].dayLabel).toBe('Hoje')
+    expect(week[1].dayLabel).toBe('Amanhã')
+  })
+
+  it('stops when recipes run out', () => {
+    const recipes = [base(1, 'A', ''), base(2, 'B', '')]
+    const week = pickWeeklySuggestions({ recipes, favourites: new Set(), mealPlan: [] }, 7)
+    expect(week).toHaveLength(2)
   })
 })

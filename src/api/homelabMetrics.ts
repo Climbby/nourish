@@ -13,6 +13,9 @@ export interface SupermarketVisit {
   left_at: string | null
   duration_minutes: number | null
   ongoing: boolean
+  zone?: string
+  trip_distance_km?: number
+  trip_distance_source?: 'osrm' | 'zones'
 }
 
 const DEFAULT_DAYS_UNTIL_SHOP = 4

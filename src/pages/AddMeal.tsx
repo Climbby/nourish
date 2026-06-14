@@ -7,6 +7,7 @@ import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils
 import { buildDespensaDescription } from '../utils/despensaAnalytics'
 import type { VerifiedField } from '../utils/verification'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
+import { AiGenerateButton } from '../components/AiGenerateButton'
 import { PhotoField } from '../components/PhotoField'
 
 const { despensaGroupId: DESPENSA_GROUP_ID, defaultLocationId: DEFAULT_LOCATION_ID, defaultQuId: DEFAULT_QU_ID } = grocyConfig
@@ -31,10 +32,6 @@ const inputClass =
   'w-full px-4 py-3 bg-nourish-surface border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:border-transparent transition-shadow'
 
 const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
-
-export const aiButtonClass =
-  'w-full mt-2 py-2.5 rounded-xl text-sm font-semibold transition-all focus:outline-none focus:ring-2 focus:ring-nourish-primary ' +
-  'bg-gradient-to-r from-purple-600 to-blue-500 text-white hover:from-purple-500 hover:to-blue-400 active:opacity-90 disabled:opacity-50'
 
 export function AddMeal() {
   const navigate = useNavigate()
@@ -280,13 +277,8 @@ export function AddMeal() {
             placeholder={isDespensa ? 'Ex: Leite, Água, Pão…' : 'Ex: Esparguete com atum'}
             className={`${inputClass} ${nameError ? 'border-red-500' : ''}`} />
           {nameError && <p className="text-red-400 text-xs mt-1">Nome é obrigatório</p>}
-          <button type="button" onClick={handleAnalyze} disabled={analyzing || saving} className={aiButtonClass}>
-            {analyzing ? 'A gerar com IA…' : '✨ Gerar com IA'}
-          </button>
-          <p className="text-xs text-nourish-text-dim mt-1 leading-snug">
-            Preenche ingredientes, passos, nutrição e preço a partir do nome{photoPreview ? ' e da foto' : ''}.
-          </p>
-          {aiError && <p className="text-red-400 text-xs">{aiError}</p>}
+          <AiGenerateButton loading={analyzing} disabled={saving} onClick={handleAnalyze} />
+          {aiError && <p className="text-red-400 text-xs mt-1">{aiError}</p>}
         </div>
 
         {isDespensa ? (

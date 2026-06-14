@@ -1,12 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { BottomNav } from '../components/BottomNav'
+import { CarModelInput } from '../components/CarModelInput'
 import { NumericInput } from '../components/NumericInput'
 import { Spinner } from '../components/Spinner'
-import { useFavourites } from '../hooks/useFavourites'
+import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
+import { useCars, type Car } from '../hooks/useCars'
+import { useFuelPrices } from '../hooks/useFuelPrices'
 import { useNutritionTargets, DEFAULT_TARGETS } from '../hooks/useNutritionTargets'
+import type { FuelType } from '../utils/fuelPrices'
+import { FUEL_TYPE_OPTIONS } from '../utils/fuelPrices'
+import {
+  fetchSupermarkets,
+  removeTracked,
+  unblockPlace,
+  type SupermarketsData,
+} from '../utils/supermarkets'
 import { useUserProfile, DEFAULT_USER_PROFILE } from '../hooks/useUserProfile'
 import {
   aggregateMealStats,
@@ -14,7 +25,6 @@ import {
   getPeriodMeta,
   macroGaps,
   macroSurpluses,
-  pickNutritionRecommendation,
   SURPLUS_ADVICE,
   type StatsPeriod,
 } from '../utils/mealStats'
@@ -36,14 +46,27 @@ const PERIODS: { key: StatsPeriod; short: string }[] = [
   { key: 'month', short: 'Mês' },
 ]
 
+type ProfileTab = 'resumo' | 'objectivos' | 'viaturas' | 'definicoes'
+
+const PROFILE_TABS: { key: ProfileTab; label: string; subtitle: string }[] = [
+  { key: 'resumo', label: 'Resumo', subtitle: 'Gastos e macros no período' },
+  { key: 'objectivos', label: 'Objectivos', subtitle: 'Metas diárias e dados pessoais' },
+  { key: 'viaturas', label: 'Viaturas', subtitle: 'Km e custo das idas ao super' },
+  { key: 'definicoes', label: 'Casa', subtitle: 'Aparência e supermercado' },
+]
+
 const inputClass =
   'w-full px-3 py-2 bg-nourish-surface border border-nourish-border rounded-xl text-nourish-text text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary'
 
 export function Profile() {
-  const navigate = useNavigate()
-  const { favourites } = useFavourites()
+  const location = useLocation()
+  const initialTab = (location.state as { tab?: ProfileTab } | null)?.tab ?? 'resumo'
   const { targets, setTargets, resetTargets } = useNutritionTargets()
   const { profile, updateField } = useUserProfile()
+  const { prefs, updatePref } = useDisplayPrefs()
+  const { cars, addCar, updateCar, removeCar, refreshCars } = useCars()
+  const { prices: fuelPrices, refresh: refreshFuel } = useFuelPrices()
+  const [tab, setTab] = useState<ProfileTab>(initialTab)
   const [period, setPeriod] = useState<StatsPeriod>('7d')
   const [mealPlan, setMealPlan] = useState<MealPlanEntry[]>([])
   const [recipes, setRecipes] = useState<Recipe[]>([])
@@ -53,13 +76,25 @@ export function Profile() {
   const [showBody, setShowBody] = useState(false)
   const [homelabMetrics, setHomelabMetrics] = useState<HomelabMetrics | null>(null)
   const [homelabMetricsError, setHomelabMetricsError] = useState(false)
+  const [supermarkets, setSupermarkets] = useState<SupermarketsData | null>(null)
+
+  const refreshSupermarkets = useCallback(() => {
+    void fetchSupermarkets().then(setSupermarkets)
+  }, [])
 
   useEffect(() => {
     fetchHomelabMetrics().then((m) => {
       setHomelabMetrics(m)
       setHomelabMetricsError(m === null)
     })
-  }, [])
+    refreshCars()
+    refreshFuel()
+    refreshSupermarkets()
+  }, [refreshCars, refreshFuel, refreshSupermarkets])
+
+  useEffect(() => {
+    if (tab === 'definicoes') refreshSupermarkets()
+  }, [tab, refreshSupermarkets])
 
   const recommended = useMemo(() => recommendedDailyTargets(profile), [profile])
 
@@ -99,15 +134,24 @@ export function Profile() {
   )
   const surplusKeys = useMemo(() => new Set(surpluses.map((s) => s.key)), [surpluses])
 
-  const recommendation = useMemo(() => {
-    if (recipes.length === 0) return null
-    return pickNutritionRecommendation(
-      { recipes, favourites, mealPlan },
-      totals,
-      targets,
-      periodMeta.dayCount
-    )
-  }, [recipes, favourites, mealPlan, totals, targets, periodMeta.dayCount])
+  const [showCarForm, setShowCarForm] = useState(false)
+  const [carDraft, setCarDraft] = useState<Omit<Car, 'id'>>({
+    name: '',
+    consumption_l100km: 6,
+    fuel_type: 'diesel',
+  })
+
+  function handleAddCar() {
+    const name = carDraft.name.trim()
+    if (!name) return
+    addCar(carDraft)
+    setCarDraft({
+      name: '',
+      consumption_l100km: 6,
+      fuel_type: 'diesel',
+    })
+    setShowCarForm(false)
+  }
 
   const avgPerDay = periodMeta.dayCount > 0
     ? {
@@ -116,30 +160,53 @@ export function Profile() {
       }
     : null
 
+  const activeTabMeta = PROFILE_TABS.find((t) => t.key === tab)!
+
   return (
     <div className="min-h-screen bg-nourish-bg">
-      <header className="px-4 pt-12 pb-4 border-b border-nourish-border">
+      <header className="px-4 pt-12 pb-3 border-b border-nourish-border">
         <h1 className="text-2xl font-bold text-nourish-text">Perfil</h1>
-        <p className="text-nourish-text-dim text-sm mt-0.5">Nutrição, gastos e recomendações</p>
-      </header>
-
-      <main className="p-4 space-y-5" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
-        <div className="flex gap-2">
-          {PERIODS.map(({ key, short }) => (
+        <p className="text-nourish-text-dim text-sm mt-0.5">{activeTabMeta.subtitle}</p>
+        <div
+          className="flex gap-2 mt-4 overflow-x-auto pb-0.5"
+          style={{ scrollbarWidth: 'none' }}
+        >
+          {PROFILE_TABS.map(({ key, label }) => (
             <button
               key={key}
               type="button"
-              onClick={() => setPeriod(key)}
-              className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                period === key
-                  ? 'bg-nourish-primary text-nourish-on-primary border-nourish-primary'
-                  : 'bg-nourish-surface border-nourish-border text-nourish-text-dim'
+              onClick={() => setTab(key)}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                tab === key
+                  ? 'bg-nourish-primary text-nourish-on-primary'
+                  : 'bg-nourish-surface-high text-nourish-text-dim border border-nourish-border'
               }`}
             >
-              {short}
+              {label}
             </button>
           ))}
         </div>
+      </header>
+
+      <main className="p-4 space-y-5" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
+        {tab === 'resumo' && (
+          <div className="flex gap-2">
+            {PERIODS.map(({ key, short }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setPeriod(key)}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                  period === key
+                    ? 'bg-nourish-primary text-nourish-on-primary border-nourish-primary'
+                    : 'bg-nourish-surface border-nourish-border text-nourish-text-dim'
+                }`}
+              >
+                {short}
+              </button>
+            ))}
+          </div>
+        )}
 
         {loading && <Spinner />}
 
@@ -149,8 +216,7 @@ export function Profile() {
           </div>
         )}
 
-        {!loading && !error && (
-          <>
+        {!loading && !error && tab === 'resumo' && (
             <section className="space-y-3">
               <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
                 Resumo · {periodMeta.label.toLowerCase()}
@@ -228,7 +294,9 @@ export function Profile() {
                 </p>
               )}
             </section>
+        )}
 
+        {!loading && !error && tab === 'objectivos' && (
             <section className="space-y-3">
               <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
                 Objectivos
@@ -414,22 +482,186 @@ export function Profile() {
                 </div>
               )}
             </section>
+        )}
 
-            {recommendation && (
-              <section className="space-y-2">
-                <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
-                  Recomendação
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => navigate(`/meal/${recommendation.recipe.id}`)}
-                  className="w-full p-4 rounded-2xl bg-nourish-surface border border-nourish-primary/30 text-left active:scale-[0.99] transition-transform focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-                >
-                  <p className="font-semibold text-nourish-text">{recommendation.recipe.name}</p>
-                  <p className="text-xs text-nourish-text-dim mt-1 leading-snug">{recommendation.reason}</p>
-                </button>
-              </section>
-            )}
+        {!loading && !error && tab === 'viaturas' && (
+            <section className="space-y-3">
+              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
+                Viaturas
+              </h2>
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4 space-y-3">
+                <p className="text-xs text-nourish-text-dim leading-snug">
+                  Km ida/volta calculados automaticamente (estradas via OSRM, ou coordenadas das zonas HA). Preço do combustível vem da DGEG. Consumo em L/100 km — GPL nos bicombustíveis.
+                </p>
+                {fuelPrices && (
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
+                      <p className="text-nourish-text-dim">Gasóleo</p>
+                      <p className="font-bold text-nourish-primary tabular-nums">
+                        €{fuelPrices.diesel_eur_per_l.toFixed(3)}/L
+                      </p>
+                    </div>
+                    <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
+                      <p className="text-nourish-text-dim">Gasolina 95</p>
+                      <p className="font-bold text-nourish-primary tabular-nums">
+                        €{fuelPrices.gasoline_eur_per_l.toFixed(3)}/L
+                      </p>
+                    </div>
+                    <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
+                      <p className="text-nourish-text-dim">GPL</p>
+                      <p className="font-bold text-nourish-primary tabular-nums">
+                        €{fuelPrices.gpl_eur_per_l.toFixed(3)}/L
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {cars.length === 0 && !showCarForm && (
+                  <p className="text-sm text-nourish-text-dim text-center py-2">Sem viaturas registadas</p>
+                )}
+                {cars.map((car) => (
+                  <div key={car.id} className="rounded-xl border border-nourish-border bg-nourish-bg p-3 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-semibold text-nourish-text">{car.name}</p>
+                      <button
+                        type="button"
+                        onClick={() => removeCar(car.id)}
+                        className="text-xs text-red-400 focus:outline-none"
+                      >
+                        Remover
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-[10px] text-nourish-text-dim">
+                        L/100 km
+                        <NumericInput
+                          min={0}
+                          step={0.1}
+                          fallback={6}
+                          className={`${inputClass} mt-0.5 text-xs py-1.5`}
+                          value={car.consumption_l100km}
+                          onChange={(n) => updateCar(car.id, { consumption_l100km: n })}
+                        />
+                      </label>
+                      <label className="text-[10px] text-nourish-text-dim">
+                        Combustível
+                        <select
+                          className={`${inputClass} mt-0.5 text-xs py-1.5`}
+                          value={car.fuel_type ?? 'diesel'}
+                          onChange={(e) =>
+                            updateCar(car.id, { fuel_type: e.target.value as FuelType })
+                          }
+                        >
+                          {FUEL_TYPE_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                ))}
+                {showCarForm ? (
+                  <div className="rounded-xl border border-nourish-primary/40 bg-nourish-bg p-3 space-y-2">
+                    <CarModelInput
+                      value={carDraft.name}
+                      onChange={(name) => setCarDraft((d) => ({ ...d, name }))}
+                      onSelectPreset={(preset) =>
+                        setCarDraft((d) => ({
+                          ...d,
+                          name: preset.label,
+                          consumption_l100km:
+                            preset.consumption_l100km > 0 ? preset.consumption_l100km : d.consumption_l100km,
+                          fuel_type: preset.fuel_type ?? d.fuel_type,
+                        }))
+                      }
+                      className={inputClass}
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-[10px] text-nourish-text-dim">
+                        L/100 km
+                        <NumericInput
+                          min={0}
+                          step={0.1}
+                          fallback={6}
+                          className={`${inputClass} mt-0.5 text-xs py-1.5`}
+                          value={carDraft.consumption_l100km}
+                          onChange={(n) => setCarDraft((d) => ({ ...d, consumption_l100km: n }))}
+                        />
+                      </label>
+                      <label className="text-[10px] text-nourish-text-dim">
+                        Combustível
+                        <select
+                          className={`${inputClass} mt-0.5 text-xs py-1.5`}
+                          value={carDraft.fuel_type ?? 'diesel'}
+                          onChange={(e) =>
+                            setCarDraft((d) => ({
+                              ...d,
+                              fuel_type: e.target.value as FuelType,
+                            }))
+                          }
+                        >
+                          {FUEL_TYPE_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowCarForm(false)}
+                        className="flex-1 py-2 text-sm text-nourish-text-dim"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleAddCar}
+                        className="flex-1 py-2 rounded-xl bg-nourish-primary text-nourish-on-primary text-sm font-semibold"
+                      >
+                        Guardar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowCarForm(true)}
+                    className="w-full py-2.5 rounded-xl border border-dashed border-nourish-border text-sm text-nourish-primary font-medium"
+                  >
+                    + Adicionar viatura
+                  </button>
+                )}
+              </div>
+            </section>
+        )}
+
+        {!loading && !error && tab === 'definicoes' && (
+          <>
+            <section className="space-y-3">
+              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
+                Aparência
+              </h2>
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4">
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                  <div>
+                    <p className="text-sm font-medium text-nourish-text">Mostrar porções nas refeições</p>
+                    <p className="text-xs text-nourish-text-dim mt-0.5">
+                      O número no canto dos cartões no separador Refeições
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={prefs.showMealPortions}
+                    onChange={(e) => updatePref('showMealPortions', e.target.checked)}
+                    className="rounded border-nourish-border w-5 h-5"
+                  />
+                </label>
+              </div>
+            </section>
 
             <section className="space-y-3">
               <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
@@ -481,21 +713,79 @@ export function Profile() {
                   </>
                 )}
               </div>
-            </section>
 
-            <section className="rounded-xl border border-nourish-border bg-nourish-surface/50 p-3 space-y-2">
-              <p className="text-xs font-semibold text-nourish-text">Atalhos</p>
-              <div className="flex flex-col gap-1">
-                <Link to="/history" className="text-sm text-nourish-primary font-medium">
-                  Historial de refeições →
-                </Link>
-                <Link
-                  to="/history"
-                  state={{ tab: 'supermarket' }}
-                  className="text-sm text-nourish-primary font-medium"
-                >
-                  Historial do supermercado →
-                </Link>
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4 space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-nourish-text">Supermercados</p>
+                  <p className="text-xs text-nourish-text-dim mt-0.5 leading-snug">
+                    Após ~3 min num super novo, recebes notificação no telemóvel. Acompanhar cria uma zona HA
+                    (~130 m) e regista visitas; ignorar não volta a perguntar.
+                  </p>
+                </div>
+                {supermarkets ? (
+                  <>
+                    <div>
+                      <p className="text-[10px] font-semibold text-nourish-primary uppercase tracking-wider mb-1.5">
+                        A acompanhar
+                      </p>
+                      {supermarkets.tracked.length === 0 ? (
+                        <p className="text-xs text-nourish-text-dim">Nenhum registado</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {supermarkets.tracked.map((s) => (
+                            <li
+                              key={s.place_key}
+                              className="flex items-center justify-between gap-2 text-sm text-nourish-text"
+                            >
+                              <span className="truncate">{s.name}</span>
+                              {s.place_key !== 'auchan' && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    if (await removeTracked(s.place_key)) refreshSupermarkets()
+                                  }}
+                                  className="text-xs text-nourish-text-dim shrink-0 focus:outline-none"
+                                >
+                                  Remover
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-semibold text-nourish-text-dim uppercase tracking-wider mb-1.5">
+                        Ignorados
+                      </p>
+                      {supermarkets.blocklist.length === 0 ? (
+                        <p className="text-xs text-nourish-text-dim">Nenhum</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {supermarkets.blocklist.map((b) => (
+                            <li
+                              key={b.place_key}
+                              className="flex items-center justify-between gap-2 text-sm text-nourish-text-dim"
+                            >
+                              <span className="truncate">{b.name}</span>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (await unblockPlace(b.place_key)) refreshSupermarkets()
+                                }}
+                                className="text-xs text-nourish-primary shrink-0 focus:outline-none"
+                              >
+                                Reativar
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-nourish-text-dim">A carregar lista…</p>
+                )}
               </div>
             </section>
           </>

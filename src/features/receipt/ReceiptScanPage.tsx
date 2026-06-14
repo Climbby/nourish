@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../../api/grocy'
 import { grocyConfig } from '../../config/grocy'
 import { Spinner } from '../../components/Spinner'
 import type { Product } from '../../types/grocy'
 import { getBuyAmountFromDesc } from '../../utils/despensaAnalytics'
+import { linkReceiptToVisit } from '../../utils/visitReceipts'
 import { buildReviewLines } from './buildReviewLines'
 import { commitReceiptLines, type CommitResult } from './commitReceipt'
 import { parseReceipt } from './parsers'
@@ -35,6 +36,8 @@ function BackIcon() {
 
 export function ReceiptScanPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const visitEnteredAt = searchParams.get('visit')
   const cameraRef = useRef<HTMLInputElement>(null)
   const galleryRef = useRef<HTMLInputElement>(null)
   const { recognize, progress, running, error: ocrError } = useReceiptOcr()
@@ -126,6 +129,18 @@ export function ReceiptScanPage() {
     setError(null)
     try {
       const result = await commitReceiptLines(reviewLines, purchasedDate, rememberAliases)
+      if (visitEnteredAt) {
+        const included = reviewLines.filter((l) => l.included && l.productId != null)
+        const totalEur = included.reduce((sum, l) => sum + (l.price > 0 ? l.price : 0), 0)
+        await linkReceiptToVisit({
+          visit_entered_at: visitEnteredAt,
+          purchased_date: purchasedDate,
+          item_count: result.succeeded.length,
+          total_eur: Math.round(totalEur * 100) / 100,
+          store,
+          linked_at: new Date().toISOString(),
+        })
+      }
       setCommitResult(result)
       setStep('done')
     } catch (e) {
@@ -158,11 +173,16 @@ export function ReceiptScanPage() {
           <BackIcon />
         </button>
         <h1 className="text-lg font-bold text-nourish-text flex-1 truncate">
-          {step === 'review' ? 'Rever compra' : 'Talão'}
+          {step === 'review' ? 'Rever compra' : visitEnteredAt ? 'Talão da ida' : 'Talão'}
         </h1>
       </header>
 
       <div className="px-4 py-5 space-y-4">
+        {visitEnteredAt && step !== 'done' && (
+          <p className="text-xs text-nourish-primary bg-nourish-primary/10 border border-nourish-primary/30 rounded-xl px-3 py-2">
+            Este talão será associado à ida ao supermercado no historial.
+          </p>
+        )}
         {step === 'capture' && (
           <>
             <p className="text-sm text-nourish-text-dim">
@@ -395,6 +415,15 @@ export function ReceiptScanPage() {
                   ))}
                 </ul>
               </div>
+            )}
+            {visitEnteredAt && (
+              <button
+                type="button"
+                onClick={() => navigate('/history', { state: { tab: 'supermarket' } })}
+                className="w-full py-3.5 rounded-xl font-semibold text-nourish-text bg-nourish-surface-high border border-nourish-border"
+              >
+                Voltar ao historial
+              </button>
             )}
             <button
               type="button"

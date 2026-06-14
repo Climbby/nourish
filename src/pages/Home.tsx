@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
-import type { MealPlanEntry, Recipe } from '../types/grocy'
+import type { Recipe } from '../types/grocy'
 import { MealCard } from '../components/MealCard'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
+import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
 import { useFavourites } from '../hooks/useFavourites'
 import { parseDescription } from '../utils/parseDescription'
-import { pickMealSuggestion } from '../utils/suggestMeal'
+import {
+  mealMatchesVerificationFilters,
+  type VerificationFilterKey,
+} from '../utils/mealVerificationFilter'
 import { DespensaSection } from './Despensa'
 
 type Filter = 'completa' | 'ligeira' | 'despensa'
@@ -32,6 +36,43 @@ function SearchIcon() {
   )
 }
 
+function CalendarIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path strokeLinecap="round" d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+  )
+}
+
+function ClockIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+      <circle cx="12" cy="12" r="9" />
+      <path strokeLinecap="round" d="M12 7v5l3 2" />
+    </svg>
+  )
+}
+
+function HeartIcon({ filled }: { filled?: boolean }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="2"
+      className="w-4 h-4"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
+      />
+    </svg>
+  )
+}
+
 function XIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
@@ -40,11 +81,25 @@ function XIcon() {
   )
 }
 
+function FilterIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+      <path strokeLinecap="round" d="M4 6h16M7 12h10M10 18h4" />
+    </svg>
+  )
+}
+
+const VERIFICATION_FILTERS: { key: VerificationFilterKey; label: string }[] = [
+  { key: 'preco', label: 'Preço verificado' },
+  { key: 'nutricao', label: 'Nutrição verificada' },
+  { key: 'unverified', label: 'Não verificado' },
+]
+
 export function Home() {
   const navigate = useNavigate()
   const { favourites } = useFavourites()
+  const { prefs } = useDisplayPrefs()
   const [recipes, setRecipes] = useState<Recipe[]>([])
-  const [mealPlan, setMealPlan] = useState<MealPlanEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -53,14 +108,37 @@ export function Home() {
   const setActiveFilter = (f: Filter) => setSearchParams({ filter: f }, { replace: true })
   const [migrating, setMigrating] = useState(false)
   const [migrateProgress, setMigrateProgress] = useState<{ done: number; total: number } | null>(null)
+  const [showVerificationFilters, setShowVerificationFilters] = useState(false)
+  const [verificationFilters, setVerificationFilters] = useState<Set<VerificationFilterKey>>(new Set())
+  const [favouritesOnly, setFavouritesOnly] = useState(false)
+  const filterRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!showVerificationFilters) return
+    function onPointerDown(e: PointerEvent) {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setShowVerificationFilters(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [showVerificationFilters])
+
+  function toggleVerificationFilter(key: VerificationFilterKey) {
+    setVerificationFilters((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   useEffect(() => {
     let mounted = true
-    Promise.all([grocy.getRecipes(), grocy.getMealPlan()])
-      .then(([recipeList, plan]) => {
+    grocy.getRecipes()
+      .then((recipeList) => {
         if (!mounted) return
         setRecipes(recipeList)
-        setMealPlan(plan)
       })
       .catch((e: Error) => { if (mounted) setError(e.message) })
       .finally(() => { if (mounted) setLoading(false) })
@@ -96,25 +174,15 @@ export function Home() {
 
   const isDespensa = activeFilter === 'despensa'
 
-  const suggestion = useMemo(
-    () =>
-      !isDespensa && !loading
-        ? pickMealSuggestion({ recipes, favourites, mealPlan })
-        : null,
-    [recipes, favourites, mealPlan, isDespensa, loading]
-  )
-
-  const suggestionParsed = suggestion
-    ? parseDescription(suggestion.description ?? '')
-    : null
-
   const filtered = recipes
     .filter((r) => {
       if (query && !r.name.toLowerCase().includes(query.toLowerCase())) return false
+      if (favouritesOnly && !favourites.has(r.id)) return false
       const parsed = parsedById.get(r.id)!
-      if (activeFilter === 'completa') return parsed.category === 'Completa'
-      if (activeFilter === 'ligeira') return parsed.category === 'Ligeira'
-      return false
+      if (activeFilter === 'completa' && parsed.category !== 'Completa') return false
+      if (activeFilter === 'ligeira' && parsed.category !== 'Ligeira') return false
+      if (!mealMatchesVerificationFilters(parsed, verificationFilters)) return false
+      return activeFilter === 'completa' || activeFilter === 'ligeira'
     })
     .sort((a, b) => {
       const aPortions = parsedById.get(a.id)!.portions ?? 0
@@ -126,15 +194,35 @@ export function Home() {
     <div className="min-h-screen bg-nourish-bg">
       <header className="px-4 pt-12 pb-3 border-b border-nourish-border">
         <div className="flex items-center gap-3 mb-3">
-          <div className="w-10 h-10 rounded-xl bg-nourish-primary flex items-center justify-center flex-shrink-0">
+          <div className="w-10 h-10 rounded-lg bg-nourish-primary flex items-center justify-center flex-shrink-0">
             <span className="text-nourish-on-primary font-bold text-lg leading-none select-none">N</span>
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold text-nourish-text leading-none">Nourish</h1>
             <p className="text-nourish-text-dim text-sm mt-0.5">
               {isDespensa ? 'O que tens em casa?' : 'O que vais comer?'}
             </p>
           </div>
+          {!isDespensa && (
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => navigate('/history')}
+                className="p-2.5 rounded-lg bg-nourish-surface-high border border-nourish-border text-nourish-text-dim active:bg-nourish-border/20 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                aria-label="Historial"
+              >
+                <ClockIcon />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/plan')}
+                className="p-2.5 rounded-lg bg-nourish-surface-high border border-nourish-border text-nourish-text-dim active:bg-nourish-border/20 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                aria-label="Plano da semana"
+              >
+                <CalendarIcon />
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="relative flex items-center mb-3">
@@ -155,20 +243,85 @@ export function Home() {
           )}
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-0.5" style={{ scrollbarWidth: 'none' }}>
-          {FILTERS.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setActiveFilter(key)}
-              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors focus:outline-none ${
-                activeFilter === key
-                  ? 'bg-nourish-primary text-nourish-on-primary'
-                  : 'bg-nourish-surface-high text-nourish-text-dim border border-nourish-border'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex gap-2 overflow-x-auto pb-0.5 flex-1 min-w-0" style={{ scrollbarWidth: 'none' }}>
+            {FILTERS.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setActiveFilter(key)}
+                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors focus:outline-none ${
+                  activeFilter === key
+                    ? 'bg-nourish-primary text-nourish-on-primary'
+                    : 'bg-nourish-surface-high text-nourish-text-dim border border-nourish-border'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {!isDespensa && (
+            <div className="relative flex-shrink-0" ref={filterRef}>
+              <button
+                type="button"
+                onClick={() => setShowVerificationFilters((v) => !v)}
+                className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                  verificationFilters.size > 0 || favouritesOnly
+                    ? 'bg-nourish-primary/15 border-nourish-primary/40 text-nourish-primary'
+                    : 'bg-nourish-surface-high border-nourish-border text-nourish-text-dim'
+                }`}
+                aria-label="Filtros de verificação"
+                aria-expanded={showVerificationFilters}
+              >
+                <FilterIcon />
+              </button>
+              {showVerificationFilters && (
+                <div className="absolute right-0 top-full mt-2 z-20 w-52 rounded-xl border border-nourish-border bg-nourish-surface shadow-lg p-2 space-y-1">
+                  <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
+                    Filtros
+                  </p>
+                  <label className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high">
+                    <input
+                      type="checkbox"
+                      checked={favouritesOnly}
+                      onChange={() => setFavouritesOnly((v) => !v)}
+                      className="rounded border-nourish-border"
+                    />
+                    <HeartIcon filled={favouritesOnly} />
+                    Favoritos
+                  </label>
+                  <p className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
+                    Verificação
+                  </p>
+                  {VERIFICATION_FILTERS.map(({ key, label }) => (
+                    <label
+                      key={key}
+                      className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={verificationFilters.has(key)}
+                        onChange={() => toggleVerificationFilter(key)}
+                        className="rounded border-nourish-border"
+                      />
+                      {label}
+                    </label>
+                  ))}
+                  {(verificationFilters.size > 0 || favouritesOnly) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVerificationFilters(new Set())
+                        setFavouritesOnly(false)
+                      }}
+                      className="w-full px-2 py-1.5 text-xs text-nourish-text-dim underline"
+                    >
+                      Limpar filtros
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
@@ -214,30 +367,10 @@ export function Home() {
           </div>
         )}
 
-        {!isDespensa && !loading && !error && suggestion && !query && activeFilter === 'completa' && (
-          <button
-            type="button"
-            onClick={() => navigate(`/meal/${suggestion.id}`)}
-            className="w-full mb-4 p-4 rounded-2xl bg-nourish-surface border border-nourish-primary/30 text-left active:scale-[0.99] transition-transform focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-          >
-            <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-1">
-              Sugestão de hoje
-            </p>
-            <p className="font-semibold text-nourish-text">{suggestion.name}</p>
-            <p className="text-xs text-nourish-text-dim mt-1">
-              {(suggestionParsed?.portions ?? 0) > 0
-                ? `${suggestionParsed!.portions} porção${suggestionParsed!.portions! > 1 ? 'ões' : ''} pronta no frigorífico`
-                : favourites.has(suggestion.id)
-                  ? 'Uma das tuas favoritas'
-                  : 'Boa escolha para hoje'}
-            </p>
-          </button>
-        )}
-
         {!isDespensa && !loading && filtered.length > 0 && (
           <div className="grid grid-cols-2 gap-3">
             {filtered.map((r) => (
-              <MealCard key={r.id} recipe={r} showPortions />
+              <MealCard key={r.id} recipe={r} showPortions={prefs.showMealPortions} />
             ))}
           </div>
         )}
