@@ -1,0 +1,123 @@
+# Force high-accuracy GPS while away — fixes flaky/rare auto-trigger.
+#
+# Problem: supermarket discovery needs frequent, precise location, but the
+# companion app's built-in high-accuracy auto-trigger (zone/BT based) fires
+# rarely and inconsistently. Here HA becomes the single source of truth:
+# force_on whenever you're plausibly away, force_off only when clearly home.
+#
+# Away = person not_home  OR  connected to a non-home Wi-Fi network.
+# Zone (person) is the reliable signal; Wi-Fi only pushes "away" when it reports
+# a concrete foreign SSID. A "<not connected>"/unavailable Wi-Fi reading is NOT
+# treated as away — otherwise a phone that fails to report its home SSID (e.g.
+# missing location permission) would strand high-accuracy ON at home.
+#
+# Requires:
+#   - sensor.francisco_wi_fi_connection  (companion app Wi-Fi Connection sensor)
+#   - person.francisco_fernandes
+#   - notify.mobile_app_francisco
+# Home SSIDs are duplicated from nourish_wifi_presence.yaml — keep both in sync.
+# Prereqs on the phone (the real root cause of "rare"): Location = Allow all
+# the time + Precise ON; HA battery usage = Unrestricted; location + Wi-Fi
+# Connection sensors ON (the Wi-Fi SSID needs location permission to be read).
+
+template:
+  - binary_sensor:
+      - name: "Francisco fora de casa"
+        unique_id: francisco_fora_de_casa
+        device_class: presence
+        # 'on' = away. delay_off avoids flapping high-accuracy on/off at the door.
+        state: >
+          {% set ssid = states('sensor.francisco_wi_fi_connection') %}
+          {% set home_ssids = ['NOS-2774', 'NOS-2774-5', 'NOS-2774_EXT'] %}
+          {% set on_other_wifi = ssid not in home_ssids
+             and ssid not in ['<not connected>', 'unavailable', 'unknown', 'unauthorized', ''] %}
+          {{ is_state('person.francisco_fernandes', 'not_home') or on_other_wifi }}
+        delay_off:
+          seconds: 90
+
+automation:
+  - id: nourish_high_accuracy_on
+    alias: "Nourish — GPS alta precisão ON (fora de casa)"
+    description: Força modo de alta precisão e intervalo de 30 s ao sair de casa
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.francisco_fora_de_casa
+        to: "on"
+        id: away
+      # Re-assert periodically: the app can silently drop force mode on restart.
+      - platform: time_pattern
+        minutes: "/15"
+        id: reassert
+      - platform: homeassistant
+        event: start
+        id: hastart
+    condition:
+      - condition: state
+        entity_id: binary_sensor.francisco_fora_de_casa
+        state: "on"
+    action:
+      - action: notify.mobile_app_francisco
+        data:
+          message: command_high_accuracy_mode
+          data:
+            command: force_on
+      - action: notify.mobile_app_francisco
+        data:
+          message: command_high_accuracy_mode
+          data:
+            command: high_accuracy_set_update_interval
+            high_accuracy_update_interval: 30   # seconds (min 5)
+      # Lightweight trace on every assert — visible in HA Logbook, no phone spam.
+      - action: logbook.log
+        data:
+          name: Nourish GPS
+          entity_id: binary_sensor.francisco_fora_de_casa
+          message: "force_on enviado (trigger: {{ trigger.id }})"
+      # Visible phone notification only on the actual away transition — confirms
+      # the push/command channel is alive (same pathway command_* rides on).
+      - if:
+          - condition: template
+            value_template: "{{ trigger.id == 'away' }}"
+        then:
+          - action: notify.mobile_app_francisco
+            data:
+              title: "GPS alta precisão ON"
+              message: "Modo de alta precisão forçado (saíste de casa)."
+              data:
+                importance: low
+                tag: nourish_high_accuracy
+
+  - id: nourish_high_accuracy_off
+    alias: "Nourish — GPS alta precisão OFF (em casa)"
+    description: Desliga o modo de alta precisão ao chegar a casa (poupa bateria)
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.francisco_fora_de_casa
+        to: "off"
+        id: home
+      # Re-assert periodically: a single force_off can be silently dropped by the
+      # app (it then stays high-accuracy at home, draining battery). Mirrors the
+      # force_on re-assert so a dropped command self-heals within 15 min.
+      - platform: time_pattern
+        minutes: "/15"
+        id: reassert
+      - platform: homeassistant
+        event: start
+        id: hastart
+    condition:
+      - condition: state
+        entity_id: binary_sensor.francisco_fora_de_casa
+        state: "off"
+    action:
+      - action: notify.mobile_app_francisco
+        data:
+          message: command_high_accuracy_mode
+          data:
+            command: force_off
+      - action: logbook.log
+        data:
+          name: Nourish GPS
+          entity_id: binary_sensor.francisco_fora_de_casa
+          message: "force_off enviado (trigger: {{ trigger.id }})"

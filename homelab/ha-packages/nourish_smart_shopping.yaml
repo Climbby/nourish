@@ -34,16 +34,22 @@ rest_command:
     timeout: 15
 
 automation:
+  # NOTE: triggers are STATE-based, not `platform: zone`. The phone's
+  # device_tracker (source_type: gps) exposes only `in_zones` + a state label
+  # and carries NO latitude/longitude, so `platform: zone` triggers can never
+  # fire (they need coordinates). The tracker's STATE does flip reliably to the
+  # zone's friendly name ("Auchan"), so we trigger on that — same approach the
+  # home arrive/leave automations use. This is why detection silently died after
+  # the 2026-06-15 presence rework swapped in the coordinate-less tracker.
   - id: nourish_supermarket_arrival
     alias: "Nourish — chegada ao supermercado"
     description: Regista visita e envia lista de compras ao telemovel
     mode: single
     max_exceeded: silent
     trigger:
-      - platform: zone
-        entity_id: person.francisco_fernandes
-        zone: zone.auchan
-        event: enter
+      - platform: state
+        entity_id: device_tracker.telemovel_francisco
+        to: "Auchan"
     action:
       - action: rest_command.nourish_event_supermarket_enter
       - action: rest_command.nourish_at_supermarket
@@ -54,9 +60,8 @@ automation:
     mode: single
     max_exceeded: silent
     trigger:
-      - platform: zone
-        entity_id: person.francisco_fernandes
-        zone: zone.auchan
-        event: leave
+      - platform: state
+        entity_id: device_tracker.telemovel_francisco
+        from: "Auchan"
     action:
       - action: rest_command.nourish_event_supermarket_leave

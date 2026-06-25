@@ -83,7 +83,7 @@ automation:
         response_variable: nourish_prompt
       - condition: template
         value_template: "{{ nourish_prompt is defined and nourish_prompt.prompt == true }}"
-      - action: notify.mobile_app_telemovel_francisco
+      - action: notify.mobile_app_francisco
         data:
           title: "Novo supermercado?"
           message: >
@@ -117,7 +117,7 @@ automation:
           entity_id: input_text.nourish_supermarket_pending
         data:
           value: ""
-      - action: notify.mobile_app_telemovel_francisco
+      - action: notify.mobile_app_francisco
         data:
           message: >
             {% if nourish_track is defined and nourish_track.ha_setup is defined and nourish_track.ha_setup.automations is defined %}

@@ -1,0 +1,76 @@
+# Homelab service reachability (ping / HTTP). Alerts in homelab_alerts.yaml.
+# IPs: CT105 cloudflare 192.168.1.4, n8n 192.168.1.24, nourish 192.168.1.27,
+#       guessit-bot 192.168.1.116, Grocy/HA 192.168.1.61
+
+command_line:
+  - binary_sensor:
+      name: "Homelab n8n"
+      unique_id: homelab_n8n
+      device_class: connectivity
+      scan_interval: 120
+      command: >-
+        curl -sf --max-time 5 http://192.168.1.24:5678/ >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
+      name: "Homelab nourish API"
+      unique_id: homelab_nourish_api
+      device_class: connectivity
+      scan_interval: 120
+      command: >-
+        curl -sf --max-time 5 http://192.168.1.27:8787/health >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
+      name: "Homelab Grocy"
+      unique_id: homelab_grocy
+      device_class: connectivity
+      scan_interval: 300
+      command: >-
+        curl -sf --max-time 5 http://192.168.1.61:9192/ >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
+      name: "Homelab cloudflare tunnel"
+      unique_id: homelab_cloudflare_tunnel
+      device_class: connectivity
+      scan_interval: 180
+      command: >-
+        ping -c 1 -W 2 192.168.1.4 >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
+      name: "Homelab GuessIt bot"
+      unique_id: homelab_guessit_bot
+      device_class: connectivity
+      scan_interval: 180
+      command: >-
+        curl -sf --max-time 5 http://192.168.1.116:8090/health >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
+      name: "Homelab Proxmox host"
+      unique_id: homelab_proxmox_host
+      device_class: connectivity
+      scan_interval: 300
+      command: >-
+        ping -c 1 -W 2 192.168.1.3 >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+template:
+  - binary_sensor:
+      - name: "Homelab critical services OK"
+        unique_id: homelab_critical_services_ok
+        device_class: connectivity
+        state: >
+          {{ is_state('binary_sensor.homelab_n8n', 'on')
+             and is_state('binary_sensor.homelab_nourish_api', 'on')
+             and is_state('binary_sensor.homelab_grocy', 'on')
+             and is_state('binary_sensor.homelab_cloudflare_tunnel', 'on')
+             and is_state('binary_sensor.homelab_proxmox_host', 'on') }}

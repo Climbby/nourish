@@ -1,0 +1,42 @@
+# Key Proxmox CT reachability via ping. Optional full Proxmox VE integration: see docs/homelab-monitoring.md
+
+command_line:
+  - binary_sensor:
+      name: "Homelab CT105 cloudflare"
+      unique_id: homelab_ct105_cloudflare
+      device_class: connectivity
+      scan_interval: 300
+      command: >-
+        ping -c 1 -W 2 192.168.1.4 >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
+      name: "Homelab CT114 n8n"
+      unique_id: homelab_ct114_n8n
+      device_class: connectivity
+      scan_interval: 300
+      command: >-
+        ping -c 1 -W 2 192.168.1.24 >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
+      name: "Homelab CT117 nourish"
+      unique_id: homelab_ct117_nourish
+      device_class: connectivity
+      scan_interval: 300
+      command: >-
+        ping -c 1 -W 2 192.168.1.27 >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
+      name: "Homelab CT120 guessit-bot"
+      unique_id: homelab_ct120_guessit_bot
+      device_class: connectivity
+      scan_interval: 300
+      command: >-
+        ping -c 1 -W 2 192.168.1.116 >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"

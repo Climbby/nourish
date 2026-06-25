@@ -146,8 +146,10 @@ function computeMetrics(events) {
   }
 
   const daysUntilShop = configuredDaysUntilShop()
-  const suggested =
-    avgDaysBetween != null && avgDaysBetween > 0 ? avgDaysBetween : daysUntilShop
+  const     suggested =
+      avgDaysBetween != null && avgDaysBetween > 0
+        ? Math.max(1, Math.min(21, Math.round(avgDaysBetween * 10) / 10))
+        : daysUntilShop
 
   return {
     days_until_shop: daysUntilShop,
@@ -196,6 +198,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
+      return send(200, { ok: true, service: 'nourish-check' })
+    }
+
     if (req.method === 'GET' && req.url === '/metrics') {
       const events = loadEvents(90)
       return send(200, computeMetrics(events))

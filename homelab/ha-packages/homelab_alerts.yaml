@@ -1,0 +1,55 @@
+# Notify via ntfy (notify.presence) when homelab services stay offline.
+
+automation:
+  - id: homelab_service_down_alert
+    alias: "Homelab — serviço em baixo"
+    description: Alerta se um serviço crítico ficar offline >3 min
+    mode: queued
+    max: 10
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.homelab_n8n
+          - binary_sensor.homelab_nourish_api
+          - binary_sensor.homelab_grocy
+          - binary_sensor.homelab_cloudflare_tunnel
+          - binary_sensor.homelab_guessit_bot
+          - binary_sensor.homelab_proxmox_host
+        to: "off"
+        for:
+          minutes: 3
+    action:
+      - action: notify.send_message
+        target:
+          entity_id: notify.presence
+        data:
+          title: "Homelab — serviço em baixo"
+          message: >
+            {{ state_attr(trigger.entity_id, 'friendly_name') | default(trigger.entity_id) }}
+            offline há 3+ minutos.
+
+  - id: homelab_service_recovered_alert
+    alias: "Homelab — serviço recuperado"
+    description: Aviso breve quando um serviço volta online
+    mode: queued
+    max: 10
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.homelab_n8n
+          - binary_sensor.homelab_nourish_api
+          - binary_sensor.homelab_grocy
+          - binary_sensor.homelab_cloudflare_tunnel
+          - binary_sensor.homelab_guessit_bot
+          - binary_sensor.homelab_proxmox_host
+        from: "off"
+        to: "on"
+    action:
+      - action: notify.send_message
+        target:
+          entity_id: notify.presence
+        data:
+          title: "Homelab — recuperado"
+          message: >
+            {{ state_attr(trigger.entity_id, 'friendly_name') | default(trigger.entity_id) }}
+            voltou online.

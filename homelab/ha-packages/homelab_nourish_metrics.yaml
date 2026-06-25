@@ -1,0 +1,77 @@
+# Nourish visit metrics + fuel prices from CT117. Auto-syncs input_number.nourish_days_until_shop.
+
+rest:
+  - resource: http://192.168.1.27:8787/metrics
+    scan_interval: 1800
+    timeout: 15
+    sensor:
+      - name: "Nourish suggested days until shop"
+        unique_id: nourish_suggested_days_until_shop
+        value_template: "{{ value_json.suggested_days_until_shop | float(4) }}"
+        unit_of_measurement: days
+        icon: mdi:cart-outline
+        json_attributes:
+          - avg_days_between_shops
+          - supermarket_visits_week
+          - supermarket_visits_month
+          - days_until_shop
+
+  - resource: http://192.168.1.27:8787/fuel-prices
+    scan_interval: 43200
+    timeout: 30
+    sensor:
+      - name: "Fuel diesel median PT"
+        unique_id: fuel_diesel_median_pt
+        value_template: "{{ value_json.diesel_eur_per_l | float(0) }}"
+        unit_of_measurement: EUR/L
+        icon: mdi:gas-station
+        json_attributes:
+          - gasoline_eur_per_l
+          - gpl_eur_per_l
+          - updated_at
+          - source
+
+automation:
+  - id: nourish_sync_days_until_shop
+    alias: "Nourish — sincronizar dias ate supermercado"
+    description: Atualiza helper a partir do intervalo mediano de visitas
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: sensor.nourish_suggested_days_until_shop
+      - platform: time
+        at: "06:00:00"
+    condition:
+      - condition: template
+        value_template: >
+          {{ states('sensor.nourish_suggested_days_until_shop') | float(0) >= 1
+             and states('sensor.nourish_suggested_days_until_shop') | float(0) <= 21 }}
+    action:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.nourish_days_until_shop
+        data:
+          value: "{{ states('sensor.nourish_suggested_days_until_shop') | float }}"
+
+  - id: nourish_sync_days_after_supermarket
+    alias: "Nourish — atualizar dias apos visita ao super"
+    description: Re-sincroniza helper 2 min depois de sair do supermercado
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: zone
+        entity_id: person.francisco_fernandes
+        zone: zone.auchan
+        event: leave
+    action:
+      - delay:
+          minutes: 2
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.nourish_suggested_days_until_shop
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.nourish_days_until_shop
+        data:
+          value: "{{ states('sensor.nourish_suggested_days_until_shop') | float(4) }}"

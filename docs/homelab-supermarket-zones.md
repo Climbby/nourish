@@ -36,7 +36,7 @@ This package therefore:
 
    - `sensor.francisco_fernandes_geocoded_location` — your person's geocoded sensor
    - `person.francisco_fernandes` — your person entity
-   - `notify.mobile_app_telemovel_francisco` — your mobile app notify service
+   - `notify.mobile_app_francisco` — your mobile app notify service
 
 3. Reload automations / restart HA.
 
