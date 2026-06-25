@@ -12,6 +12,7 @@ import {
   mealMatchesVerificationFilters,
   type VerificationFilterKey,
 } from '../utils/mealVerificationFilter'
+import { MEAL_SORT_OPTIONS, sortRecipes } from '../utils/mealSort'
 import { DespensaSection } from './Despensa'
 
 type Filter = 'completa' | 'ligeira' | 'despensa'
@@ -89,6 +90,14 @@ function FilterIcon() {
   )
 }
 
+function SortIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4" />
+    </svg>
+  )
+}
+
 const VERIFICATION_FILTERS: { key: VerificationFilterKey; label: string }[] = [
   { key: 'preco', label: 'Preço verificado' },
   { key: 'nutricao', label: 'Nutrição verificada' },
@@ -98,7 +107,7 @@ const VERIFICATION_FILTERS: { key: VerificationFilterKey; label: string }[] = [
 export function Home() {
   const navigate = useNavigate()
   const { favourites } = useFavourites()
-  const { prefs } = useDisplayPrefs()
+  const { prefs, updatePref } = useDisplayPrefs()
   const [recipes, setRecipes] = useState<Recipe[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -109,9 +118,11 @@ export function Home() {
   const [migrating, setMigrating] = useState(false)
   const [migrateProgress, setMigrateProgress] = useState<{ done: number; total: number } | null>(null)
   const [showVerificationFilters, setShowVerificationFilters] = useState(false)
+  const [showSortMenu, setShowSortMenu] = useState(false)
   const [verificationFilters, setVerificationFilters] = useState<Set<VerificationFilterKey>>(new Set())
   const [favouritesOnly, setFavouritesOnly] = useState(false)
   const filterRef = useRef<HTMLDivElement>(null)
+  const sortRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!showVerificationFilters) return
@@ -123,6 +134,17 @@ export function Home() {
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [showVerificationFilters])
+
+  useEffect(() => {
+    if (!showSortMenu) return
+    function onPointerDown(e: PointerEvent) {
+      if (sortRef.current && !sortRef.current.contains(e.target as Node)) {
+        setShowSortMenu(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [showSortMenu])
 
   function toggleVerificationFilter(key: VerificationFilterKey) {
     setVerificationFilters((prev) => {
@@ -174,8 +196,8 @@ export function Home() {
 
   const isDespensa = activeFilter === 'despensa'
 
-  const filtered = recipes
-    .filter((r) => {
+  const filtered = useMemo(() => {
+    const list = recipes.filter((r) => {
       if (query && !r.name.toLowerCase().includes(query.toLowerCase())) return false
       if (favouritesOnly && !favourites.has(r.id)) return false
       const parsed = parsedById.get(r.id)!
@@ -184,11 +206,8 @@ export function Home() {
       if (!mealMatchesVerificationFilters(parsed, verificationFilters)) return false
       return activeFilter === 'completa' || activeFilter === 'ligeira'
     })
-    .sort((a, b) => {
-      const aPortions = parsedById.get(a.id)!.portions ?? 0
-      const bPortions = parsedById.get(b.id)!.portions ?? 0
-      return (bPortions > 0 ? 1 : 0) - (aPortions > 0 ? 1 : 0)
-    })
+    return sortRecipes(list, parsedById, prefs.mealSort)
+  }, [recipes, query, favouritesOnly, favourites, parsedById, activeFilter, verificationFilters, prefs.mealSort])
 
   return (
     <div className="min-h-screen bg-nourish-bg">
@@ -260,66 +279,113 @@ export function Home() {
             ))}
           </div>
           {!isDespensa && (
-            <div className="relative flex-shrink-0" ref={filterRef}>
-              <button
-                type="button"
-                onClick={() => setShowVerificationFilters((v) => !v)}
-                className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                  verificationFilters.size > 0 || favouritesOnly
-                    ? 'bg-nourish-primary/15 border-nourish-primary/40 text-nourish-primary'
-                    : 'bg-nourish-surface-high border-nourish-border text-nourish-text-dim'
-                }`}
-                aria-label="Filtros de verificação"
-                aria-expanded={showVerificationFilters}
-              >
-                <FilterIcon />
-              </button>
-              {showVerificationFilters && (
-                <div className="absolute right-0 top-full mt-2 z-20 w-52 rounded-xl border border-nourish-border bg-nourish-surface shadow-lg p-2 space-y-1">
-                  <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
-                    Filtros
-                  </p>
-                  <label className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high">
-                    <input
-                      type="checkbox"
-                      checked={favouritesOnly}
-                      onChange={() => setFavouritesOnly((v) => !v)}
-                      className="rounded border-nourish-border"
-                    />
-                    <HeartIcon filled={favouritesOnly} />
-                    Favoritos
-                  </label>
-                  <p className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
-                    Verificação
-                  </p>
-                  {VERIFICATION_FILTERS.map(({ key, label }) => (
-                    <label
-                      key={key}
-                      className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high"
-                    >
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <div className="relative" ref={sortRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSortMenu((v) => !v)
+                    setShowVerificationFilters(false)
+                  }}
+                  className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                    prefs.mealSort !== 'recent'
+                      ? 'bg-nourish-primary/15 border-nourish-primary/40 text-nourish-primary'
+                      : 'bg-nourish-surface-high border-nourish-border text-nourish-text-dim'
+                  }`}
+                  aria-label="Ordenar refeições"
+                  aria-expanded={showSortMenu}
+                >
+                  <SortIcon />
+                </button>
+                {showSortMenu && (
+                  <div className="absolute right-0 top-full mt-2 z-20 w-48 rounded-xl border border-nourish-border bg-nourish-surface shadow-lg p-2 space-y-0.5">
+                    <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
+                      Ordenar
+                    </p>
+                    {MEAL_SORT_OPTIONS.map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          updatePref('mealSort', key)
+                          setShowSortMenu(false)
+                        }}
+                        className={`w-full text-left px-2 py-2 rounded-lg text-sm transition-colors focus:outline-none ${
+                          prefs.mealSort === key
+                            ? 'bg-nourish-primary/15 text-nourish-primary font-semibold'
+                            : 'text-nourish-text active:bg-nourish-surface-high'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="relative" ref={filterRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowVerificationFilters((v) => !v)
+                    setShowSortMenu(false)
+                  }}
+                  className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                    verificationFilters.size > 0 || favouritesOnly
+                      ? 'bg-nourish-primary/15 border-nourish-primary/40 text-nourish-primary'
+                      : 'bg-nourish-surface-high border-nourish-border text-nourish-text-dim'
+                  }`}
+                  aria-label="Filtros de verificação"
+                  aria-expanded={showVerificationFilters}
+                >
+                  <FilterIcon />
+                </button>
+                {showVerificationFilters && (
+                  <div className="absolute right-0 top-full mt-2 z-20 w-52 rounded-xl border border-nourish-border bg-nourish-surface shadow-lg p-2 space-y-1">
+                    <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
+                      Filtros
+                    </p>
+                    <label className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high">
                       <input
                         type="checkbox"
-                        checked={verificationFilters.has(key)}
-                        onChange={() => toggleVerificationFilter(key)}
+                        checked={favouritesOnly}
+                        onChange={() => setFavouritesOnly((v) => !v)}
                         className="rounded border-nourish-border"
                       />
-                      {label}
+                      <HeartIcon filled={favouritesOnly} />
+                      Favoritos
                     </label>
-                  ))}
-                  {(verificationFilters.size > 0 || favouritesOnly) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setVerificationFilters(new Set())
-                        setFavouritesOnly(false)
-                      }}
-                      className="w-full px-2 py-1.5 text-xs text-nourish-text-dim underline"
-                    >
-                      Limpar filtros
-                    </button>
-                  )}
-                </div>
-              )}
+                    <p className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
+                      Verificação
+                    </p>
+                    {VERIFICATION_FILTERS.map(({ key, label }) => (
+                      <label
+                        key={key}
+                        className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={verificationFilters.has(key)}
+                          onChange={() => toggleVerificationFilter(key)}
+                          className="rounded border-nourish-border"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                    {(verificationFilters.size > 0 || favouritesOnly) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVerificationFilters(new Set())
+                          setFavouritesOnly(false)
+                        }}
+                        className="w-full px-2 py-1.5 text-xs text-nourish-text-dim underline"
+                      >
+                        Limpar filtros
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -63,6 +63,61 @@ function parseJsonContent(content: string): unknown {
   return JSON.parse(jsonStr)
 }
 
+/**
+ * Low-level vision call: sends a system prompt + text + image and parses the
+ * model's JSON reply. Shared by receipt extraction and other vision features.
+ */
+export async function requestVisionJson(
+  systemPrompt: string,
+  userText: string,
+  imageDataUrl: string,
+  maxTokens = 1536,
+  timeoutMs = 90_000
+): Promise<unknown> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch(AI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: userText },
+              { type: 'image_url', image_url: { url: imageDataUrl } },
+            ],
+          },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.1,
+      }),
+    })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw aiRequestError(res.status, text)
+    }
+
+    const data = await res.json()
+    const content = data.choices?.[0]?.message?.content
+    if (!content) throw new Error('Resposta vazia da IA')
+    return parseJsonContent(content)
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') {
+      throw new Error('A IA demorou demasiado. Tenta de novo ou desactiva a leitura inteligente.')
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function stripQuantity(name: string): string {
   return name
     .replace(/^\s*\d+[\s.,]?\d*\s*(g|kg|ml|l|cl|unid(?:ade)?s?|colh(?:eres?)?\s*(?:de\s*)?(sopa|chá|café)?|xícaras?|chávenas?|dentes?|folhas?|ramos?|fatias?|pedaços?|pequeno|média|grande|maior|menor)\s*/i, '')

@@ -1,13 +1,17 @@
 import { useCallback, useState } from 'react'
+import type { MealSortMode } from '../utils/mealSort'
+import { DEFAULT_MEAL_SORT } from '../utils/mealSort'
 
 const STORAGE_KEY = 'nourish-display-prefs'
 
 export interface DisplayPrefs {
   showMealPortions: boolean
+  mealSort: MealSortMode
 }
 
 export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   showMealPortions: true,
+  mealSort: DEFAULT_MEAL_SORT,
 }
 
 function load(): DisplayPrefs {

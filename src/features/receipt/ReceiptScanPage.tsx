@@ -6,12 +6,20 @@ import { Spinner } from '../../components/Spinner'
 import type { Product } from '../../types/grocy'
 import { getBuyAmountFromDesc } from '../../utils/despensaAnalytics'
 import { linkReceiptToVisit } from '../../utils/visitReceipts'
+import { autoLinkCarToVisit } from '../../utils/autoLinkCar'
+import { inferDefaultCarId } from '../../utils/defaultCar'
 import { buildReviewLines } from './buildReviewLines'
 import { commitReceiptLines, type CommitResult } from './commitReceipt'
 import { parseReceipt } from './parsers'
+import { extractReceiptVision } from './extractReceiptVision'
+import { matchVisitForReceipt } from './matchVisit'
+import { fetchSupermarketVisits, type SupermarketVisit } from '../../api/homelabMetrics'
 import { rankProductMatches } from './matchProduct'
 import { useReceiptOcr } from './useReceiptOcr'
-import type { ReceiptStore, ReviewLine } from './types'
+import { useFuelPrices } from '../../hooks/useFuelPrices'
+import { fetchCars } from '../../hooks/useCars'
+import { fetchVisitCars } from '../../utils/visitCars'
+import type { ReceiptLine, ReceiptStore, ReviewLine } from './types'
 
 const { despensaGroupId: DESPENSA_GROUP_ID } = grocyConfig
 
@@ -25,6 +33,27 @@ const STORE_OPTIONS: { value: ReceiptStore; label: string }[] = [
   { value: 'continente', label: 'Continente' },
   { value: 'auchan', label: 'Auchan' },
 ]
+
+const STORE_LABELS: Record<ReceiptStore, string> = {
+  mixed: 'Misto',
+  continente: 'Continente',
+  auchan: 'Auchan',
+}
+
+function zoneLabel(zone?: string): string {
+  if (!zone) return 'supermercado'
+  const s = zone.replace(/^zone\./, '')
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+function visitTimeLabel(iso: string): string {
+  return new Date(iso).toLocaleString('pt-PT', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 function BackIcon() {
   return (
@@ -41,9 +70,15 @@ export function ReceiptScanPage() {
   const cameraRef = useRef<HTMLInputElement>(null)
   const galleryRef = useRef<HTMLInputElement>(null)
   const { recognize, progress, running, error: ocrError } = useReceiptOcr()
+  const { priceForCar } = useFuelPrices()
 
   const [step, setStep] = useState<Step>('capture')
   const [store, setStore] = useState<ReceiptStore>('mixed')
+  const [detectedStore, setDetectedStore] = useState<ReceiptStore | null>(null)
+  const [useVision, setUseVision] = useState(true)
+  const [visitMatchBusy, setVisitMatchBusy] = useState(false)
+  const [autoVisit, setAutoVisit] = useState<SupermarketVisit | null>(null)
+  const [autoLink, setAutoLink] = useState(true)
   const [preview, setPreview] = useState<string | null>(null)
   const [ocrText, setOcrText] = useState('')
   const [products, setProducts] = useState<Product[]>([])
@@ -69,6 +104,21 @@ export function ReceiptScanPage() {
 
   useEffect(() => () => revokePreview(), [revokePreview])
 
+  const matchVisitInBackground = useCallback(
+    async (purchasedAt: string, receiptStore: ReceiptStore | 'other' | null) => {
+      setVisitMatchBusy(true)
+      try {
+        const visits = await fetchSupermarketVisits(21)
+        const match = visits ? matchVisitForReceipt(purchasedAt, receiptStore, visits) : null
+        setAutoVisit(match)
+        setAutoLink(!!match)
+      } finally {
+        setVisitMatchBusy(false)
+      }
+    },
+    []
+  )
+
   async function handleImage(file: File) {
     revokePreview()
     const url = URL.createObjectURL(file)
@@ -77,11 +127,31 @@ export function ReceiptScanPage() {
     setStep('ocr')
 
     try {
-      const text = await recognize(url)
-      setOcrText(text)
-      const parsed = parseReceipt(text, store)
+      let parsed: ReceiptLine[]
+      let visionResult: Awaited<ReturnType<typeof extractReceiptVision>> | null = null
+      if (useVision) {
+        visionResult = await extractReceiptVision(file)
+        parsed = visionResult.lines
+        setOcrText(JSON.stringify(visionResult, null, 2))
+        if (visionResult.store === 'auchan' || visionResult.store === 'continente') {
+          setStore(visionResult.store)
+          setDetectedStore(visionResult.store)
+        } else {
+          setDetectedStore(null)
+        }
+        if (visionResult.purchasedDate) setPurchasedDate(visionResult.purchasedDate)
+      } else {
+        setDetectedStore(null)
+        const text = await recognize(url)
+        setOcrText(text)
+        parsed = parseReceipt(text, store)
+      }
       if (parsed.length === 0) {
-        setError('Nenhuma linha encontrada. Tenta outro ângulo ou escolhe a loja correta.')
+        setError(
+          useVision
+            ? 'Não consegui ler linhas. Tenta outra foto (de cima, fundo escuro, boa luz).'
+            : 'Nenhuma linha encontrada. Tenta outro ângulo ou escolhe a loja correta.'
+        )
         setStep('capture')
         return
       }
@@ -92,7 +162,12 @@ export function ReceiptScanPage() {
       }
       setReviewLines(buildReviewLines(parsed, prodList))
       setStep('review')
-    } catch {
+
+      if (visionResult?.purchasedAt && !visitEnteredAt) {
+        void matchVisitInBackground(visionResult.purchasedAt, visionResult.store)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao ler o talão')
       setStep('capture')
     }
   }
@@ -129,17 +204,30 @@ export function ReceiptScanPage() {
     setError(null)
     try {
       const result = await commitReceiptLines(reviewLines, purchasedDate, rememberAliases)
-      if (visitEnteredAt) {
+      const linkVisitEnteredAt = visitEnteredAt ?? (autoLink && autoVisit ? autoVisit.entered_at : null)
+      if (linkVisitEnteredAt) {
         const included = reviewLines.filter((l) => l.included && l.productId != null)
         const totalEur = included.reduce((sum, l) => sum + (l.price > 0 ? l.price : 0), 0)
         await linkReceiptToVisit({
-          visit_entered_at: visitEnteredAt,
+          visit_entered_at: linkVisitEnteredAt,
           purchased_date: purchasedDate,
           item_count: result.succeeded.length,
           total_eur: Math.round(totalEur * 100) / 100,
           store,
           linked_at: new Date().toISOString(),
         })
+        const cars = await fetchCars()
+        const visitCars = await fetchVisitCars()
+        const defaultCarId = inferDefaultCarId(cars, visitCars)
+        const defaultCar = defaultCarId ? cars.find((c) => c.id === defaultCarId) : undefined
+        if (defaultCar) {
+          await autoLinkCarToVisit(linkVisitEnteredAt, {
+            zone: autoVisit?.zone,
+            cars,
+            visitCars,
+            fuelPricePerL: priceForCar(defaultCar),
+          })
+        }
       }
       setCommitResult(result)
       setStep('done')
@@ -156,6 +244,9 @@ export function ReceiptScanPage() {
     setOcrText('')
     setReviewLines([])
     setCommitResult(null)
+    setAutoVisit(null)
+    setDetectedStore(null)
+    setVisitMatchBusy(false)
     setStep('capture')
     setError(null)
   }
@@ -186,24 +277,43 @@ export function ReceiptScanPage() {
         {step === 'capture' && (
           <>
             <p className="text-sm text-nourish-text-dim">
-              Fotografa o talão. O texto é lido no telemóvel — a imagem não sai do dispositivo.
-              Na primeira vez pode descarregar dados de idioma português.
+              {useVision
+                ? 'Fotografa o talão. A foto é enviada de forma segura para leitura automática.'
+                : 'Fotografa o talão. O texto é lido no telemóvel — a imagem não sai do dispositivo. Na primeira vez pode descarregar dados de idioma português.'}
             </p>
 
-            <div>
-              <label className="block text-sm font-medium text-nourish-text-dim mb-1.5">Loja</label>
-              <select
-                value={store}
-                onChange={(e) => setStore(e.target.value as ReceiptStore)}
-                className={inputClass}
-              >
-                {STORE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <ul className="text-xs text-nourish-text-dim list-disc pl-4 space-y-0.5">
+              <li>Tira a foto a direito, de cima (não de lado).</li>
+              <li>Fundo escuro e mate, boa luz, sem sombras nem brilhos.</li>
+              <li>Enche o ecrã com o talão e toca para focar.</li>
+            </ul>
+
+            <label className="flex items-center gap-2 text-sm text-nourish-text-dim">
+              <input
+                type="checkbox"
+                checked={useVision}
+                onChange={(e) => setUseVision(e.target.checked)}
+                className="rounded border-nourish-border"
+              />
+              Leitura inteligente (envia a foto para o servidor)
+            </label>
+
+            {!useVision && (
+              <div>
+                <label className="block text-sm font-medium text-nourish-text-dim mb-1.5">Loja</label>
+                <select
+                  value={store}
+                  onChange={(e) => setStore(e.target.value as ReceiptStore)}
+                  className={inputClass}
+                >
+                  {STORE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {preview && (
               <img src={preview} alt="Pré-visualização do talão" className="w-full rounded-xl border border-nourish-border" />
@@ -247,7 +357,11 @@ export function ReceiptScanPage() {
         {step === 'ocr' && (
           <div className="flex flex-col items-center gap-4 pt-8">
             <Spinner />
-            <p className="text-sm text-nourish-text-dim">A ler talão… {progress}%</p>
+            <p className="text-sm text-nourish-text-dim text-center">
+              {useVision
+                ? 'A analisar o talão com IA… pode demorar até um minuto.'
+                : `A ler talão… ${progress}%`}
+            </p>
             {(ocrError || error) && (
               <p className="text-red-400 text-sm text-center">{ocrError ?? error}</p>
             )}
@@ -256,6 +370,28 @@ export function ReceiptScanPage() {
 
         {step === 'review' && (
           <>
+            {detectedStore && (
+              <p className="text-xs text-nourish-text-dim">
+                Loja detectada: <span className="text-nourish-text font-medium">{STORE_LABELS[detectedStore]}</span>
+              </p>
+            )}
+
+            {!visitEnteredAt && visitMatchBusy && (
+              <p className="text-xs text-nourish-text-dim">A procurar ida no historial…</p>
+            )}
+
+            {!visitEnteredAt && autoVisit && (
+              <label className="flex items-center gap-2 text-sm text-nourish-text rounded-xl bg-nourish-primary/10 border border-nourish-primary/30 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={autoLink}
+                  onChange={(e) => setAutoLink(e.target.checked)}
+                  className="rounded border-nourish-border"
+                />
+                Associar à ida: {zoneLabel(autoVisit.zone)} · {visitTimeLabel(autoVisit.entered_at)}
+              </label>
+            )}
+
             <div className="flex items-center gap-3">
               <label className="text-sm text-nourish-text-dim shrink-0">Data</label>
               <input

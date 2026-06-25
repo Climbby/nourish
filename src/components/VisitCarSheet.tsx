@@ -5,7 +5,9 @@ import type { Car } from '../hooks/useCars'
 import type { SupermarketVisit } from '../utils/supermarketVisits'
 import type { VisitCarLink } from '../utils/visitCars'
 import { linkCarToVisit, unlinkCarFromVisit } from '../utils/visitCars'
+import { inferDefaultCarId } from '../utils/defaultCar'
 import { fetchTripDistance } from '../utils/tripDistance'
+import { fetchVisitCars } from '../utils/visitCars'
 
 interface Props {
   visit: SupermarketVisit
@@ -17,9 +19,20 @@ interface Props {
 
 export function VisitCarSheet({ visit, cars, currentLink, onClose, onSaved }: Props) {
   const { priceForCar } = useFuelPrices()
-  const [selectedId, setSelectedId] = useState(currentLink?.car_id ?? '')
+  const [selectedId, setSelectedId] = useState('')
   const [saving, setSaving] = useState(false)
   const [tripKm, setTripKm] = useState<number | null>(visit.trip_distance_km ?? null)
+
+  useEffect(() => {
+    if (currentLink?.car_id) {
+      setSelectedId(currentLink.car_id)
+      return
+    }
+    void fetchVisitCars().then((links) => {
+      const inferred = inferDefaultCarId(cars, links)
+      if (inferred) setSelectedId(inferred)
+    })
+  }, [currentLink?.car_id, cars])
 
   useEffect(() => {
     if (visit.trip_distance_km != null) {

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { PriceHistoryPoint, Product, StockLogEntry } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
+import { PhotoField } from '../components/PhotoField'
 import { PriceHistoryChart } from '../components/PriceHistoryChart'
 import { NumericInput } from '../components/NumericInput'
 import { VerifiedBadge, VerifyCheckbox } from '../components/VerifiedBadge'
@@ -43,6 +44,8 @@ function TrashIcon() {
 
 const HISTORY_LIMIT = 20
 
+const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
+
 export function ProductDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -55,7 +58,8 @@ export function ProductDetail() {
   const [stockValueTotal, setStockValueTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [imgError, setImgError] = useState(false)
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [editAmount, setEditAmount] = useState(0)
   const [editBuyAmount, setEditBuyAmount] = useState('1')
   const [editUnitPrice, setEditUnitPrice] = useState('')
@@ -97,6 +101,9 @@ export function ProductDetail() {
         const verified = parseVerifiedFields(prod.description)
         setVerifyPrice(verified.has('preco'))
         setVerifyCalories(verified.has('calorias'))
+        if (prod.picture_file_name) {
+          setPhotoPreview(grocy.productPictureUrl(prod.picture_file_name))
+        }
         setLog(sortLog(logEntries))
         setPriceHistory(history)
       })
@@ -159,15 +166,21 @@ export function ProductDetail() {
         verified: buildVerifiedSet(),
       })
       const calories = editCalories.trim() ? parseFloat(editCalories) : null
-      await grocy.updateProduct(numId, {
+      const updates: Record<string, unknown> = {
         description,
         calories: calories != null && !isNaN(calories) ? calories : null,
-      })
+      }
+      if (photoFile) {
+        updates.picture_file_name = await grocy.uploadProductPicture(photoFile, numId)
+      }
+      await grocy.updateProduct(numId, updates)
       setProduct({
         ...product,
         description,
         calories: calories != null && !isNaN(calories) ? calories : null,
+        picture_file_name: (updates.picture_file_name as string | undefined) ?? product.picture_file_name,
       })
+      setPhotoFile(null)
     } catch {
       /* keep form values */
     } finally {
@@ -262,18 +275,15 @@ export function ProductDetail() {
     >
       {header}
 
-      {product.picture_file_name && !imgError && (
-        <div className="relative w-full" style={{ paddingBottom: '75%' }}>
-          <img
-            src={grocy.productPictureUrl(product.picture_file_name)}
-            alt={product.name}
-            className="absolute inset-0 w-full h-full object-cover"
-            onError={() => setImgError(true)}
-          />
-        </div>
-      )}
-
       <div className="px-4 pt-5 space-y-5">
+        <PhotoField
+          preview={photoPreview}
+          onChange={(file, url) => {
+            setPhotoFile(file)
+            setPhotoPreview(url)
+          }}
+          labelClass={labelClass}
+        />
         <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4">
           <div className="flex items-center justify-around">
             <div className="text-center">
