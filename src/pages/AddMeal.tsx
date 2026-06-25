@@ -39,6 +39,7 @@ export function AddMeal() {
   const rowIdRef = useRef(1)
 
   const typeParam = searchParams.get('type') ?? ''
+  const autoCamera = searchParams.get('camera') === '1'
   const isDespensa = typeParam === 'despensa'
 
   const [photoFile, setPhotoFile] = useState<File | null>(null)
@@ -268,6 +269,7 @@ export function AddMeal() {
           preview={photoPreview}
           onChange={(file, url) => { setPhotoFile(file); setPhotoPreview(url) }}
           labelClass={labelClass}
+          autoOpenCamera={autoCamera}
         />
 
         {/* Name */}

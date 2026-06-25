@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useAutoOpenCamera } from '../utils/useAutoOpenCamera'
 import { ImageCropper } from './ImageCropper'
 
 function BigCameraIcon() {
@@ -31,13 +32,17 @@ interface Props {
   preview: string | null
   onChange: (file: File, previewUrl: string) => void
   labelClass: string
+  /** Open the rear camera immediately (PWA shortcut / deep link). */
+  autoOpenCamera?: boolean
 }
 
-export function PhotoField({ preview, onChange, labelClass }: Props) {
+export function PhotoField({ preview, onChange, labelClass, autoOpenCamera = false }: Props) {
   const galleryRef = useRef<HTMLInputElement>(null)
   const cameraRef = useRef<HTMLInputElement>(null)
   const [showSheet, setShowSheet] = useState(false)
   const [cropSrc, setCropSrc] = useState<string | null>(null)
+
+  useAutoOpenCamera(autoOpenCamera && !preview, cameraRef)
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]

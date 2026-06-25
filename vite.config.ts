@@ -36,6 +36,22 @@ export default defineConfig(({ mode }) => {
             { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
             { src: 'maskable-icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
           ],
+          shortcuts: [
+            {
+              name: 'Escanear talão',
+              short_name: 'Talão',
+              description: 'Fotografar talão de compra',
+              url: '/receipt?camera=1',
+              icons: [{ src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+            },
+            {
+              name: 'Nova refeição completa',
+              short_name: 'Refeição',
+              description: 'Fotografar refeição para registar',
+              url: '/add?type=completa&camera=1',
+              icons: [{ src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+            },
+          ],
         },
         workbox: {
           navigateFallbackDenylist: [/^\/api/, /^\/ai/, /^\/cdn-cgi\//],

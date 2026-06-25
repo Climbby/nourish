@@ -19,6 +19,7 @@ import { useReceiptOcr } from './useReceiptOcr'
 import { useFuelPrices } from '../../hooks/useFuelPrices'
 import { fetchCars } from '../../hooks/useCars'
 import { fetchVisitCars } from '../../utils/visitCars'
+import { useAutoOpenCamera } from '../../utils/useAutoOpenCamera'
 import type { ReceiptLine, ReceiptStore, ReviewLine } from './types'
 
 const { despensaGroupId: DESPENSA_GROUP_ID } = grocyConfig
@@ -67,6 +68,7 @@ export function ReceiptScanPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const visitEnteredAt = searchParams.get('visit')
+  const autoCamera = searchParams.get('camera') === '1'
   const cameraRef = useRef<HTMLInputElement>(null)
   const galleryRef = useRef<HTMLInputElement>(null)
   const { recognize, progress, running, error: ocrError } = useReceiptOcr()
@@ -103,6 +105,8 @@ export function ReceiptScanPage() {
   }, [preview])
 
   useEffect(() => () => revokePreview(), [revokePreview])
+
+  useAutoOpenCamera(autoCamera, cameraRef, step === 'capture' && !preview)
 
   const matchVisitInBackground = useCallback(
     async (purchasedAt: string, receiptStore: ReceiptStore | 'other' | null) => {
