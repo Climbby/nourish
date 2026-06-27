@@ -4,6 +4,9 @@ import { grocy } from '../api/grocy'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { BottomNav } from '../components/BottomNav'
 import { CarModelInput } from '../components/CarModelInput'
+import { MealSpendSheet } from '../components/MealSpendSheet'
+import { VisitFuelTripsSheet } from '../components/VisitFuelTripsSheet'
+import { VisitShoppingTripsSheet } from '../components/VisitShoppingTripsSheet'
 import { NumericInput } from '../components/NumericInput'
 import { Spinner } from '../components/Spinner'
 import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
@@ -11,7 +14,7 @@ import { useCars, type Car } from '../hooks/useCars'
 import { useFuelPrices } from '../hooks/useFuelPrices'
 import { useNutritionTargets, DEFAULT_TARGETS } from '../hooks/useNutritionTargets'
 import type { FuelType } from '../utils/fuelPrices'
-import { FUEL_TYPE_OPTIONS } from '../utils/fuelPrices'
+import { FUEL_TYPE_OPTIONS, formatFuelPricesUpdatedAt } from '../utils/fuelPrices'
 import {
   fetchSupermarkets,
   removeTracked,
@@ -21,6 +24,7 @@ import {
 import { useUserProfile, DEFAULT_USER_PROFILE } from '../hooks/useUserProfile'
 import {
   aggregateMealStats,
+  buildMealSpendRows,
   filterMealPlanByPeriod,
   getPeriodMeta,
   macroGaps,
@@ -37,8 +41,21 @@ import {
 import {
   defaultDaysUntilShop,
   fetchHomelabMetrics,
+  fetchSupermarketVisits,
+  hasShopIntervalMedian,
+  shopIntervalDays,
   type HomelabMetrics,
+  type SupermarketVisit,
 } from '../api/homelabMetrics'
+import { fetchVisitCars, type VisitCarLink } from '../utils/visitCars'
+import { fetchVisitReceipts, type VisitReceiptLink } from '../utils/visitReceipts'
+import {
+  aggregateVisitSpend,
+  buildVisitFuelTrips,
+  buildVisitShoppingTrips,
+  filterVisitsByPeriod,
+} from '../utils/visitSpendStats'
+import { supermarketLabelForVisit } from '../utils/visitSupermarketLabel'
 
 const PERIODS: { key: StatsPeriod; short: string }[] = [
   { key: '7d', short: '7 dias' },
@@ -57,6 +74,9 @@ const PROFILE_TABS: { key: ProfileTab; label: string; subtitle: string }[] = [
 
 const inputClass =
   'w-full px-3 py-2 bg-nourish-surface border border-nourish-border rounded-xl text-nourish-text text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary'
+
+const spendCardClass =
+  'text-left bg-nourish-surface border border-nourish-border rounded-2xl p-4 transition-colors hover:border-nourish-primary/40 focus:outline-none focus:ring-2 focus:ring-nourish-primary disabled:opacity-60'
 
 export function Profile() {
   const location = useLocation()
@@ -77,6 +97,13 @@ export function Profile() {
   const [homelabMetrics, setHomelabMetrics] = useState<HomelabMetrics | null>(null)
   const [homelabMetricsError, setHomelabMetricsError] = useState(false)
   const [supermarkets, setSupermarkets] = useState<SupermarketsData | null>(null)
+  const [supermarketVisits, setSupermarketVisits] = useState<SupermarketVisit[]>([])
+  const [visitCars, setVisitCars] = useState<VisitCarLink[]>([])
+  const [visitReceipts, setVisitReceipts] = useState<VisitReceiptLink[]>([])
+  const [visitSpendLoading, setVisitSpendLoading] = useState(true)
+  const [showFuelTripsSheet, setShowFuelTripsSheet] = useState(false)
+  const [showShoppingTripsSheet, setShowShoppingTripsSheet] = useState(false)
+  const [showMealSpendSheet, setShowMealSpendSheet] = useState(false)
 
   const refreshSupermarkets = useCallback(() => {
     void fetchSupermarkets().then(setSupermarkets)
@@ -90,6 +117,18 @@ export function Profile() {
     refreshCars()
     refreshFuel()
     refreshSupermarkets()
+    setVisitSpendLoading(true)
+    Promise.all([
+      fetchSupermarketVisits(90),
+      fetchVisitCars(),
+      fetchVisitReceipts(),
+    ])
+      .then(([visits, carLinks, receipts]) => {
+        setSupermarketVisits(visits ?? [])
+        setVisitCars(carLinks)
+        setVisitReceipts(receipts)
+      })
+      .finally(() => setVisitSpendLoading(false))
   }, [refreshCars, refreshFuel, refreshSupermarkets])
 
   useEffect(() => {
@@ -97,6 +136,9 @@ export function Profile() {
   }, [tab, refreshSupermarkets])
 
   const recommended = useMemo(() => recommendedDailyTargets(profile), [profile])
+  const fuelPricesUpdatedLabel = fuelPrices
+    ? formatFuelPricesUpdatedAt(fuelPrices.updated_at)
+    : null
 
   useEffect(() => {
     let mounted = true
@@ -112,6 +154,8 @@ export function Profile() {
   }, [])
 
   const periodMeta = getPeriodMeta(period)
+  const resumoPeriodLabel =
+    period === 'month' ? periodMeta.label : periodMeta.label.toLowerCase()
   const periodEntries = useMemo(
     () => filterMealPlanByPeriod(mealPlan, period),
     [mealPlan, period]
@@ -133,6 +177,32 @@ export function Profile() {
     [totals, targets, periodMeta.dayCount]
   )
   const surplusKeys = useMemo(() => new Set(surpluses.map((s) => s.key)), [surpluses])
+
+  const carsById = useMemo(() => new Map(cars.map((c) => [c.id, c])), [cars])
+  const visitsInPeriod = useMemo(
+    () => filterVisitsByPeriod(supermarketVisits, period),
+    [supermarketVisits, period]
+  )
+  const visitSpend = useMemo(() => {
+    return aggregateVisitSpend(visitsInPeriod, visitCars, visitReceipts, carsById)
+  }, [visitsInPeriod, visitCars, visitReceipts, carsById])
+  const destinationForVisit = useCallback(
+    (visit: SupermarketVisit) =>
+      supermarketLabelForVisit(visit, supermarkets?.tracked ?? []),
+    [supermarkets?.tracked]
+  )
+  const fuelTrips = useMemo(
+    () => buildVisitFuelTrips(visitsInPeriod, visitCars, carsById, destinationForVisit),
+    [visitsInPeriod, visitCars, carsById, destinationForVisit]
+  )
+  const shoppingTrips = useMemo(
+    () => buildVisitShoppingTrips(visitsInPeriod, visitReceipts, destinationForVisit, visitCars),
+    [visitsInPeriod, visitReceipts, destinationForVisit, visitCars]
+  )
+  const mealSpendRows = useMemo(
+    () => buildMealSpendRows(periodEntries, recipesById),
+    [periodEntries, recipesById]
+  )
 
   const [showCarForm, setShowCarForm] = useState(false)
   const [carDraft, setCarDraft] = useState<Omit<Car, 'id'>>({
@@ -218,26 +288,76 @@ export function Profile() {
 
         {!loading && !error && tab === 'resumo' && (
             <section className="space-y-3">
-              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
-                Resumo · {periodMeta.label.toLowerCase()}
+              <h2 className="text-xs font-semibold text-nourish-primary tracking-wide">
+                Resumo · {resumoPeriodLabel}
               </h2>
 
-              <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowShoppingTripsSheet(true)}
+                  disabled={visitSpendLoading}
+                  className={spendCardClass}
+                >
+                  <p className="text-2xl font-bold text-nourish-text tabular-nums">
+                    €{visitSpend.shoppingEur.toFixed(2)}
+                  </p>
+                  <p className="text-sm text-nourish-text-dim mt-0.5 leading-snug">
+                    Compras no super
+                  </p>
+                  <p className="text-[11px] text-nourish-border mt-1.5 leading-snug">
+                    {visitSpendLoading
+                      ? 'A carregar…'
+                      : visitSpend.visitsInPeriod > 0
+                        ? `${visitSpend.visitsWithReceipt > 0 ? `${visitSpend.visitsWithReceipt} talão${visitSpend.visitsWithReceipt !== 1 ? 's' : ''} · ` : ''}ver detalhes`
+                        : 'Sem idas registadas no período'}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowFuelTripsSheet(true)}
+                  disabled={visitSpendLoading}
+                  className={spendCardClass}
+                >
+                  <p className="text-2xl font-bold text-nourish-text tabular-nums">
+                    €{visitSpend.fuelEur.toFixed(2)}
+                  </p>
+                  <p className="text-sm text-nourish-text-dim mt-0.5 leading-snug">
+                    Viagens (combustível)
+                  </p>
+                  <p className="text-[11px] text-nourish-border mt-1.5 leading-snug">
+                    {visitSpendLoading
+                      ? 'A carregar…'
+                      : visitSpend.visitsWithFuelCost > 0
+                        ? `${visitSpend.visitsWithFuelCost} ida${visitSpend.visitsWithFuelCost !== 1 ? 's' : ''} com viatura · ver detalhes`
+                        : visitSpend.visitsInPeriod > 0
+                          ? `${visitSpend.visitsInPeriod} ida${visitSpend.visitsInPeriod !== 1 ? 's' : ''} · ver detalhes`
+                          : 'Sem idas registadas no período'}
+                  </p>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowMealSpendSheet(true)}
+                disabled={loading}
+                className={`w-full ${spendCardClass}`}
+              >
                 <p className="text-3xl font-bold text-nourish-text tabular-nums">
                   €{totals.spend.toFixed(2)}
                 </p>
                 <p className="text-sm text-nourish-text-dim mt-0.5">
-                  Gasto estimado em refeições registadas
+                  Refeições registadas
                   {totals.mealsLogged > 0 && (
-                    <> · {totals.mealsLogged} registo{totals.mealsLogged !== 1 ? 's' : ''}</>
+                    <> · {totals.mealsLogged} registo{totals.mealsLogged !== 1 ? 's' : ''} · ver detalhes</>
                   )}
                 </p>
-                {totals.mealsLogged === 0 && (
+                {totals.mealsLogged === 0 && !loading && (
                   <p className="text-xs text-nourish-border mt-2">
                     Regista refeições em Historial para ver totais. Só contam refeições com nutrição/preço no cartão.
                   </p>
                 )}
-              </div>
+              </button>
 
               {surpluses.length > 0 && totals.mealsLogged > 0 && (
                 <div className="p-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 space-y-2">
@@ -494,25 +614,33 @@ export function Profile() {
                   Km ida/volta calculados automaticamente (estradas via OSRM, ou coordenadas das zonas HA). Preço do combustível vem da DGEG. Consumo em L/100 km — GPL nos bicombustíveis.
                 </p>
                 {fuelPrices && (
-                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                    <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
-                      <p className="text-nourish-text-dim">Gasóleo</p>
-                      <p className="font-bold text-nourish-primary tabular-nums">
-                        €{fuelPrices.diesel_eur_per_l.toFixed(3)}/L
-                      </p>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                      <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
+                        <p className="text-nourish-text-dim">Gasóleo</p>
+                        <p className="font-bold text-nourish-primary tabular-nums">
+                          €{fuelPrices.diesel_eur_per_l.toFixed(3)}/L
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
+                        <p className="text-nourish-text-dim">Gasolina 95</p>
+                        <p className="font-bold text-nourish-primary tabular-nums">
+                          €{fuelPrices.gasoline_eur_per_l.toFixed(3)}/L
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
+                        <p className="text-nourish-text-dim">GPL</p>
+                        <p className="font-bold text-nourish-primary tabular-nums">
+                          €{fuelPrices.gpl_eur_per_l.toFixed(3)}/L
+                        </p>
+                      </div>
                     </div>
-                    <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
-                      <p className="text-nourish-text-dim">Gasolina 95</p>
-                      <p className="font-bold text-nourish-primary tabular-nums">
-                        €{fuelPrices.gasoline_eur_per_l.toFixed(3)}/L
+                    {fuelPricesUpdatedLabel && (
+                      <p className="text-[11px] text-nourish-text-dim text-center leading-snug">
+                        Actualizado a {fuelPricesUpdatedLabel}
+                        {fuelPrices.source !== 'dgeg' ? ' · estimativa local' : ''}
                       </p>
-                    </div>
-                    <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
-                      <p className="text-nourish-text-dim">GPL</p>
-                      <p className="font-bold text-nourish-primary tabular-nums">
-                        €{fuelPrices.gpl_eur_per_l.toFixed(3)}/L
-                      </p>
-                    </div>
+                    )}
                   </div>
                 )}
                 {cars.length === 0 && !showCarForm && (
@@ -670,9 +798,17 @@ export function Profile() {
               <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4">
                 <div className="text-center mb-4 py-2 rounded-xl bg-nourish-bg border border-nourish-border">
                   <p className="text-3xl font-bold text-nourish-primary tabular-nums">
-                    {homelabMetrics?.days_until_shop ?? defaultDaysUntilShop()}
+                    {hasShopIntervalMedian(homelabMetrics)
+                      ? homelabMetrics!.avg_days_between_shops
+                      : homelabMetrics
+                        ? shopIntervalDays(homelabMetrics)
+                        : defaultDaysUntilShop()}
                   </p>
-                  <p className="text-xs text-nourish-text-dim mt-1">dias até à próxima ida ao super</p>
+                  <p className="text-xs text-nourish-text-dim mt-1">
+                    {hasShopIntervalMedian(homelabMetrics)
+                      ? 'dias entre compras (mediana do historial)'
+                      : 'dias até à próxima ida ao super (estimativa)'}
+                  </p>
                 </div>
                 {homelabMetricsError && (
                   <p className="text-xs text-amber-600/90 mb-3 text-center">
@@ -708,7 +844,8 @@ export function Profile() {
                       </div>
                     </div>
                     <p className="text-xs text-nourish-text-dim mt-3 text-center">
-                      Lista automática ao sair: ~{homelabMetrics.suggested_days_until_shop} dias de despensa
+                      Lista automática ao sair: ~{shopIntervalDays(homelabMetrics)} dias de despensa
+                      {hasShopIntervalMedian(homelabMetrics) ? ' (mediana)' : ''}
                     </p>
                   </>
                 )}
@@ -791,6 +928,33 @@ export function Profile() {
           </>
         )}
       </main>
+
+      {showFuelTripsSheet && (
+        <VisitFuelTripsSheet
+          trips={fuelTrips}
+          periodLabel={resumoPeriodLabel}
+          totalFuelEur={visitSpend.fuelEur}
+          onClose={() => setShowFuelTripsSheet(false)}
+        />
+      )}
+
+      {showShoppingTripsSheet && (
+        <VisitShoppingTripsSheet
+          trips={shoppingTrips}
+          periodLabel={resumoPeriodLabel}
+          totalShoppingEur={visitSpend.shoppingEur}
+          onClose={() => setShowShoppingTripsSheet(false)}
+        />
+      )}
+
+      {showMealSpendSheet && (
+        <MealSpendSheet
+          meals={mealSpendRows}
+          periodLabel={resumoPeriodLabel}
+          totalSpendEur={totals.spend}
+          onClose={() => setShowMealSpendSheet(false)}
+        />
+      )}
 
       <BottomNav />
     </div>

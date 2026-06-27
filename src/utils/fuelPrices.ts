@@ -71,3 +71,20 @@ export const FUEL_TYPE_OPTIONS: { value: FuelType; label: string }[] = [
   { value: 'gpl', label: 'GPL (gás)' },
   { value: 'gpl_gasoline', label: 'GPL + Gasolina' },
 ]
+
+export function fuelTypeLabel(fuelType: FuelType | undefined): string {
+  const match = FUEL_TYPE_OPTIONS.find((o) => o.value === fuelType)
+  return match?.label ?? FUEL_TYPE_OPTIONS[0].label
+}
+
+export function formatFuelPricesUpdatedAt(iso: string): string | null {
+  const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T'))
+  if (!Number.isFinite(d.getTime())) return null
+  return d.toLocaleString('pt-PT', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}

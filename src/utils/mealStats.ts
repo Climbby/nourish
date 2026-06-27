@@ -19,26 +19,48 @@ export interface PeriodMeta {
   label: string
   dayCount: number
   startDay: string
+  endDay: string
+  /** Calendar month only: "1 a 27 de junho" */
+  monthRangeLabel?: string
 }
 
 function dayStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+export function formatMonthRangeLabel(now = new Date()): string {
+  const day = now.getDate()
+  const month = now.toLocaleDateString('pt-PT', { month: 'long' })
+  return `1 a ${day} de ${month}`
+}
+
+export function formatMonthPeriodShort(now = new Date()): string {
+  const month = now.toLocaleDateString('pt-PT', { month: 'short' }).replace(/\.$/, '')
+  return `${month} · 1–${now.getDate()}`
+}
+
 export function getPeriodMeta(period: StatsPeriod, now = new Date()): PeriodMeta {
+  const endDay = dayStr(now)
   if (period === '7d') {
     const start = new Date(now)
     start.setDate(start.getDate() - 6)
-    return { label: 'Últimos 7 dias', dayCount: 7, startDay: dayStr(start) }
+    return { label: 'Últimos 7 dias', dayCount: 7, startDay: dayStr(start), endDay }
   }
   if (period === '30d') {
     const start = new Date(now)
     start.setDate(start.getDate() - 29)
-    return { label: 'Últimos 30 dias', dayCount: 30, startDay: dayStr(start) }
+    return { label: 'Últimos 30 dias', dayCount: 30, startDay: dayStr(start), endDay }
   }
   const start = new Date(now.getFullYear(), now.getMonth(), 1)
   const dayCount = now.getDate()
-  return { label: 'Este mês', dayCount, startDay: dayStr(start) }
+  const monthRangeLabel = formatMonthRangeLabel(now)
+  return {
+    label: monthRangeLabel,
+    dayCount,
+    startDay: dayStr(start),
+    endDay,
+    monthRangeLabel,
+  }
 }
 
 export function filterMealPlanByPeriod(
@@ -86,6 +108,60 @@ export function aggregateMealStats(
 
   totals.daysWithMeals = days.size
   return totals
+}
+
+export interface MealSpendRow {
+  id: number
+  recipeName: string
+  dayLabel: string
+  mealType: 'Almoço' | 'Jantar' | null
+  time: string | null
+  priceEur: number | null
+  calories: number | null
+}
+
+function mealTypeFromTimestamp(ts: string): 'Almoço' | 'Jantar' {
+  return new Date(ts.replace(' ', 'T')).getHours() < 17 ? 'Almoço' : 'Jantar'
+}
+
+function formatMealClock(ts: string): string {
+  const d = new Date(ts.replace(' ', 'T'))
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function formatMealDayLabel(day: string): string {
+  const [y, m, dd] = day.split('-').map(Number)
+  return new Date(y, m - 1, dd).toLocaleDateString('pt-PT', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  })
+}
+
+export function buildMealSpendRows(
+  entries: MealPlanEntry[],
+  recipesById: Record<number, Recipe>
+): MealSpendRow[] {
+  return [...entries]
+    .sort((a, b) =>
+      b.day !== a.day
+        ? b.day.localeCompare(a.day)
+        : (b.row_created_timestamp ?? '').localeCompare(a.row_created_timestamp ?? '')
+    )
+    .map((entry) => {
+      const recipe = recipesById[entry.recipe_id]
+      const parsed = recipe ? parseDescription(recipe.description ?? '') : null
+      const ts = entry.row_created_timestamp
+      return {
+        id: entry.id,
+        recipeName: recipe?.name ?? `Refeição ${entry.recipe_id}`,
+        dayLabel: formatMealDayLabel(entry.day),
+        mealType: ts ? mealTypeFromTimestamp(ts) : null,
+        time: ts ? formatMealClock(ts) : null,
+        priceEur: parsed?.price ?? null,
+        calories: parsed?.nutrition?.calories ?? null,
+      }
+    })
 }
 
 export interface MacroGap {

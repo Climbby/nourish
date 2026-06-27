@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { tripCostEur, tripKm, visitTripCostEur } from './visitTripCost'
+import { formatVisitCarSummary, tripCostEur, tripKm, visitTripCostEur, formatVisitFuelDetail } from './visitTripCost'
 import type { Car } from '../hooks/useCars'
 import type { VisitCarLink } from './visitCars'
 
@@ -41,5 +41,21 @@ describe('visitTripCost', () => {
 
   it('returns null when no routed distance', () => {
     expect(tripKm(undefined, undefined)).toBeNull()
+  })
+
+  it('formats fuel type and snapshotted price for visit history', () => {
+    const link: VisitCarLink = {
+      visit_entered_at: '2026-06-01T10:00:00.000Z',
+      car_id: 'c1',
+      distance_km: 8,
+      fuel_price_per_l: 0.921,
+      fuel_type: 'gpl_gasoline',
+      linked_at: '2026-06-01T12:00:00.000Z',
+    }
+    const gplCar: Car = { ...car, name: 'Audi A3', fuel_type: 'gpl_gasoline' }
+    expect(formatVisitFuelDetail(link, gplCar)).toBe('GPL + Gasolina · €0.921/L na visita')
+    expect(formatVisitCarSummary(link, gplCar, undefined, [gplCar])).toBe(
+      'Audi · 8 km ida/volta · GPL + Gasolina · €0.921/L na visita · €0.44'
+    )
   })
 })

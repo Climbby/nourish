@@ -559,7 +559,7 @@ export function ReceiptScanPage() {
             {visitEnteredAt && (
               <button
                 type="button"
-                onClick={() => navigate('/history', { state: { tab: 'supermarket' } })}
+                onClick={() => navigate('/history?tab=supermarket')}
                 className="w-full py-3.5 rounded-xl font-semibold text-nourish-text bg-nourish-surface-high border border-nourish-border"
               >
                 Voltar ao historial

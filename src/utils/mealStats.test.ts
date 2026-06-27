@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateMealStats, filterMealPlanByPeriod, macroGaps } from './mealStats'
+import { aggregateMealStats, buildMealSpendRows, filterMealPlanByPeriod, formatMonthPeriodShort, formatMonthRangeLabel, getPeriodMeta, macroGaps } from './mealStats'
 import { DEFAULT_TARGETS } from '../hooks/useNutritionTargets'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 
@@ -47,5 +47,30 @@ describe('mealStats', () => {
     const gaps = macroGaps(totals, DEFAULT_TARGETS, 7)
     expect(gaps[0].gap).toBeGreaterThanOrEqual(gaps[1].gap)
     expect(gaps.every((g) => g.gap > 0)).toBe(true)
+  })
+
+  it('labels calendar month from 1st through today', () => {
+    const now = new Date('2026-06-27T12:00:00')
+    expect(formatMonthRangeLabel(now)).toBe('1 a 27 de junho')
+    expect(formatMonthPeriodShort(now)).toBe('jun · 1–27')
+    const meta = getPeriodMeta('month', now)
+    expect(meta.startDay).toBe('2026-06-01')
+    expect(meta.endDay).toBe('2026-06-27')
+    expect(meta.dayCount).toBe(27)
+    expect(meta.label).toBe('1 a 27 de junho')
+  })
+
+  it('builds meal spend rows from period entries', () => {
+    const rows = buildMealSpendRows(
+      [
+        { id: 1, day: '2026-06-26', recipe_id: 1, note: '', row_created_timestamp: '2026-06-26 13:30:00' },
+      ],
+      { 1: recipe }
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0].recipeName).toBe('Atum')
+    expect(rows[0].priceEur).toBe(3.5)
+    expect(rows[0].mealType).toBe('Almoço')
+    expect(rows[0].time).toBe('13:30')
   })
 })

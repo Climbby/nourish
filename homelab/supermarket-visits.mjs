@@ -4,6 +4,8 @@ const ONGOING_MAX_MS = 4 * 60 * 60 * 1000
 const ENTER_DEBOUNCE_MS = 2 * 60 * 1000
 const LEAVE_BOUNCE_MS = 15 * 1000
 const VISIT_MERGE_GAP_MS = 2 * 60 * 1000
+/** Shorter completed visits are drive-bys (GPS clipped the zone). */
+const MIN_VISIT_DURATION_MINUTES = 3
 
 function parseMs(iso) {
   return new Date(iso.includes('T') ? iso : iso.replace(' ', 'T')).getTime()
@@ -129,4 +131,31 @@ export function buildSupermarketVisits(events, nowMs = Date.now()) {
   return mergeAdjacentVisits(visits.map((v) => finalizeOpenVisit(v, nowMs))).sort((a, b) =>
     b.entered_at.localeCompare(a.entered_at)
   )
+}
+
+/** Median days between merged visit entry times (same visits as /supermarket-visits). */
+export function medianDaysBetweenVisits(visits) {
+  if (!visits || visits.length < 2) return null
+  const times = visits
+    .map((v) => parseMs(v.entered_at))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)
+  if (times.length < 2) return null
+  const gaps = []
+  for (let i = 1; i < times.length; i++) {
+    gaps.push((times[i] - times[i - 1]) / 86400000)
+  }
+  gaps.sort((a, b) => a - b)
+  const median = gaps[Math.floor(gaps.length / 2)]
+  return median > 0 ? Math.round(median * 10) / 10 : null
+}
+
+export function isRealSupermarketVisit(visit) {
+  if (visit.ongoing) return true
+  if (visit.duration_minutes == null) return false
+  return visit.duration_minutes >= MIN_VISIT_DURATION_MINUTES
+}
+
+export function realSupermarketVisits(visits) {
+  return visits.filter(isRealSupermarketVisit)
 }

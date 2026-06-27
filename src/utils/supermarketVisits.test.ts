@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSupermarketVisits, formatVisitDuration, formatVisitTimeRange, visitExitTime, visitHasExit, visitStatusLabel } from './supermarketVisits'
+import { buildSupermarketVisits, formatVisitDuration, formatVisitTimeRange, isRealSupermarketVisit, medianDaysBetweenVisits, realSupermarketVisits, visitExitTime, visitHasExit, visitStatusLabel } from './supermarketVisits'
 
 describe('buildSupermarketVisits', () => {
   it('pairs enter and leave with duration', () => {
@@ -138,7 +138,6 @@ describe('visit status helpers', () => {
     expect(visits[1].left_at).toBe('2026-06-01T11:00:00.000Z')
     expect(visitStatusLabel(visits[1])).toBeNull()
   })
-
   it('hides status when exit time is shown', () => {
     const visit = {
       entered_at: '2026-06-01T10:00:00.000Z',
@@ -149,5 +148,32 @@ describe('visit status helpers', () => {
     expect(visitStatusLabel(visit)).toBeNull()
     expect(formatVisitTimeRange(visit)).toMatch(/· 10:30 → 11:15|· \d{2}:\d{2} → \d{2}:\d{2}/)
     expect(formatVisitTimeRange(visit)).toMatch(/^(Dom|Seg|Ter|Qua|Qui|Sex|Sáb) \d+ ·/)
+  })
+
+  it('computes median days between merged visits', () => {
+    const visits = buildSupermarketVisits([
+      { type: 'supermarket_enter', at: '2026-06-01T10:00:00.000Z' },
+      { type: 'supermarket_leave', at: '2026-06-01T10:45:00.000Z' },
+      { type: 'supermarket_enter', at: '2026-06-04T10:00:00.000Z' },
+      { type: 'supermarket_leave', at: '2026-06-04T10:30:00.000Z' },
+      { type: 'supermarket_enter', at: '2026-06-11T10:00:00.000Z' },
+      { type: 'supermarket_leave', at: '2026-06-11T10:20:00.000Z' },
+    ])
+    expect(visits).toHaveLength(3)
+    expect(medianDaysBetweenVisits(visits)).toBe(7)
+    expect(medianDaysBetweenVisits(visits.slice(0, 1))).toBeNull()
+  })
+
+  it('drops completed visits under 3 minutes as drive-bys', () => {
+    const visits = buildSupermarketVisits([
+      { type: 'supermarket_enter', at: '2026-06-26T21:25:36.137Z' },
+      { type: 'supermarket_leave', at: '2026-06-26T21:26:06.811Z' },
+      { type: 'supermarket_enter', at: '2026-06-26T19:15:06.469Z' },
+      { type: 'supermarket_leave', at: '2026-06-26T19:34:05.216Z' },
+    ])
+    expect(visits).toHaveLength(2)
+    expect(realSupermarketVisits(visits)).toHaveLength(1)
+    expect(realSupermarketVisits(visits)[0].duration_minutes).toBe(19)
+    expect(isRealSupermarketVisit(visits.find((v) => v.duration_minutes === 1)!)).toBe(false)
   })
 })

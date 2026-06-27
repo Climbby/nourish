@@ -4,9 +4,9 @@ import { grocy } from '../api/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { VerifiedBadge } from '../components/VerifiedBadge'
-import { ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
+import { CartIcon, ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
 import { StockAmountSheet } from '../components/StockAmountSheet'
-import { fetchHomelabMetrics } from '../api/homelabMetrics'
+import { fetchHomelabMetrics, hasShopIntervalMedian, shopIntervalDays } from '../api/homelabMetrics'
 import {
   computeDespensaAnalytics,
   getBuyAmountFromDesc,
@@ -70,10 +70,25 @@ function DespensaCard({
         <button
           type="button"
           onClick={() => onAdjustStock(item.product_id)}
-          className="absolute top-2 right-2 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full focus:outline-none focus:ring-2 focus:ring-white/50"
+          className="absolute top-1.5 right-1.5 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full focus:outline-none focus:ring-2 focus:ring-white/50"
           aria-label={`Stock: ${item.amount}. Toca para corrigir`}
         >
           {item.amount}
+        </button>
+        <button
+          type="button"
+          onClick={() => onAddToShoppingList(item.product.id)}
+          disabled={onShoppingList}
+          className={`absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full flex items-center justify-center shadow-sm backdrop-blur-sm transition-colors focus:outline-none focus:ring-2 focus:ring-white/50 disabled:opacity-100 ${
+            onShoppingList
+              ? 'bg-nourish-primary text-nourish-on-primary'
+              : analytics?.isLow
+                ? 'bg-amber-500/90 text-white active:bg-amber-600'
+                : 'bg-black/55 text-white active:bg-black/70'
+          }`}
+          aria-label={onShoppingList ? 'Na lista de compras' : 'Adicionar à lista de compras'}
+        >
+          <CartIcon className="w-3 h-3" />
         </button>
         {analytics?.isLow && !onShoppingList && (
           <span className="absolute top-2 left-2 bg-amber-500/90 text-white text-xs font-bold px-2 py-0.5 rounded-full">
@@ -118,20 +133,6 @@ function DespensaCard({
           )}
         </div>
 
-        <div className="min-h-[2rem] flex items-end">
-          {analytics?.isLow && !onShoppingList && (
-            <button
-              onClick={() => onAddToShoppingList(item.product.id)}
-              className="w-full text-xs py-1.5 px-2 rounded-xl border border-amber-500/50 text-amber-400 bg-amber-500/10 active:bg-amber-500/20 transition-colors"
-            >
-              Adicionar à lista
-            </button>
-          )}
-          {analytics?.isLow && onShoppingList && (
-            <p className="w-full text-xs text-amber-400/70 text-center">Na lista de compras</p>
-          )}
-        </div>
-
         <div className="flex gap-1.5 pt-2 mt-auto">
           <button
             type="button"
@@ -159,6 +160,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   const [logs, setLogs] = useState<Record<number, StockLogEntry[]>>({})
   const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>([])
   const [daysUntilShop, setDaysUntilShop] = useState<number | null>(null)
+  const [shopIntervalFromMedian, setShopIntervalFromMedian] = useState(false)
   const [showList, setShowList] = useState(false)
   const [stockEditId, setStockEditId] = useState<number | null>(null)
   const [stockSaving, setStockSaving] = useState(false)
@@ -196,7 +198,10 @@ export function DespensaSection({ query = '' }: { query?: string }) {
 
   useEffect(() => {
     fetchHomelabMetrics().then((m) => {
-      if (m) setDaysUntilShop(m.days_until_shop)
+      if (m) {
+        setDaysUntilShop(shopIntervalDays(m))
+        setShopIntervalFromMedian(hasShopIntervalMedian(m))
+      }
     })
   }, [])
 
@@ -278,7 +283,13 @@ export function DespensaSection({ query = '' }: { query?: string }) {
       <div className="flex items-center justify-between gap-2 mb-3">
         {daysUntilShop != null && (
           <p className="text-xs text-nourish-text-dim">
-            Compras a cada <span className="font-semibold text-nourish-text">{daysUntilShop}</span> dias
+            Compras a cada{' '}
+            <span className="font-semibold text-nourish-text">{daysUntilShop}</span> dias
+            {shopIntervalFromMedian ? (
+              <span className="text-nourish-text-dim/80"> · mediana do historial</span>
+            ) : (
+              <span className="text-nourish-text-dim/80"> · estimativa</span>
+            )}
           </p>
         )}
         <ShoppingListButton count={pendingList.length} onClick={() => setShowList(true)} />

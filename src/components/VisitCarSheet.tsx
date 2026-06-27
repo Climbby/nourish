@@ -8,20 +8,22 @@ import { linkCarToVisit, unlinkCarFromVisit } from '../utils/visitCars'
 import { inferDefaultCarId } from '../utils/defaultCar'
 import { fetchTripDistance } from '../utils/tripDistance'
 import { fetchVisitCars } from '../utils/visitCars'
+import { VisitTripDetails } from './VisitTripDetails'
 
 interface Props {
   visit: SupermarketVisit
   cars: Car[]
+  supermarketName: string
   currentLink?: VisitCarLink
   onClose: () => void
   onSaved: (link: VisitCarLink | null) => void
 }
 
-export function VisitCarSheet({ visit, cars, currentLink, onClose, onSaved }: Props) {
+export function VisitCarSheet({ visit, cars, supermarketName, currentLink, onClose, onSaved }: Props) {
   const { priceForCar } = useFuelPrices()
   const [selectedId, setSelectedId] = useState('')
   const [saving, setSaving] = useState(false)
-  const [tripKm, setTripKm] = useState<number | null>(visit.trip_distance_km ?? null)
+  const [routedKm, setRoutedKm] = useState<number | null>(visit.trip_distance_km ?? null)
 
   useEffect(() => {
     if (currentLink?.car_id) {
@@ -36,19 +38,22 @@ export function VisitCarSheet({ visit, cars, currentLink, onClose, onSaved }: Pr
 
   useEffect(() => {
     if (visit.trip_distance_km != null) {
-      setTripKm(visit.trip_distance_km)
+      setRoutedKm(visit.trip_distance_km)
       return
     }
     void fetchTripDistance(visit.zone).then((d) => {
-      if (d) setTripKm(d.round_trip_km)
+      if (d) setRoutedKm(d.round_trip_km)
     })
   }, [visit.trip_distance_km, visit.zone])
+
+  const selectedCar = cars.find((c) => c.id === selectedId)
+  const isSaved = !!currentLink && currentLink.car_id === selectedId
 
   async function handleSave() {
     if (!selectedId) return
     setSaving(true)
     try {
-      let distanceKm = tripKm ?? visit.trip_distance_km
+      let distanceKm = routedKm ?? visit.trip_distance_km
       if (distanceKm == null && visit.zone) {
         const routed = await fetchTripDistance(visit.zone)
         distanceKm = routed?.round_trip_km
@@ -61,6 +66,7 @@ export function VisitCarSheet({ visit, cars, currentLink, onClose, onSaved }: Pr
         linked_at: new Date().toISOString(),
         ...(distanceKm != null ? { distance_km: distanceKm } : {}),
         ...(fuelPrice != null ? { fuel_price_per_l: fuelPrice } : {}),
+        ...(car?.fuel_type ? { fuel_type: car.fuel_type } : {}),
       }
       await linkCarToVisit(link)
       onSaved(link)
@@ -92,12 +98,22 @@ export function VisitCarSheet({ visit, cars, currentLink, onClose, onSaved }: Pr
           <div>
             <p className="text-sm font-semibold text-nourish-text">Viatura desta ida</p>
             <p className="text-xs text-nourish-text-dim mt-0.5">
-              Km ida/volta por estrada (OSRM), ou linha recta entre zonas HA se routing falhar
+              Km ida/volta de Casa ao super (OSRM, ou linha recta entre zonas HA)
             </p>
-            {tripKm != null && (
-              <p className="text-xs text-nourish-primary mt-1 tabular-nums">{tripKm} km ida/volta</p>
-            )}
           </div>
+
+          {selectedCar && (
+            <VisitTripDetails
+              car={selectedCar}
+              cars={cars}
+              visit={visit}
+              supermarketName={supermarketName}
+              link={currentLink}
+              routedKm={routedKm}
+              liveFuelPrice={priceForCar(selectedCar)}
+              saved={isSaved}
+            />
+          )}
 
           {cars.length === 0 ? (
             <div className="rounded-xl border border-nourish-border bg-nourish-bg p-4 text-center space-y-2">

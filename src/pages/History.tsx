@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { fetchSupermarketVisits, type SupermarketVisit } from '../api/homelabMetrics'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
@@ -8,6 +8,8 @@ import { BottomNav } from '../components/BottomNav'
 import { VisitCarSheet } from '../components/VisitCarSheet'
 import { VisitDateTime } from '../components/VisitDateTime'
 import { useCars } from '../hooks/useCars'
+import { useFuelPrices } from '../hooks/useFuelPrices'
+import { autoLinkUnlinkedVisitCars } from '../utils/autoLinkCar'
 import {
   formatVisitDuration,
   formatVisitMonthYear,
@@ -20,11 +22,17 @@ import {
   type VisitReceiptLink,
 } from '../utils/visitReceipts'
 import {
+  supermarketLabelForVisit,
+} from '../utils/visitSupermarketLabel'
+import { fetchSupermarkets, type TrackedSupermarket } from '../utils/supermarkets'
+import {
   fetchVisitCars,
   visitCarMap,
   type VisitCarLink,
 } from '../utils/visitCars'
-import { formatTripCost, tripKm, visitTripCostEur } from '../utils/visitTripCost'
+import { carDisplayName } from '../utils/carDisplayName'
+import { formatVisitTotalCost } from '../utils/visitVisitCost'
+import { visitTripCostEur } from '../utils/visitTripCost'
 
 function todayStr() {
   const d = new Date()
@@ -74,17 +82,23 @@ function ReceiptIcon({ active }: { active?: boolean }) {
 
 type HistoryTab = 'meals' | 'supermarket'
 
+function historyTabFromSearch(searchParams: URLSearchParams): HistoryTab | null {
+  const tab = searchParams.get('tab')
+  if (tab === 'supermarket' || tab === 'meals') return tab
+  return null
+}
+
 const STORE_LABELS: Record<string, string> = {
   mixed: 'Misto',
   continente: 'Continente',
   auchan: 'Auchan',
 }
 
-function receiptSummary(receipt: VisitReceiptLink): string {
+function receiptSummary(receipt: VisitReceiptLink, omitPrice = false): string {
   const store = receipt.store ? STORE_LABELS[receipt.store] ?? receipt.store : null
   const parts = [
     `${receipt.item_count} produto${receipt.item_count !== 1 ? 's' : ''}`,
-    receipt.total_eur > 0 ? `€${receipt.total_eur.toFixed(2)}` : null,
+    !omitPrice && receipt.total_eur > 0 ? `€${receipt.total_eur.toFixed(2)}` : null,
     store,
   ].filter(Boolean)
   return parts.join(' · ')
@@ -139,17 +153,33 @@ function TrashIcon() {
 export function History() {
   const navigate = useNavigate()
   const location = useLocation()
-  const initialTab =
-    (location.state as { tab?: HistoryTab } | null)?.tab === 'supermarket' ? 'supermarket' : 'meals'
-  const [tab, setTab] = useState<HistoryTab>(initialTab)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const stateTab = (location.state as { tab?: HistoryTab } | null)?.tab
+  const tab = historyTabFromSearch(searchParams) ?? (stateTab === 'supermarket' ? 'supermarket' : 'meals')
+
+  function setTab(next: HistoryTab) {
+    if (next === 'supermarket') {
+      setSearchParams({ tab: 'supermarket' }, { replace: true })
+      return
+    }
+    setSearchParams({}, { replace: true })
+  }
+
+  useEffect(() => {
+    if (stateTab === 'supermarket' && searchParams.get('tab') !== 'supermarket') {
+      setSearchParams({ tab: 'supermarket' }, { replace: true })
+    }
+  }, [stateTab, searchParams, setSearchParams])
   const [entries, setEntries] = useState<MealPlanEntry[]>([])
   const [recipes, setRecipes] = useState<Record<number, Recipe>>({})
   const [visits, setVisits] = useState<SupermarketVisit[] | null>(null)
   const [visitsError, setVisitsError] = useState(false)
   const [visitReceipts, setVisitReceipts] = useState<VisitReceiptLink[]>([])
   const [visitCars, setVisitCars] = useState<VisitCarLink[]>([])
+  const [trackedSupermarkets, setTrackedSupermarkets] = useState<TrackedSupermarket[]>([])
   const [carSheetVisit, setCarSheetVisit] = useState<SupermarketVisit | null>(null)
   const { cars, refreshCars } = useCars()
+  const { priceForCar } = useFuelPrices()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -175,16 +205,36 @@ export function History() {
     let mounted = true
     setVisits(null)
     setVisitsError(false)
-    Promise.all([fetchSupermarketVisits(180), fetchVisitReceipts(), fetchVisitCars()]).then(
-      ([list, receipts, carLinks]) => {
-      if (!mounted) return
-      if (list === null) setVisitsError(true)
-      else setVisits(list)
-      setVisitReceipts(receipts)
-      setVisitCars(carLinks)
-    })
+    Promise.all([
+      fetchSupermarketVisits(180),
+      fetchVisitReceipts(),
+      fetchVisitCars(),
+      fetchSupermarkets(),
+    ]).then(([list, receipts, carLinks, supermarkets]) => {
+        if (!mounted) return
+        if (list === null) setVisitsError(true)
+        else setVisits(list)
+        setVisitReceipts(receipts)
+        setVisitCars(carLinks)
+        setTrackedSupermarkets(supermarkets?.tracked ?? [])
+      })
     return () => { mounted = false }
   }, [tab])
+
+  useEffect(() => {
+    if (tab !== 'supermarket' || !visits?.length || cars.length === 0) return
+    let mounted = true
+    void (async () => {
+      const added = await autoLinkUnlinkedVisitCars(visits, cars, visitCars, priceForCar)
+      if (!mounted || added.length === 0) return
+      setVisitCars((prev) => {
+        const map = visitCarMap(prev)
+        for (const link of added) map.set(link.visit_entered_at, link)
+        return [...map.values()]
+      })
+    })()
+    return () => { mounted = false }
+  }, [tab, visits, cars, visitCars, priceForCar])
 
   const receiptByVisit = receiptMapByVisit(visitReceipts)
   const carByVisit = visitCarMap(visitCars)
@@ -287,9 +337,10 @@ export function History() {
                       const statusLabel = visitStatusLabel(visit)
                       const carLink = carByVisit.get(visit.entered_at)
                       const car = carLink ? carsById.get(carLink.car_id) : undefined
-                      const km = tripKm(carLink, visit)
-                      const fuelCost = visitTripCostEur(carLink, visit, car)
                       const receipt = receiptByVisit.get(visit.entered_at)
+                      const supermarketName = supermarketLabelForVisit(visit, trackedSupermarkets)
+                      const fuelCost = visitTripCostEur(carLink, visit, car)
+                      const totalCost = formatVisitTotalCost(receipt, fuelCost)
 
                       return (
                       <div
@@ -298,59 +349,67 @@ export function History() {
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <VisitDateTime visit={visit} />
+                            <VisitDateTime visit={visit} supermarketName={supermarketName} />
                             {statusLabel && (
                               <p className="text-xs text-nourish-text-dim mt-0.5">{statusLabel}</p>
                             )}
-                            {car && km != null && fuelCost != null && (
-                              <p className="text-xs text-nourish-primary mt-1">
-                                {car.name} · {km} km · {formatTripCost(fuelCost)}
-                              </p>
-                            )}
                             {receipt && (
                               <p className="text-xs text-nourish-text-dim mt-0.5 truncate">
-                                Talão: {receiptSummary(receipt)}
+                                Talão: {receiptSummary(receipt, !!totalCost)}
                               </p>
                             )}
                           </div>
-                          <span
-                            className={`text-xs font-bold tabular-nums shrink-0 ${
-                              visit.ongoing ? 'text-nourish-primary' : 'text-nourish-text-dim'
-                            }`}
-                          >
-                            {formatVisitDuration(visit.duration_minutes, visit.ongoing)}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-2 mt-2.5 pt-2.5 border-t border-nourish-border/60">
-                          <button
-                            type="button"
-                            onClick={() => setCarSheetVisit(visit)}
-                            title={car ? car.name : 'Viatura'}
-                            className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                              car
-                                ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
-                                : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
-                            }`}
-                            aria-label={car ? `Viatura: ${car.name}` : 'Escolher viatura'}
-                          >
-                            <CarIcon active={!!car} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              navigate(`/receipt?visit=${encodeURIComponent(visit.entered_at)}`)
-                            }
-                            title={receipt ? 'Substituir talão' : 'Adicionar talão'}
-                            className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                              receipt
-                                ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
-                                : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
-                            }`}
-                            aria-label={receipt ? 'Talão associado' : 'Adicionar talão'}
-                          >
-                            <ReceiptIcon active={!!receipt} />
-                          </button>
+                          <div className="flex flex-col items-end shrink-0 gap-1">
+                            {totalCost && (
+                              <>
+                                <span className="text-sm font-bold tabular-nums text-nourish-text">
+                                  {totalCost.main}
+                                </span>
+                                {totalCost.detail && (
+                                  <span className="text-[10px] text-nourish-text-dim tabular-nums text-right leading-tight max-w-[9rem]">
+                                    {totalCost.detail}
+                                  </span>
+                                )}
+                              </>
+                            )}
+                            <span
+                              className={`text-xs font-bold tabular-nums ${
+                                visit.ongoing ? 'text-nourish-primary' : 'text-nourish-text-dim'
+                              }`}
+                            >
+                              {formatVisitDuration(visit.duration_minutes, visit.ongoing)}
+                            </span>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setCarSheetVisit(visit)}
+                                title={car ? carDisplayName(car, cars) : 'Viatura'}
+                                className={`p-1.5 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                                  car
+                                    ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
+                                    : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
+                                }`}
+                                aria-label={car ? `Viatura: ${carDisplayName(car, cars)}` : 'Escolher viatura'}
+                              >
+                                <CarIcon active={!!car} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  navigate(`/receipt?visit=${encodeURIComponent(visit.entered_at)}`)
+                                }
+                                title={receipt ? 'Substituir talão' : 'Adicionar talão'}
+                                className={`p-1.5 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                                  receipt
+                                    ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
+                                    : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
+                                }`}
+                                aria-label={receipt ? 'Talão associado' : 'Adicionar talão'}
+                              >
+                                <ReceiptIcon active={!!receipt} />
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )})}
@@ -460,6 +519,7 @@ export function History() {
         <VisitCarSheet
           visit={carSheetVisit}
           cars={cars}
+          supermarketName={supermarketLabelForVisit(carSheetVisit, trackedSupermarkets)}
           currentLink={carByVisit.get(carSheetVisit.entered_at)}
           onClose={() => setCarSheetVisit(null)}
           onSaved={(link) => {

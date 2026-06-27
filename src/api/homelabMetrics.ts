@@ -24,20 +24,33 @@ export function defaultDaysUntilShop(): number {
   return DEFAULT_DAYS_UNTIL_SHOP
 }
 
+/** Median days between supermarket visits — used for despensa low-stock horizon. */
+export function shopIntervalDays(metrics: HomelabMetrics | null): number {
+  const median = metrics?.avg_days_between_shops
+  if (median != null && median > 0) return median
+  const fromApi = metrics?.days_until_shop
+  if (fromApi != null && fromApi > 0) return fromApi
+  return DEFAULT_DAYS_UNTIL_SHOP
+}
+
+export function hasShopIntervalMedian(metrics: HomelabMetrics | null): boolean {
+  return metrics?.avg_days_between_shops != null && metrics.avg_days_between_shops > 0
+}
+
 export async function fetchHomelabMetrics(): Promise<HomelabMetrics | null> {
   try {
     const res = await fetch('/nourish/metrics', { cache: 'no-store' })
     if (!res.ok) return null
     const data = (await res.json()) as HomelabMetrics
-    const days = Number(data.days_until_shop ?? data.suggested_days_until_shop)
     return {
       ...data,
-      days_until_shop: Number.isFinite(days) && days > 0 ? days : DEFAULT_DAYS_UNTIL_SHOP,
+      days_until_shop:
+        Number(data.days_until_shop) > 0 ? Number(data.days_until_shop) : DEFAULT_DAYS_UNTIL_SHOP,
       suggested_days_until_shop:
         Number(data.suggested_days_until_shop) > 0
           ? Number(data.suggested_days_until_shop)
-          : Number.isFinite(days) && days > 0
-            ? days
+          : Number(data.days_until_shop) > 0
+            ? Number(data.days_until_shop)
             : DEFAULT_DAYS_UNTIL_SHOP,
     }
   } catch {

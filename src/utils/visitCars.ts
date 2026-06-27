@@ -1,3 +1,5 @@
+import type { FuelType } from './fuelPrices'
+
 export interface VisitCarLink {
   visit_entered_at: string
   car_id: string
@@ -5,6 +7,8 @@ export interface VisitCarLink {
   distance_km?: number
   /** €/L at link time (DGEG); past visits keep this price */
   fuel_price_per_l?: number
+  /** Fuel type at link time — keeps history accurate if the car profile changes */
+  fuel_type?: FuelType
   linked_at: string
 }
 

@@ -5,14 +5,14 @@
 # rarely and inconsistently. Here HA becomes the single source of truth:
 # force_on whenever you're plausibly away, force_off only when clearly home.
 #
-# Away = person not_home  OR  connected to a non-home Wi-Fi network.
-# Zone (person) is the reliable signal; Wi-Fi only pushes "away" when it reports
-# a concrete foreign SSID. A "<not connected>"/unavailable Wi-Fi reading is NOT
-# treated as away — otherwise a phone that fails to report its home SSID (e.g.
-# missing location permission) would strand high-accuracy ON at home.
+# Away = home Wi-Fi off (45 s debounce) OR person not_home OR foreign SSID.
+# Home = on a home SSID OR francisco_em_wifi_de_casa on — Wi-Fi wins over a lagging
+# person entity still reading 'home' after you left (fixes GPS not turning on).
+# person 'home' only applies when Wi-Fi state is ambiguous (not connected yet).
 #
 # Requires:
 #   - sensor.francisco_wi_fi_connection  (companion app Wi-Fi Connection sensor)
+#   - binary_sensor.francisco_em_wifi_de_casa  (nourish_wifi_presence.yaml)
 #   - person.francisco_fernandes
 #   - notify.mobile_app_francisco
 # Home SSIDs are duplicated from nourish_wifi_presence.yaml — keep both in sync.
@@ -26,14 +26,25 @@ template:
         unique_id: francisco_fora_de_casa
         device_class: presence
         # 'on' = away. delay_off avoids flapping high-accuracy on/off at the door.
+        # Wi-Fi disconnect marks away even if person still reads 'home' (GPS lag) —
+        # leave-home already uses Wi-Fi; GPS high-accuracy must follow the same signal.
         state: >
           {% set ssid = states('sensor.francisco_wi_fi_connection') %}
           {% set home_ssids = ['NOS-2774', 'NOS-2774-5', 'NOS-2774_EXT'] %}
+          {% set on_home_wifi = ssid in home_ssids %}
           {% set on_other_wifi = ssid not in home_ssids
              and ssid not in ['<not connected>', 'unavailable', 'unknown', 'unauthorized', ''] %}
-          {{ is_state('person.francisco_fernandes', 'not_home') or on_other_wifi }}
+          {% if on_home_wifi or is_state('binary_sensor.francisco_em_wifi_de_casa', 'on') %}
+            false
+          {% elif is_state('binary_sensor.francisco_em_wifi_de_casa', 'off') %}
+            true
+          {% elif is_state('person.francisco_fernandes', 'home') %}
+            false
+          {% else %}
+            {{ is_state('person.francisco_fernandes', 'not_home') or on_other_wifi }}
+          {% endif %}
         delay_off:
-          seconds: 90
+          seconds: 45
 
 automation:
   - id: nourish_high_accuracy_on
@@ -45,6 +56,12 @@ automation:
         entity_id: binary_sensor.francisco_fora_de_casa
         to: "on"
         id: away
+      - platform: state
+        entity_id: binary_sensor.francisco_em_wifi_de_casa
+        to: "off"
+        for:
+          seconds: 45
+        id: wifi_away
       # Re-assert periodically: the app can silently drop force mode on restart.
       - platform: time_pattern
         minutes: "/15"
@@ -53,9 +70,14 @@ automation:
         event: start
         id: hastart
     condition:
-      - condition: state
-        entity_id: binary_sensor.francisco_fora_de_casa
-        state: "on"
+      - condition: or
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.francisco_fora_de_casa
+            state: "on"
+          - condition: state
+            entity_id: binary_sensor.francisco_em_wifi_de_casa
+            state: "off"
     action:
       - action: notify.mobile_app_francisco
         data:
@@ -78,7 +100,7 @@ automation:
       # the push/command channel is alive (same pathway command_* rides on).
       - if:
           - condition: template
-            value_template: "{{ trigger.id == 'away' }}"
+            value_template: "{{ trigger.id in ['away', 'wifi_away'] }}"
         then:
           - action: notify.mobile_app_francisco
             data:
@@ -96,7 +118,17 @@ automation:
       - platform: state
         entity_id: binary_sensor.francisco_fora_de_casa
         to: "off"
-        id: home
+        id: away_off
+      # Immediate off when home Wi-Fi reconnects — do not wait for francisco_fora_de_casa
+      # delay_off (45 s) or a lagging person.not_home → not_home flip.
+      - platform: state
+        entity_id: binary_sensor.francisco_em_wifi_de_casa
+        to: "on"
+        id: wifi_home
+      - platform: state
+        entity_id: person.francisco_fernandes
+        to: "home"
+        id: person_home
       # Re-assert periodically: a single force_off can be silently dropped by the
       # app (it then stays high-accuracy at home, draining battery). Mirrors the
       # force_on re-assert so a dropped command self-heals within 15 min.
@@ -107,9 +139,17 @@ automation:
         event: start
         id: hastart
     condition:
-      - condition: state
-        entity_id: binary_sensor.francisco_fora_de_casa
-        state: "off"
+      - condition: or
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.francisco_fora_de_casa
+            state: "off"
+          - condition: state
+            entity_id: binary_sensor.francisco_em_wifi_de_casa
+            state: "on"
+          - condition: state
+            entity_id: person.francisco_fernandes
+            state: "home"
     action:
       - action: notify.mobile_app_francisco
         data:

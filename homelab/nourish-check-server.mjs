@@ -6,7 +6,7 @@ import http from 'http'
 import { spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { buildSupermarketVisits } from './supermarket-visits.mjs'
+import { buildSupermarketVisits, medianDaysBetweenVisits, realSupermarketVisits } from './supermarket-visits.mjs'
 import { getFuelPricesCached } from './fuel-prices.mjs'
 import { enrichVisitsWithTripDistance, roundTripToSupermarket } from './trip-distance.mjs'
 import { fetchZoneCoordsFromHa, loadZoneCoords, saveZoneCoords } from './zone-coords.mjs'
@@ -124,41 +124,39 @@ function configuredDaysUntilShop() {
   return Number.isFinite(n) && n > 0 ? n : 4
 }
 
+function clampShopInterval(days) {
+  return Math.max(1, Math.min(21, Math.round(days * 10) / 10))
+}
+
 function computeMetrics(events) {
-  const supermarket = events.filter((e) => e.type === 'supermarket_enter')
+  const shopEvents = events.filter(
+    (e) => e.type === 'supermarket_enter' || e.type === 'supermarket_leave'
+  )
+  const visits = buildSupermarketVisits(shopEvents)
+  const realVisits = realSupermarketVisits(visits)
   const leaveHome = events.filter((e) => e.type === 'leave_home')
   const now = Date.now()
   const weekAgo = now - 7 * 86400000
   const monthAgo = now - 30 * 86400000
-  const inWeek = (e) => new Date(e.at).getTime() >= weekAgo
-  const inMonth = (e) => new Date(e.at).getTime() >= monthAgo
+  const inWeek = (ms) => ms >= weekAgo
+  const inMonth = (ms) => ms >= monthAgo
+  const visitEnteredMs = (v) => new Date(v.entered_at).getTime()
 
-  const shopTimes = supermarket.map((e) => new Date(e.at).getTime()).sort((a, b) => a - b)
-  let avgDaysBetween = null
-  if (shopTimes.length >= 2) {
-    const gaps = []
-    for (let i = 1; i < shopTimes.length; i++) {
-      gaps.push((shopTimes[i] - shopTimes[i - 1]) / 86400000)
-    }
-    gaps.sort((a, b) => a - b)
-    const median = gaps[Math.floor(gaps.length / 2)]
-    if (median > 0) avgDaysBetween = Math.round(median * 10) / 10
-  }
-
-  const daysUntilShop = configuredDaysUntilShop()
-  const     suggested =
-      avgDaysBetween != null && avgDaysBetween > 0
-        ? Math.max(1, Math.min(21, Math.round(avgDaysBetween * 10) / 10))
-        : daysUntilShop
+  const avgDaysBetween = medianDaysBetweenVisits(realVisits)
+  const fallback = configuredDaysUntilShop()
+  const daysUntilShop =
+    avgDaysBetween != null && avgDaysBetween > 0
+      ? clampShopInterval(avgDaysBetween)
+      : fallback
 
   return {
     days_until_shop: daysUntilShop,
-    supermarket_visits_week: supermarket.filter(inWeek).length,
-    supermarket_visits_month: supermarket.filter(inMonth).length,
-    leave_home_week: leaveHome.filter(inWeek).length,
-    leave_home_month: leaveHome.filter(inMonth).length,
+    supermarket_visits_week: realVisits.filter((v) => inWeek(visitEnteredMs(v))).length,
+    supermarket_visits_month: realVisits.filter((v) => inMonth(visitEnteredMs(v))).length,
+    leave_home_week: leaveHome.filter((e) => inWeek(new Date(e.at).getTime())).length,
+    leave_home_month: leaveHome.filter((e) => inMonth(new Date(e.at).getTime())).length,
     avg_days_between_shops: avgDaysBetween,
-    suggested_days_until_shop: suggested,
+    suggested_days_until_shop: daysUntilShop,
   }
 }
 
@@ -213,7 +211,7 @@ const server = http.createServer(async (req, res) => {
       const events = loadEvents(days).filter(
         (e) => e.type === 'supermarket_enter' || e.type === 'supermarket_leave'
       )
-      const visits = buildSupermarketVisits(events)
+      const visits = realSupermarketVisits(buildSupermarketVisits(events))
       const enriched = await enrichVisitsWithTripDistance(visits)
       return send(200, { visits: enriched, days })
     }

@@ -28,6 +28,9 @@ export const LEAVE_BOUNCE_MS = 15 * 1000
 /** Merge consecutive visits when the gap between them is smaller than this. */
 export const VISIT_MERGE_GAP_MS = 2 * 60 * 1000
 
+/** Shorter completed visits are treated as drive-bys (GPS clipped the zone). */
+export const MIN_VISIT_DURATION_MINUTES = 3
+
 const MONTHS_PT = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
@@ -162,6 +165,34 @@ export function buildSupermarketVisits(
   return mergeAdjacentVisits(visits.map((v) => finalizeOpenVisit(v, nowMs))).sort((a, b) =>
     b.entered_at.localeCompare(a.entered_at)
   )
+}
+
+/** Median days between merged visit entry times (same logic as Historial → Supermercado). */
+export function medianDaysBetweenVisits(visits: SupermarketVisit[]): number | null {
+  if (visits.length < 2) return null
+  const times = visits
+    .map((v) => parseMs(v.entered_at))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)
+  if (times.length < 2) return null
+  const gaps: number[] = []
+  for (let i = 1; i < times.length; i++) {
+    gaps.push((times[i] - times[i - 1]) / 86400000)
+  }
+  gaps.sort((a, b) => a - b)
+  const median = gaps[Math.floor(gaps.length / 2)]
+  return median > 0 ? Math.round(median * 10) / 10 : null
+}
+
+/** Completed visits shorter than MIN_VISIT_DURATION_MINUTES are drive-bys, not shops. */
+export function isRealSupermarketVisit(visit: SupermarketVisit): boolean {
+  if (visit.ongoing) return true
+  if (visit.duration_minutes == null) return false
+  return visit.duration_minutes >= MIN_VISIT_DURATION_MINUTES
+}
+
+export function realSupermarketVisits(visits: SupermarketVisit[]): SupermarketVisit[] {
+  return visits.filter(isRealSupermarketVisit)
 }
 
 export function formatVisitDuration(minutes: number | null, ongoing: boolean): string {

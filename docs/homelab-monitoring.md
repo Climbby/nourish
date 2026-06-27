@@ -29,7 +29,8 @@ flowchart LR
 | `homelab_alerts.yaml` | ntfy alert when any service offline 3+ min; recovery ping |
 | `homelab_nourish_metrics.yaml` | REST sensors (shop interval, fuel prices); auto-sync `input_number.nourish_days_until_shop` |
 | `homelab_proxmox.yaml` | Ping sensors for CT105/114/117/120 |
-| `nourish_high_accuracy_gps.yaml` | Force high-accuracy GPS when away; leave-home triggers |
+| `nourish_wifi_presence.yaml` | Home Wi‑Fi binary sensor (`francisco_em_wifi_de_casa`) |
+| `nourish_high_accuracy_gps.yaml` | Force high-accuracy GPS when away; turn off on home Wi‑Fi / person home |
 | `nourish_smart_shopping.yaml` | Supermarket zone automations + rest_commands |
 | `nourish_supermarket_discovery.yaml` | Unknown supermarket detection |
 
@@ -68,9 +69,11 @@ HA also syncs `input_number.nourish_days_until_shop` natively via `homelab_nouri
 
 **Leave home** (`francisco_sai_de_casa`) triggers on any of:
 
-- Zone leave `zone.home`
-- Wi‑Fi disconnect from home SSIDs
-- Person state leaves `home`
+- Wi‑Fi disconnect from home SSIDs (~45 s debounce) — primary, fast path
+- Zone leave `zone.home` — GPS backup
+- Person state leaves `home` — GPS backup
+
+A 10‑minute cooldown prevents the slow GPS backup from re-firing after Wi‑Fi already triggered.
 
 Actions: ntfy presence → `POST /event leave_home` → n8n despensa check.
 

@@ -76,9 +76,8 @@ for legacy in (
     "nourish-smart-shopping.yaml",
     "nourish-supermarket-metrics.yaml",
     "nourish_supermarket_metrics.yaml",
-    # Redundant with the UI Template helper of the same name (which the
-    # leave-home automations use); removed to drop the duplicate _2 entity.
-    "nourish_wifi_presence.yaml",
+    # Redundant duplicate _2 entity if a UI helper also exists — package is canonical.
+    # "nourish_wifi_presence.yaml" — do NOT delete; automations depend on it.
 ):
     guest(f"rm -f /mnt/data/supervisor/homeassistant/packages/{legacy}")
 
@@ -116,9 +115,20 @@ import yaml
 autos = yaml.safe_load(guest("cat /mnt/data/supervisor/homeassistant/automations.yaml")) or []
 
 leave_home_triggers = [
-    {"trigger": "zone", "entity_id": "person.francisco_fernandes", "zone": "zone.home", "event": "leave"},
-    {"trigger": "state", "entity_id": "binary_sensor.francisco_em_wifi_de_casa", "from": "on", "to": "off", "for": {"seconds": 45}},
-    {"trigger": "state", "entity_id": "person.francisco_fernandes", "from": "home"},
+    # Wi-Fi disconnect is the fast path (~45 s). Zone/person are GPS backups only.
+    {"trigger": "state", "entity_id": "binary_sensor.francisco_em_wifi_de_casa", "from": "on", "to": "off", "for": {"seconds": 45}, "id": "wifi"},
+    {"trigger": "zone", "entity_id": "person.francisco_fernandes", "zone": "zone.home", "event": "leave", "id": "zone"},
+    {"trigger": "state", "entity_id": "person.francisco_fernandes", "from": "home", "id": "person"},
+]
+# Suppress the slow GPS backup firing minutes after the Wi-Fi trigger already ran.
+leave_home_conditions = [
+    {
+        "condition": "template",
+        "value_template": (
+            "{% set last = state_attr('automation.francisco_sai_de_casa', 'last_triggered') %}"
+            "{{ last is none or (as_timestamp(now()) - as_timestamp(last)) > 600 }}"
+        ),
+    },
 ]
 leave_home_actions = [
     {
@@ -143,12 +153,18 @@ arrive_home_triggers = [
     {"trigger": "state", "entity_id": "binary_sensor.francisco_em_wifi_de_casa", "from": "off", "to": "on", "for": {"seconds": 45}, "id": "wifi"},
 ]
 # Only fire on a genuine arrival: the Wi-Fi trigger is ignored if the person is
-# already 'home' (i.e. an intra-home roam, not a real return). The person/zone
-# triggers (no id) always pass.
+# already 'home' AND we have not left recently (intra-home roam). Person/zone
+# triggers (no id) always pass. If leave-home fired via Wi-Fi but GPS person is
+# still 'home', Wi-Fi reconnect must still announce arrival.
 arrive_home_conditions = [
     {
         "condition": "template",
-        "value_template": "{{ trigger.id != 'wifi' or not is_state('person.francisco_fernandes', 'home') }}",
+        "value_template": (
+            "{{ trigger.id != 'wifi' "
+            "or not is_state('person.francisco_fernandes', 'home') "
+            "or (state_attr('automation.francisco_sai_de_casa', 'last_triggered') is not none "
+            "and (as_timestamp(now()) - as_timestamp(state_attr('automation.francisco_sai_de_casa', 'last_triggered'))) < 28800) }}"
+        ),
     },
 ]
 arrive_home_actions = [
@@ -182,7 +198,7 @@ def patch_automation(autos, automation_id, triggers, actions, conditions=None):
     return False
 
 
-if not patch_automation(autos, "francisco_sai_de_casa", leave_home_triggers, leave_home_actions):
+if not patch_automation(autos, "francisco_sai_de_casa", leave_home_triggers, leave_home_actions, leave_home_conditions):
     sys.exit("automation francisco_sai_de_casa not found")
 if not patch_automation(autos, "francisco_chega_a_casa", arrive_home_triggers, arrive_home_actions, arrive_home_conditions):
     sys.exit("automation francisco_chega_a_casa not found")
@@ -209,7 +225,7 @@ fi
 echo ""
 echo "Deployed packages:"
 echo "  homelab_health, homelab_alerts, homelab_nourish_metrics, homelab_proxmox"
-echo "  nourish_smart_shopping, nourish_high_accuracy_gps, nourish_supermarket_discovery"
+echo "  nourish_smart_shopping, nourish_wifi_presence, nourish_high_accuracy_gps, nourish_supermarket_discovery"
 echo ""
 echo "Next: import homelab/n8n/nourish-sync-shop-interval-import.json into n8n (CT114)."
 echo "Restart guessit-bot on CT120 after deploying bot health endpoint (:8090/health)."
