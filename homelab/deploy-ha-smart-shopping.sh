@@ -42,7 +42,12 @@ def guest(cmd: str, stdin: str | None = None) -> str:
 def guest_write(path: str, content: str) -> None:
     import base64
 
-    guest(f"rm -f {path}")
+    # Atomic write: stream the chunks into a temp file, then `mv` into place only
+    # once the whole file is written. With the old `rm {path}` + chunked-append
+    # pattern, a slow/interrupted deploy could leave the live file missing or
+    # half-written (a timed-out run once deleted automations.yaml this way).
+    tmp = f"{path}.deploy-tmp"
+    guest(f"rm -f {tmp}")
     raw = content.encode()
     chunk_size = 480
     for i in range(0, len(raw), chunk_size):
@@ -55,13 +60,14 @@ def guest_write(path: str, content: str) -> None:
                 "-o",
                 "StrictHostKeyChecking=no",
                 PVE,
-                f"qm guest exec {VMID} -- sh -c \"echo {chunk_b64} | base64 -d >> {path}\"",
+                f"qm guest exec {VMID} -- sh -c \"echo {chunk_b64} | base64 -d >> {tmp}\"",
             ],
             capture_output=True,
             text=True,
         )
         if r.returncode != 0:
             raise SystemExit(f"guest_write chunk failed for {path}: {r.stderr or r.stdout}")
+    guest(f"mv -f {tmp} {path}")
 
 
 guest("mkdir -p /mnt/data/supervisor/homeassistant/packages")
@@ -144,8 +150,11 @@ leave_home_actions = [
 ]
 
 arrive_home_triggers = [
-    {"trigger": "state", "entity_id": "person.francisco_fernandes", "to": "home"},
-    {"trigger": "zone", "entity_id": "person.francisco_fernandes", "zone": "zone.home", "event": "enter"},
+    # GPS/geofence backup path, debounced 120s: a momentary drift/geofence blip into
+    # zone.home (e.g. the 18s 12:52 phantom) no longer fires a false "chegou a casa".
+    # The zone-enter trigger was removed — it is the same transition as person->home
+    # but cannot take `for`, so it reintroduced an un-debounced path.
+    {"trigger": "state", "entity_id": "person.francisco_fernandes", "to": "home", "for": {"seconds": 120}, "id": "person"},
     # `for` debounces the 1-3s `<not connected>` blip the Wi-Fi sensor emits while
     # roaming between home APs/bands (router / 5GHz / extender); without it every
     # roam flipped this off->on and fired a spurious "chegou a casa". `id: wifi`
@@ -164,6 +173,16 @@ arrive_home_conditions = [
             "or not is_state('person.francisco_fernandes', 'home') "
             "or (state_attr('automation.francisco_sai_de_casa', 'last_triggered') is not none "
             "and (as_timestamp(now()) - as_timestamp(state_attr('automation.francisco_sai_de_casa', 'last_triggered'))) < 28800) }}"
+        ),
+    },
+    # Cooldown: collapse the two arrival paths (person/geofence + Wi-Fi reconnect) into a
+    # single notification. A genuine arrival trips both within ~2-3 min; whichever fires
+    # first announces, the second is suppressed because we announced <5 min ago.
+    {
+        "condition": "template",
+        "value_template": (
+            "{% set last = state_attr('automation.francisco_chega_a_casa', 'last_triggered') %}"
+            "{{ last is none or (as_timestamp(now()) - as_timestamp(last)) > 300 }}"
         ),
     },
 ]
