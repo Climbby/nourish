@@ -11,10 +11,10 @@
 # person 'home' only applies when Wi-Fi state is ambiguous (not connected yet).
 #
 # Requires:
-#   - sensor.francisco_wi_fi_connection  (companion app Wi-Fi Connection sensor)
+#   - sensor.telemovel_francisco_wi_fi_connection (or sensor.francisco_wi_fi_connection)
 #   - binary_sensor.francisco_em_wifi_de_casa  (nourish_wifi_presence.yaml)
 #   - person.francisco_fernandes
-#   - notify.mobile_app_francisco
+#   - notify.mobile_app_telemovel_francisco
 # Home SSIDs are duplicated from nourish_wifi_presence.yaml — keep both in sync.
 # Prereqs on the phone (the real root cause of "rare"): Location = Allow all
 # the time + Precise ON; HA battery usage = Unrestricted; location + Wi-Fi
@@ -29,14 +29,18 @@ template:
         # Wi-Fi disconnect marks away even if person still reads 'home' (GPS lag) —
         # leave-home already uses Wi-Fi; GPS high-accuracy must follow the same signal.
         state: >
-          {% set ssid = states('sensor.francisco_wi_fi_connection') %}
+          {% set ssid_a = states('sensor.telemovel_francisco_wi_fi_connection') %}
+          {% set ssid_b = states('sensor.francisco_wi_fi_connection') %}
+          {% set ssid = ssid_a if ssid_a not in ['unknown', 'unavailable', ''] else ssid_b %}
           {% set home_ssids = ['NOS-2774', 'NOS-2774-5', 'NOS-2774_EXT'] %}
           {% set on_home_wifi = ssid in home_ssids %}
           {% set on_other_wifi = ssid not in home_ssids
              and ssid not in ['<not connected>', 'unavailable', 'unknown', 'unauthorized', ''] %}
-          {% if on_home_wifi or is_state('binary_sensor.francisco_em_wifi_de_casa', 'on') %}
+          {% set home_wifi_helper = is_state('binary_sensor.francisco_em_wifi_de_casa', 'on')
+             or is_state('binary_sensor.francisco_em_wifi_de_casa_2', 'on') %}
+          {% if on_home_wifi or home_wifi_helper %}
             false
-          {% elif is_state('binary_sensor.francisco_em_wifi_de_casa', 'off') %}
+          {% elif (not home_wifi_helper) and ssid not in ['unknown', 'unavailable', ''] %}
             true
           {% elif is_state('person.francisco_fernandes', 'home') %}
             false
@@ -57,7 +61,9 @@ automation:
         to: "on"
         id: away
       - platform: state
-        entity_id: binary_sensor.francisco_em_wifi_de_casa
+        entity_id:
+          - binary_sensor.francisco_em_wifi_de_casa
+          - binary_sensor.francisco_em_wifi_de_casa_2
         to: "off"
         for:
           seconds: 45
@@ -70,21 +76,37 @@ automation:
         event: start
         id: hastart
     condition:
+      # Never force_on just because em_wifi is off — that stays off when the
+      # SSID sensor is missing/unavailable and would pin high-accuracy ON at home.
       - condition: or
         conditions:
           - condition: state
             entity_id: binary_sensor.francisco_fora_de_casa
             state: "on"
-          - condition: state
-            entity_id: binary_sensor.francisco_em_wifi_de_casa
-            state: "off"
+          - condition: and
+            conditions:
+              - condition: and
+                conditions:
+                  - condition: state
+                    entity_id: binary_sensor.francisco_em_wifi_de_casa
+                    state: "off"
+                  - condition: not
+                    conditions:
+                      - condition: state
+                        entity_id: binary_sensor.francisco_em_wifi_de_casa_2
+                        state: "on"
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: person.francisco_fernandes
+                    state: "home"
     action:
-      - action: notify.mobile_app_francisco
+      - action: notify.mobile_app_telemovel_francisco
         data:
           message: command_high_accuracy_mode
           data:
             command: force_on
-      - action: notify.mobile_app_francisco
+      - action: notify.mobile_app_telemovel_francisco
         data:
           message: command_high_accuracy_mode
           data:
@@ -102,7 +124,7 @@ automation:
           - condition: template
             value_template: "{{ trigger.id in ['away', 'wifi_away'] }}"
         then:
-          - action: notify.mobile_app_francisco
+          - action: notify.mobile_app_telemovel_francisco
             data:
               title: "GPS alta precisão ON"
               message: "Modo de alta precisão forçado (saíste de casa)."
@@ -122,7 +144,9 @@ automation:
       # Immediate off when home Wi-Fi reconnects — do not wait for francisco_fora_de_casa
       # delay_off (45 s) or a lagging person.not_home → not_home flip.
       - platform: state
-        entity_id: binary_sensor.francisco_em_wifi_de_casa
+        entity_id:
+          - binary_sensor.francisco_em_wifi_de_casa
+          - binary_sensor.francisco_em_wifi_de_casa_2
         to: "on"
         id: wifi_home
       - platform: state
@@ -148,10 +172,13 @@ automation:
             entity_id: binary_sensor.francisco_em_wifi_de_casa
             state: "on"
           - condition: state
+            entity_id: binary_sensor.francisco_em_wifi_de_casa_2
+            state: "on"
+          - condition: state
             entity_id: person.francisco_fernandes
             state: "home"
     action:
-      - action: notify.mobile_app_francisco
+      - action: notify.mobile_app_telemovel_francisco
         data:
           message: command_high_accuracy_mode
           data:

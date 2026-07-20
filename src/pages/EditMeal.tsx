@@ -8,9 +8,11 @@ import { parseDescription } from '../utils/parseDescription'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
 import { IngredientSection, NutritionSection, PriceSection, PortionsSection } from './AddMeal'
 import { AiGenerateButton } from '../components/AiGenerateButton'
+import { MealOriginField } from '../components/MealOriginField'
 import { PhotoField } from '../components/PhotoField'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
 import type { VerifiedField } from '../utils/verification'
+import { resolveMealOrigin, type MealOrigin } from '../utils/mealOrigin'
 
 function BackIcon() {
   return (
@@ -45,6 +47,7 @@ export function EditMeal() {
   const [carbs, setCarbs] = useState('')
   const [fat, setFat] = useState('')
   const [category, setCategory] = useState('')
+  const [origin, setOrigin] = useState<MealOrigin>('supermercado')
   const [portions, setPortions] = useState('')
   const [priceOverride, setPriceOverride] = useState('')
   const [verifyNutricao, setVerifyNutricao] = useState(false)
@@ -114,6 +117,7 @@ export function EditMeal() {
       setVerifyNutricao(parsed.verified.includes('nutricao'))
       setVerifyMealPrice(parsed.verified.includes('preco'))
       setCategory(parsed.category ?? '')
+      setOrigin(resolveMealOrigin(parsed.origin))
       setPortions(parsed.portions !== null ? String(parsed.portions) : '')
 
       if (r.picture_file_name) {
@@ -231,8 +235,9 @@ export function EditMeal() {
         priceOverride,
         autoTotal,
         category,
-        portions === '' ? null : parseInt(portions, 10),
-        verified
+        origin === 'supermercado' && portions !== '' ? parseInt(portions, 10) : null,
+        verified,
+        origin
       )
 
       await grocy.updateRecipe(numId, {
@@ -308,24 +313,29 @@ export function EditMeal() {
           {aiError && <p className="text-red-400 text-xs mt-1">{aiError}</p>}
         </div>
 
-        <IngredientSection
-          rows={ingredientRows}
-          onUpdate={updateRow}
-          onAdd={addRow}
-          onRemove={removeRow}
-          inputClass={inputClass}
-          labelClass={labelClass}
-          suggestions={suggestions}
-          focusedRow={focusedRow}
-          onFocus={setFocusedRow}
-        />
+        <MealOriginField value={origin} onChange={setOrigin} labelClass={labelClass} />
 
-        {/* Steps */}
-        <div>
-          <label className={labelClass}>Como fazer <span className="text-nourish-border font-normal">(opcional)</span></label>
-          <textarea value={comoFazer} onChange={(e) => setComoFazer(e.target.value)}
-            rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
-        </div>
+        {origin === 'supermercado' && (
+          <>
+            <IngredientSection
+              rows={ingredientRows}
+              onUpdate={updateRow}
+              onAdd={addRow}
+              onRemove={removeRow}
+              inputClass={inputClass}
+              labelClass={labelClass}
+              suggestions={suggestions}
+              focusedRow={focusedRow}
+              onFocus={setFocusedRow}
+            />
+
+            <div>
+              <label className={labelClass}>Como fazer <span className="text-nourish-border font-normal">(opcional)</span></label>
+              <textarea value={comoFazer} onChange={(e) => setComoFazer(e.target.value)}
+                rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
+            </div>
+          </>
+        )}
 
         <NutritionSection
           calories={calories}
@@ -367,7 +377,7 @@ export function EditMeal() {
         />
 
         <PriceSection
-          autoTotal={autoTotal}
+          autoTotal={origin === 'supermercado' ? autoTotal : 0}
           priceOverride={priceOverride}
           onOverrideChange={(v) => {
             setPriceOverride(v)
@@ -382,12 +392,15 @@ export function EditMeal() {
           onChange={setVerifyMealPrice}
           label="Preço verificado"
           disabled={
-            (priceOverride === '' || parseFloat(priceOverride) <= 0) && autoTotal <= 0
+            (priceOverride === '' || parseFloat(priceOverride) <= 0) &&
+            (origin !== 'supermercado' || autoTotal <= 0)
           }
         />
 
-        <PortionsSection portions={portions} onChange={setPortions}
-          inputClass={inputClass} labelClass={labelClass} />
+        {origin === 'supermercado' && (
+          <PortionsSection portions={portions} onChange={setPortions}
+            inputClass={inputClass} labelClass={labelClass} />
+        )}
 
         {saveError && <div className="p-3 bg-red-900/30 border border-red-800 text-red-400 rounded-xl text-sm">{saveError}</div>}
       </div>

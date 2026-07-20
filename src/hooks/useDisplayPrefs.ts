@@ -4,21 +4,29 @@ import { DEFAULT_MEAL_SORT } from '../utils/mealSort'
 
 const STORAGE_KEY = 'nourish-display-prefs'
 
+export type DefaultTab = 'meals' | 'plan'
+
 export interface DisplayPrefs {
   showMealPortions: boolean
   mealSort: MealSortMode
+  defaultTab: DefaultTab
 }
 
 export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   showMealPortions: true,
   mealSort: DEFAULT_MEAL_SORT,
+  defaultTab: 'plan',
 }
 
 function load(): DisplayPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return { ...DEFAULT_DISPLAY_PREFS }
-    return { ...DEFAULT_DISPLAY_PREFS, ...JSON.parse(raw) }
+    const merged = { ...DEFAULT_DISPLAY_PREFS, ...JSON.parse(raw) } as DisplayPrefs
+    if (merged.defaultTab !== 'meals' && merged.defaultTab !== 'plan') {
+      merged.defaultTab = DEFAULT_DISPLAY_PREFS.defaultTab
+    }
+    return merged
   } catch {
     return { ...DEFAULT_DISPLAY_PREFS }
   }

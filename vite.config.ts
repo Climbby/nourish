@@ -54,7 +54,7 @@ export default defineConfig(({ mode }) => {
           ],
         },
         workbox: {
-          navigateFallbackDenylist: [/^\/api/, /^\/ai/, /^\/cdn-cgi\//],
+          navigateFallbackDenylist: [/^\/api/, /^\/ai/, /^\/nourish/, /^\/cdn-cgi\//],
           cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
           runtimeCaching: [
@@ -64,6 +64,10 @@ export default defineConfig(({ mode }) => {
             },
             {
               urlPattern: /^\/ai\//,
+              handler: 'NetworkOnly',
+            },
+            {
+              urlPattern: /^\/nourish\//,
               handler: 'NetworkOnly',
             },
             {

@@ -32,6 +32,43 @@ describe('buildDescription + parseDescription round-trip', () => {
     expect(parsed.category).toBe('Completa')
     expect(parsed.portions).toBe(3)
     expect(parsed.verified).toEqual([])
+    expect(parsed.origin).toBeNull()
+  })
+
+  it('stores meal origin and skips ingredients/steps for restaurant', () => {
+    const built = buildDescription(
+      sampleRows,
+      'Não deve aparecer',
+      { calories: '600', protein: '25', carbs: '50', fat: '20' },
+      '8.50',
+      0,
+      'Completa',
+      null,
+      undefined,
+      'restaurante',
+      'Cantina do ISCTE'
+    )
+    const parsed = parseDescription(built)
+    expect(parsed.origin).toBe('restaurante')
+    expect(parsed.location).toBe('Cantina do ISCTE')
+    expect(parsed.ingredientItems).toEqual([])
+    expect(parsed.steps).toBeNull()
+    expect(parsed.price).toBe(8.5)
+  })
+
+  it('round-trips supermercado origin', () => {
+    const built = buildDescription(
+      sampleRows,
+      'Misturar',
+      { calories: '400', protein: '20', carbs: '40', fat: '10' },
+      '',
+      2.3,
+      'Ligeira',
+      undefined,
+      undefined,
+      'supermercado'
+    )
+    expect(parseDescription(built).origin).toBe('supermercado')
   })
 
   it('round-trips verification flags', () => {

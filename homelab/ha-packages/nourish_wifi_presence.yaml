@@ -3,6 +3,9 @@
 # Verify sensor name under Settings → Devices → Mobile App → your phone.
 # Entity id must stay binary_sensor.francisco_em_wifi_de_casa (used by presence
 # automations in automations.yaml and francisco_fora_de_casa in GPS package).
+#
+# Phone entity is usually sensor.telemovel_francisco_wi_fi_connection after enable;
+# also accept the older/renamed sensor.francisco_wi_fi_connection.
 
 template:
   - binary_sensor:
@@ -10,8 +13,9 @@ template:
         unique_id: francisco_em_wifi_de_casa
         device_class: connectivity
         state: >
-          {{ is_state('sensor.francisco_wi_fi_connection', 'NOS-2774')
-             or is_state('sensor.francisco_wi_fi_connection', 'NOS-2774-5')
-             or is_state('sensor.francisco_wi_fi_connection', 'NOS-2774_EXT') }}
+          {% set ssid = states('sensor.telemovel_francisco_wi_fi_connection')
+             if states('sensor.telemovel_francisco_wi_fi_connection') not in ['unknown', 'unavailable', '']
+             else states('sensor.francisco_wi_fi_connection') %}
+          {{ ssid in ['NOS-2774', 'NOS-2774-5', 'NOS-2774_EXT'] }}
         delay_off:
           seconds: 45

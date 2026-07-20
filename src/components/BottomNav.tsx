@@ -26,6 +26,15 @@ function UserIcon() {
   )
 }
 
+function CalendarIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6">
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path strokeLinecap="round" d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+  )
+}
+
 const ADD_OPTIONS = [
   { type: 'completa', label: 'Refeição completa', desc: 'Almoço, jantar ou prato principal' },
   { type: 'ligeira', label: 'Refeição ligeira', desc: 'Snack, petisco ou lanche' },
@@ -90,9 +99,13 @@ export function BottomNav() {
         className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface border-t border-nourish-border flex z-40"
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
-        <NavLink to="/" end className={linkClass}>
+        <NavLink to="/meals" className={linkClass}>
           <HomeIcon />
           Refeições
+        </NavLink>
+        <NavLink to="/plan" className={linkClass}>
+          <CalendarIcon />
+          Planear
         </NavLink>
         <button
           onClick={() => setShowSheet(true)}

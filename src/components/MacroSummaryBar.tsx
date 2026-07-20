@@ -11,14 +11,23 @@ interface Props {
 export function MacroSummaryBar({ totals, targets, days, label = 'Plano' }: Props) {
   const expectedKcal = targets.caloriesPerDay * days
   const pct = expectedKcal > 0 ? Math.min(100, Math.round((totals.calories / expectedKcal) * 100)) : 0
+  const spendLabel =
+    totals.mealsWithPrice > 0
+      ? `€${totals.spend.toFixed(2)}`
+      : null
 
   return (
     <div className="bg-nourish-surface border border-nourish-border rounded-lg p-3 space-y-2">
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-xs font-semibold text-nourish-text">{label}</p>
-        <p className="text-xs text-nourish-text-dim tabular-nums">
-          {totals.calories.toLocaleString('pt-PT')} / {expectedKcal.toLocaleString('pt-PT')} kcal
-        </p>
+        <div className="flex items-baseline gap-2 text-xs tabular-nums">
+          {spendLabel && (
+            <span className="font-semibold text-nourish-primary">{spendLabel}</span>
+          )}
+          <span className="text-nourish-text-dim">
+            {totals.calories.toLocaleString('pt-PT')} / {expectedKcal.toLocaleString('pt-PT')} kcal
+          </span>
+        </div>
       </div>
       <div className="h-1.5 bg-nourish-surface-high rounded-sm overflow-hidden">
         <div
@@ -32,6 +41,12 @@ export function MacroSummaryBar({ totals, targets, days, label = 'Plano' }: Prop
         <span>{totals.carbs}g C</span>
         <span>·</span>
         <span>{totals.fat}g G</span>
+        {totals.mealsWithPrice > 0 && totals.mealsWithPrice < days && (
+          <>
+            <span>·</span>
+            <span>{totals.mealsWithPrice}/{days} com preço</span>
+          </>
+        )}
         <span className="ml-auto">
           Objectivo: {targets.proteinPerDay}g P · {targets.carbsPerDay}g C · {targets.fatPerDay}g G/dia
         </span>
@@ -40,18 +55,35 @@ export function MacroSummaryBar({ totals, targets, days, label = 'Plano' }: Prop
   )
 }
 
-export function MacroChips({ nutrition }: { nutrition: { protein: number; carbs: number; fat: number; calories: number } }) {
+export function MacroChips({
+  nutrition,
+  price,
+}: {
+  nutrition?: { protein: number; carbs: number; fat: number; calories: number } | null
+  price?: number | null
+}) {
+  if (!nutrition && (price === null || price === undefined)) return null
+
   return (
     <div className="flex flex-wrap gap-1 mt-1">
-      <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded text-[10px] text-nourish-text-dim tabular-nums">
-        {nutrition.calories} kcal
-      </span>
-      <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded text-[10px] text-nourish-text-dim tabular-nums">
-        {nutrition.protein}g P
-      </span>
-      <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded text-[10px] text-nourish-text-dim tabular-nums">
-        {nutrition.carbs}g C
-      </span>
+      {price != null && (
+        <span className="px-1.5 py-0.5 bg-nourish-primary/15 rounded text-[10px] text-nourish-primary font-semibold tabular-nums">
+          €{price.toFixed(2)}
+        </span>
+      )}
+      {nutrition && (
+        <>
+          <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded text-[10px] text-nourish-text-dim tabular-nums">
+            {nutrition.calories} kcal
+          </span>
+          <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded text-[10px] text-nourish-text-dim tabular-nums">
+            {nutrition.protein}g P
+          </span>
+          <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded text-[10px] text-nourish-text-dim tabular-nums">
+            {nutrition.carbs}g C
+          </span>
+        </>
+      )}
     </div>
   )
 }

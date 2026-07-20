@@ -4,9 +4,11 @@ import { grocy } from '../api/grocy'
 import type { Product, QuantityUnit, Recipe, RecipeIngredient } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription, parseSteps } from '../utils/parseDescription'
+import { isRestaurantMeal, mealOriginLabel, resolveMealOrigin } from '../utils/mealOrigin'
 import { VerifiedBadge } from '../components/VerifiedBadge'
-import { addPortions, decrementPortions } from '../utils/buildDescription'
+import { addPortions } from '../utils/buildDescription'
 import { useFavourites } from '../hooks/useFavourites'
+import { logMealConsumption } from '../utils/logMealConsumption'
 
 function PencilIcon() {
   return (
@@ -103,28 +105,12 @@ export function MealDetail() {
     setConfirmLogZero(false)
     setLogging(true)
     setLogError(null)
-    const d = new Date()
-    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    const originalDesc = recipe.description ?? ''
-    const shouldDecrement = (parseDescription(originalDesc).portions ?? 0) > 0
-    let decremented = false
     try {
-      if (shouldDecrement) {
-        const newDesc = decrementPortions(originalDesc)
-        await grocy.updateRecipe(recipeId, { description: newDesc })
-        setRecipe({ ...recipe, description: newDesc })
-        decremented = true
-      }
-      await grocy.logMeal({ day, recipe_id: recipeId, note: '' })
+      const { description } = await logMealConsumption(recipeId, recipe.description ?? '')
+      setRecipe({ ...recipe, description })
       setLogged(true)
       setTimeout(() => setLogged(false), 2500)
     } catch (e) {
-      if (decremented) {
-        try {
-          await grocy.updateRecipe(recipeId, { description: originalDesc })
-          setRecipe({ ...recipe, description: originalDesc })
-        } catch { /* rollback failed — portions may be out of sync */ }
-      }
       setLogError(e instanceof Error ? e.message : 'Erro ao registar')
     } finally {
       setLogging(false)
@@ -163,7 +149,7 @@ export function MealDetail() {
     setDeleting(true)
     try {
       await grocy.deleteRecipe(recipeId)
-      navigate('/')
+      navigate('/meals')
     } catch (e) {
       setLogError(e instanceof Error ? e.message : 'Erro ao apagar')
       setConfirmDelete(false)
@@ -175,7 +161,7 @@ export function MealDetail() {
   const header = (title: string, recipeId?: number) => (
     <header className="flex items-center gap-3 px-4 pt-12 pb-4 border-b border-nourish-border">
       <button
-        onClick={() => navigate('/')}
+        onClick={() => navigate('/meals')}
         className="p-2 -ml-2 text-nourish-text-dim rounded-lg focus:outline-none focus:ring-2 focus:ring-nourish-primary"
       >
         <BackIcon />
@@ -225,10 +211,12 @@ export function MealDetail() {
 
   const parsed = parseDescription(recipe.description ?? '')
   const { ingredients: parsedIngr, steps, nutrition, price } = parsed
+  const origin = resolveMealOrigin(parsed.origin)
+  const restaurant = isRestaurantMeal(parsed.origin)
   const nutricaoOk = parsed.verified.includes('nutricao')
   const precoOk = parsed.verified.includes('preco')
-  const stepLines = parseSteps(steps)
-  const tracksPortions = parsed.portions !== null
+  const stepLines = restaurant ? [] : parseSteps(steps)
+  const tracksPortions = parsed.portions !== null && !restaurant
 
   const nutritionItems = nutrition
     ? [
@@ -253,6 +241,17 @@ export function MealDetail() {
       )}
 
       <div className="px-4 pt-5 space-y-6">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] px-2 py-0.5 rounded bg-nourish-surface-high text-nourish-text-dim font-semibold uppercase tracking-wider">
+            {mealOriginLabel(origin)}
+          </span>
+          {parsed.category && (
+            <span className="text-[10px] px-2 py-0.5 rounded bg-nourish-surface-high text-nourish-text-dim font-medium">
+              {parsed.category}
+            </span>
+          )}
+        </div>
+
         {(nutrition || price !== null) && (
           <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
             {nutrition && (
@@ -274,7 +273,7 @@ export function MealDetail() {
             )}
             {price !== null && (
               <div className={`flex items-center justify-between ${nutrition ? 'border-t border-nourish-border pt-3' : ''}`}>
-                <span className="text-nourish-text-dim text-sm">Custo estimado</span>
+                <span className="text-nourish-text-dim text-sm">{precoOk ? 'Custo' : 'Custo estimado'}</span>
                 <span className="text-nourish-primary font-semibold inline-flex items-center gap-1.5">
                   €{price.toFixed(2)}
                   {precoOk && <VerifiedBadge verified />}
@@ -284,7 +283,7 @@ export function MealDetail() {
           </div>
         )}
 
-        {ingredients.length > 0 && (
+        {!restaurant && ingredients.length > 0 && (
           <section>
             <h3 className="font-semibold text-nourish-text mb-3">Ingredientes</h3>
             <ul className="space-y-2">
@@ -307,7 +306,7 @@ export function MealDetail() {
           </section>
         )}
 
-        {ingredients.length === 0 && parsedIngr && (
+        {!restaurant && ingredients.length === 0 && parsedIngr && (
           <section>
             <h3 className="font-semibold text-nourish-text mb-3">Ingredientes</h3>
             <ul className="space-y-2">
@@ -326,7 +325,7 @@ export function MealDetail() {
           </section>
         )}
 
-        {stepLines.length > 0 && (
+        {!restaurant && stepLines.length > 0 && (
           <section>
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-nourish-text">Como fazer</h3>

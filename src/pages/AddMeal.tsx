@@ -5,10 +5,14 @@ import { analyzeMeal, analyzeProduct, suggestIngredients } from '../api/ai'
 import { grocyConfig } from '../config/grocy'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
 import { buildDespensaDescription } from '../utils/despensaAnalytics'
+import type { NavigationFeedbackState } from '../utils/navigationFeedback'
 import type { VerifiedField } from '../utils/verification'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
 import { AiGenerateButton } from '../components/AiGenerateButton'
+import { MealOriginField } from '../components/MealOriginField'
 import { PhotoField } from '../components/PhotoField'
+import { type MealOrigin } from '../utils/mealOrigin'
+import { fetchAtHome, originFromAtHome } from '../utils/haPresence'
 
 const { despensaGroupId: DESPENSA_GROUP_ID, defaultLocationId: DEFAULT_LOCATION_ID, defaultQuId: DEFAULT_QU_ID } = grocyConfig
 
@@ -58,6 +62,7 @@ export function AddMeal() {
     if (typeParam === 'ligeira') return 'Ligeira'
     return ''
   })
+  const [origin, setOrigin] = useState<MealOrigin>('supermercado')
   const [buyAmount, setBuyAmount] = useState('1')
   const [unitPrice, setUnitPrice] = useState('')
   const [verifyPrice, setVerifyPrice] = useState(false)
@@ -82,6 +87,19 @@ export function AddMeal() {
       grocy.getProducts().then((products) => {
         setExistingProducts(products.map((p) => p.name))
       }).catch(() => {})
+    }
+  }, [isDespensa])
+
+  useEffect(() => {
+    if (isDespensa) return
+    let cancelled = false
+    fetchAtHome().then((atHome) => {
+      if (cancelled) return
+      const suggested = originFromAtHome(atHome)
+      if (suggested) setOrigin(suggested)
+    })
+    return () => {
+      cancelled = true
     }
   }, [isDespensa])
 
@@ -220,7 +238,15 @@ export function AddMeal() {
           const filename = await grocy.uploadProductPicture(photoFile, result.created_object_id)
           await grocy.updateProduct(result.created_object_id, { picture_file_name: filename })
         }
-        navigate('/?filter=despensa', { replace: true })
+        navigate('/meals?filter=despensa', {
+          replace: true,
+          state: {
+            feedback: {
+              kind: 'success',
+              message: 'Produto guardado com sucesso.',
+            },
+          } satisfies NavigationFeedbackState,
+        })
       } else {
         let pictureName: string | null = null
         if (photoFile) pictureName = await grocy.uploadPicture(photoFile)
@@ -233,7 +259,8 @@ export function AddMeal() {
           autoTotal,
           category,
           undefined,
-          buildMealVerified()
+          buildMealVerified(),
+          origin
         )
 
         await grocy.createRecipe({
@@ -244,7 +271,15 @@ export function AddMeal() {
           not_check_shoppinglist: 0,
           ...(pictureName ? { picture_file_name: pictureName } : {}),
         })
-        navigate(-1)
+        navigate('/meals', {
+          replace: true,
+          state: {
+            feedback: {
+              kind: 'success',
+              message: 'Refeição guardada com sucesso.',
+            },
+          } satisfies NavigationFeedbackState,
+        })
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro desconhecido')
@@ -341,22 +376,27 @@ export function AddMeal() {
           </>
         ) : (
           <>
-            <IngredientSection
-              rows={ingredientRows}
-              onUpdate={updateRow}
-              onAdd={addRow}
-              onRemove={removeRow}
-              inputClass={inputClass}
-              labelClass={labelClass}
-              suggestions={suggestions}
-              focusedRow={focusedRow}
-              onFocus={setFocusedRow}
-            />
-            <div>
-              <label className={labelClass}>Como fazer <span className="text-nourish-border font-normal">(opcional)</span></label>
-              <textarea value={comoFazer} onChange={(e) => setComoFazer(e.target.value)}
-                rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
-            </div>
+            <MealOriginField value={origin} onChange={setOrigin} labelClass={labelClass} />
+            {origin === 'supermercado' && (
+              <>
+                <IngredientSection
+                  rows={ingredientRows}
+                  onUpdate={updateRow}
+                  onAdd={addRow}
+                  onRemove={removeRow}
+                  inputClass={inputClass}
+                  labelClass={labelClass}
+                  suggestions={suggestions}
+                  focusedRow={focusedRow}
+                  onFocus={setFocusedRow}
+                />
+                <div>
+                  <label className={labelClass}>Como fazer <span className="text-nourish-border font-normal">(opcional)</span></label>
+                  <textarea value={comoFazer} onChange={(e) => setComoFazer(e.target.value)}
+                    rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
+                </div>
+              </>
+            )}
             <NutritionSection
               calories={calories}
               protein={protein}
@@ -396,7 +436,7 @@ export function AddMeal() {
               }
             />
             <PriceSection
-              autoTotal={autoTotal}
+              autoTotal={origin === 'supermercado' ? autoTotal : 0}
               priceOverride={priceOverride}
               onOverrideChange={(v) => {
                 setPriceOverride(v)
@@ -411,7 +451,8 @@ export function AddMeal() {
               onChange={setVerifyMealPrice}
               label="Preço verificado"
               disabled={
-                (priceOverride === '' || parseFloat(priceOverride) <= 0) && autoTotal <= 0
+                (priceOverride === '' || parseFloat(priceOverride) <= 0) &&
+                (origin !== 'supermercado' || autoTotal <= 0)
               }
             />
           </>

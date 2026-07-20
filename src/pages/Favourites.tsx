@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { grocy } from '../api/grocy'
 import type { Recipe } from '../types/grocy'
 import { MealCard } from '../components/MealCard'
+import { ConnectionError } from '../components/ConnectionError'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
 import { useFavourites } from '../hooks/useFavourites'
@@ -12,15 +13,19 @@ export function Favourites() {
   const [error, setError] = useState<string | null>(null)
   const { favourites } = useFavourites()
 
-  useEffect(() => {
-    let mounted = true
+  const loadFavourites = useCallback(() => {
+    setLoading(true)
+    setError(null)
     grocy
       .getRecipes()
-      .then((data) => { if (mounted) setRecipes(data) })
-      .catch((e: Error) => { if (mounted) setError(e.message) })
-      .finally(() => { if (mounted) setLoading(false) })
-    return () => { mounted = false }
+      .then(setRecipes)
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    loadFavourites()
+  }, [loadFavourites])
 
   const favouriteRecipes = recipes.filter((r) => favourites.has(r.id))
 
@@ -35,9 +40,7 @@ export function Favourites() {
         {loading && <Spinner />}
 
         {error && (
-          <div className="p-3 bg-red-900/30 border border-red-800 text-red-400 rounded-xl text-sm">
-            Erro ao carregar: {error}
-          </div>
+          <ConnectionError message={`Erro ao carregar: ${error}`} onRetry={loadFavourites} />
         )}
 
         {!loading && !error && favouriteRecipes.length === 0 && (

@@ -204,7 +204,7 @@ export function ProductDetail() {
     setStockSaving(true)
     try {
       await grocy.deleteProduct(numId)
-      navigate('/?filter=despensa', { replace: true })
+      navigate('/meals?filter=despensa', { replace: true })
     } catch {
       setConfirmRemove(false)
     } finally {

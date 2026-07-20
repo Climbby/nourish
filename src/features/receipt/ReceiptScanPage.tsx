@@ -567,7 +567,7 @@ export function ReceiptScanPage() {
             )}
             <button
               type="button"
-              onClick={() => navigate('/?filter=despensa')}
+              onClick={() => navigate('/meals?filter=despensa')}
               className="w-full py-3.5 rounded-xl font-semibold text-nourish-on-primary bg-nourish-primary"
             >
               Ver Despensa

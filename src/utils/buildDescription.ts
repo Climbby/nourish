@@ -1,5 +1,6 @@
 import type { VerifiedField } from './verification'
 import { formatVerifiedSection } from './verification'
+import type { MealOrigin } from './mealOrigin'
 
 export interface IngredientRow {
   id: number
@@ -22,11 +23,14 @@ export function buildDescription(
   autoTotal: number,
   category?: string,
   portions?: number | null,
-  verified?: Set<VerifiedField>
+  verified?: Set<VerifiedField>,
+  origin?: MealOrigin | null,
+  location?: string | null
 ): string {
   const parts: string[] = []
+  const isRestaurant = origin === 'restaurante'
 
-  const filled = ingredientRows.filter((r) => r.name.trim())
+  const filled = isRestaurant ? [] : ingredientRows.filter((r) => r.name.trim())
   if (filled.length > 0) {
     const lines = filled.map((r) => {
       const p = parseFloat(r.price)
@@ -35,7 +39,7 @@ export function buildDescription(
     parts.push(`[Ingredientes]\n${lines.join('\n')}`)
   }
 
-  if (steps.trim()) parts.push(`[Passos]\n${steps.trim()}`)
+  if (!isRestaurant && steps.trim()) parts.push(`[Passos]\n${steps.trim()}`)
 
   const { calories, protein, carbs, fat } = nutrition
   if (calories || protein || carbs || fat) {
@@ -50,6 +54,8 @@ export function buildDescription(
   }
 
   if (category?.trim()) parts.push(`[Categoria]\n${category.trim()}`)
+  if (origin) parts.push(`[Origem]\n${origin}`)
+  if (location?.trim()) parts.push(`[Local]\n${location.trim()}`)
   if (portions !== undefined && portions !== null && portions >= 0) parts.push(`[Porcoes]\n${portions}`)
   if (verified && verified.size > 0) parts.push(formatVerifiedSection(verified))
 

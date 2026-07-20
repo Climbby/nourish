@@ -12,6 +12,8 @@ function parsed(overrides: Partial<ParsedRecipe> = {}): ParsedRecipe {
     category: 'Completa',
     portions: null,
     verified: [],
+    origin: null,
+    location: null,
     ...overrides,
   }
 }

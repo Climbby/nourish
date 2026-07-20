@@ -4,6 +4,7 @@ import { grocy } from '../api/grocy'
 import { grocyConfig } from '../config/grocy'
 import { PhotoField } from '../components/PhotoField'
 import { buildDespensaDescription } from '../utils/despensaAnalytics'
+import type { NavigationFeedbackState } from '../utils/navigationFeedback'
 import type { VerifiedField } from '../utils/verification'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
 
@@ -68,7 +69,15 @@ export function AddProduct() {
         await grocy.updateProduct(result.created_object_id, { picture_file_name: filename })
       }
 
-      navigate(-1)
+      navigate('/meals?filter=despensa', {
+        replace: true,
+        state: {
+          feedback: {
+            kind: 'success',
+            message: 'Produto guardado com sucesso.',
+          },
+        } satisfies NavigationFeedbackState,
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao guardar')
     } finally {

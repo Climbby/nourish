@@ -1,11 +1,13 @@
 import type { Recipe } from '../types/grocy'
+import { mealAccessRank } from './mealAccess'
 import type { ParsedRecipe } from './parseDescription'
 
-export type MealSortMode = 'recent' | 'oldest' | 'price-desc' | 'price-asc'
+export type MealSortMode = 'recent' | 'oldest' | 'price-desc' | 'price-asc' | 'splay'
 
-export const DEFAULT_MEAL_SORT: MealSortMode = 'recent'
+export const DEFAULT_MEAL_SORT: MealSortMode = 'splay'
 
 export const MEAL_SORT_OPTIONS: { key: MealSortMode; label: string }[] = [
+  { key: 'splay', label: 'Últimas comidas' },
   { key: 'recent', label: 'Mais recentes' },
   { key: 'oldest', label: 'Mais antigas' },
   { key: 'price-desc', label: 'Mais caras' },
@@ -34,7 +36,8 @@ export function compareRecipesForSort(
   a: Recipe,
   b: Recipe,
   parsedById: Map<number, ParsedRecipe>,
-  mode: MealSortMode
+  mode: MealSortMode,
+  accessOrder: number[] = []
 ): number {
   let cmp = 0
   switch (mode) {
@@ -44,6 +47,11 @@ export function compareRecipesForSort(
     case 'oldest':
       cmp = a.id - b.id
       break
+    case 'splay': {
+      cmp = mealAccessRank(accessOrder, a.id) - mealAccessRank(accessOrder, b.id)
+      if (cmp === 0) cmp = b.id - a.id
+      break
+    }
     case 'price-desc': {
       const ap = parsedById.get(a.id)?.price
       const bp = parsedById.get(b.id)?.price
@@ -61,7 +69,8 @@ export function compareRecipesForSort(
 export function sortRecipes(
   recipes: Recipe[],
   parsedById: Map<number, ParsedRecipe>,
-  mode: MealSortMode
+  mode: MealSortMode,
+  accessOrder: number[] = []
 ): Recipe[] {
-  return [...recipes].sort((a, b) => compareRecipesForSort(a, b, parsedById, mode))
+  return [...recipes].sort((a, b) => compareRecipesForSort(a, b, parsedById, mode, accessOrder))
 }

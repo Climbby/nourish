@@ -11,6 +11,7 @@ import { AddProduct } from './pages/AddProduct'
 import { ProductDetail } from './pages/ProductDetail'
 import { ReceiptScanPage } from './features/receipt/ReceiptScanPage'
 import { UpdatePrompt } from './components/UpdatePrompt'
+import { DefaultHomeRedirect } from './components/DefaultHomeRedirect'
 
 export default function App() {
   return (
@@ -18,7 +19,8 @@ export default function App() {
       <UpdatePrompt />
       <div className="max-w-sm mx-auto min-h-screen bg-nourish-bg">
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<DefaultHomeRedirect />} />
+          <Route path="/meals" element={<Home />} />
           <Route path="/add" element={<AddMeal />} />
           <Route path="/meal/:id" element={<MealDetail />} />
           <Route path="/meal/:id/edit" element={<EditMeal />} />

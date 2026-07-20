@@ -11,6 +11,7 @@ import type {
   StockLogEntry,
 } from '../types/grocy'
 import { grocyConfig } from '../config/grocy'
+import { fetchWithRetry } from '../utils/fetchWithRetry'
 
 function convertToWebP(file: File, quality = 0.85): Promise<Blob> {
   return new Promise((resolve, reject) => {
@@ -38,7 +39,7 @@ function convertToWebP(file: File, quality = 0.85): Promise<Blob> {
 }
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, options)
+  const res = await fetchWithRetry(`/api${path}`, options)
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`Grocy ${res.status}: ${text}`)

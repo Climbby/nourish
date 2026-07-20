@@ -1,7 +1,13 @@
-import type { NutritionTargets } from '../hooks/useNutritionTargets'
+import { DEFAULT_TARGETS, type NutritionTargets } from '../hooks/useNutritionTargets'
 import type { Recipe } from '../types/grocy'
 import { parseDescription, type Nutrition } from './parseDescription'
-import { dayLabelForOffset, scoreRecipe, type SuggestionContext } from './suggestMeal'
+import {
+  dayLabelForOffset,
+  medianRecipePrice,
+  scoreRecipe,
+  type SuggestionContext,
+  type SuggestionPreference,
+} from './suggestMeal'
 
 export type MacroKey = 'calories' | 'protein' | 'carbs' | 'fat'
 
@@ -21,6 +27,9 @@ export interface WeekPlanTotals {
   carbs: number
   fat: number
   daysWithNutrition: number
+  /** Sum of `[Preco]` across meals that have a price */
+  spend: number
+  mealsWithPrice: number
 }
 
 const MACRO_LABEL: Record<MacroKey, string> = {
@@ -45,19 +54,28 @@ function macroValue(key: MacroKey, n: Nutrition): number {
 }
 
 function emptyTotals(): WeekPlanTotals {
-  return { calories: 0, protein: 0, carbs: 0, fat: 0, daysWithNutrition: 0 }
+  return { calories: 0, protein: 0, carbs: 0, fat: 0, daysWithNutrition: 0, spend: 0, mealsWithPrice: 0 }
+}
+
+export function emptyWeekTotals(): WeekPlanTotals {
+  return emptyTotals()
 }
 
 export function sumWeekPlanNutrition(suggestions: DaySuggestion[]): WeekPlanTotals {
   const totals = emptyTotals()
   for (const { recipe } of suggestions) {
-    const { nutrition } = parseDescription(recipe.description ?? '')
-    if (!nutrition) continue
-    totals.calories += nutrition.calories
-    totals.protein += nutrition.protein
-    totals.carbs += nutrition.carbs
-    totals.fat += nutrition.fat
-    totals.daysWithNutrition++
+    const { nutrition, price } = parseDescription(recipe.description ?? '')
+    if (nutrition) {
+      totals.calories += nutrition.calories
+      totals.protein += nutrition.protein
+      totals.carbs += nutrition.carbs
+      totals.fat += nutrition.fat
+      totals.daysWithNutrition++
+    }
+    if (price !== null) {
+      totals.spend += price
+      totals.mealsWithPrice++
+    }
   }
   return totals
 }
@@ -103,19 +121,35 @@ function pickFocusMacro(
 }
 
 function buildReason(
+  preference: SuggestionPreference,
   focus: MacroKey,
   running: Nutrition,
   dayExpected: Nutrition,
   meal: Nutrition,
-  hasPortions: boolean
+  hasPortions: boolean,
+  category: string | null,
+  price: number | null,
+  isFavourite: boolean
 ): string {
+  if (preference === 'cheap' && price !== null) {
+    return hasPortions
+      ? `€${price.toFixed(2)} · porções prontas`
+      : `Opção económica · €${price.toFixed(2)}`
+  }
+  if (preference === 'taste') {
+    if (isFavourite) return 'Dos teus preferidos'
+    if (hasPortions) return 'Porções prontas · boa escolha'
+    return `Preferido · ${Math.round(meal.calories)} kcal`
+  }
+
+  if (hasPortions) {
+    return `${FOCUS_SHORT[focus]} · porções prontas no frigorífico`
+  }
+
   const calGap = relativeGap('calories', running, dayExpected)
 
   if (calGap < -0.15 && focus === 'calories') {
     return 'Refeição mais leve — semana acima em calorias'
-  }
-  if (hasPortions) {
-    return `${FOCUS_SHORT[focus]} · porções prontas no frigorífico`
   }
   if (relativeGap(focus, running, dayExpected) > 0.08) {
     return `Reforça ${MACRO_LABEL[focus].toLowerCase()} — abaixo do plano`
@@ -124,6 +158,7 @@ function buildReason(
   if (p >= 25 && focus === 'protein') {
     return 'Boa fonte de proteína para equilibrar a semana'
   }
+  if (category === 'Completa') return `Completa · ${Math.round(meal.calories)} kcal`
   return `Equilibrada · ${Math.round(meal.calories)} kcal`
 }
 
@@ -162,32 +197,45 @@ function nutritionScore(
   return score
 }
 
+/**
+ * Pick a balanced week of meals against profile targets (fallback DEFAULT_TARGETS),
+ * always avoiding recently eaten meals. `preference` adds Preferidos / Barato / Nutritivo bias.
+ */
 export function pickBalancedWeeklySuggestions(
   ctx: SuggestionContext,
   targets: NutritionTargets,
   days = 7,
-  now = new Date()
+  now = new Date(),
+  preference: SuggestionPreference = 'taste'
 ): DaySuggestion[] {
-  const { recipes } = ctx
+  const recipes = ctx.recipes.filter((r) => {
+    const { category } = parseDescription(r.description ?? '')
+    return category === 'Completa'
+  })
   if (recipes.length === 0) return []
 
+  const poolCtx: SuggestionContext = { ...ctx, recipes }
+
+  const effectiveTargets = targets.caloriesPerDay > 0 ? targets : DEFAULT_TARGETS
+
+  const priceAnchor = preference === 'cheap' ? medianRecipePrice(recipes) : null
   const picked = new Set<number>()
   const running = emptyTotals()
   const result: DaySuggestion[] = []
 
   const dailyTargets: Nutrition = {
-    calories: targets.caloriesPerDay,
-    protein: targets.proteinPerDay,
-    carbs: targets.carbsPerDay,
-    fat: targets.fatPerDay,
+    calories: effectiveTargets.caloriesPerDay,
+    protein: effectiveTargets.proteinPerDay,
+    carbs: effectiveTargets.carbsPerDay,
+    fat: effectiveTargets.fatPerDay,
   }
 
   for (let i = 0; i < days; i++) {
     const cumulativeExpected = {
-      calories: targets.caloriesPerDay * (i + 1),
-      protein: targets.proteinPerDay * (i + 1),
-      carbs: targets.carbsPerDay * (i + 1),
-      fat: targets.fatPerDay * (i + 1),
+      calories: effectiveTargets.caloriesPerDay * (i + 1),
+      protein: effectiveTargets.proteinPerDay * (i + 1),
+      carbs: effectiveTargets.carbsPerDay * (i + 1),
+      fat: effectiveTargets.fatPerDay * (i + 1),
     }
     const runningNutrition: Nutrition = {
       calories: running.calories,
@@ -206,11 +254,19 @@ export function pickBalancedWeeklySuggestions(
       .filter((r) => !picked.has(r.id))
       .map((recipe) => {
         const parsed = parseDescription(recipe.description ?? '')
-        const base = scoreRecipe(recipe, ctx, picked)
+        const base = scoreRecipe(recipe, poolCtx, picked, preference, priceAnchor)
         let score = base
 
         if (parsed.nutrition) {
-          score += nutritionScore(parsed.nutrition, runningNutrition, cumulativeExpected, dailyTargets, weekBehind)
+          const nutritionWeight = preference === 'balanced' ? 1 : 0.55
+          score +=
+            nutritionScore(
+              parsed.nutrition,
+              runningNutrition,
+              cumulativeExpected,
+              dailyTargets,
+              weekBehind
+            ) * nutritionWeight
         } else {
           score -= 4
         }
@@ -223,22 +279,37 @@ export function pickBalancedWeeklySuggestions(
     if (!best) break
 
     picked.add(best.recipe.id)
-    const { nutrition, portions } = best.parsed
+    const { nutrition, portions, category, price } = best.parsed
     const hasPortions = (portions ?? 0) > 0
+    const isFavourite = poolCtx.favourites.has(best.recipe.id)
 
     let focus: MacroKey = 'calories'
     let reason = hasPortions
       ? 'Porções prontas no frigorífico'
-      : 'Variedade para a semana'
+      : 'Completa · variedade para a semana'
 
     if (nutrition) {
       focus = pickFocusMacro(runningNutrition, cumulativeExpected, dailyTargets, nutrition)
-      reason = buildReason(focus, runningNutrition, cumulativeExpected, nutrition, hasPortions)
+      reason = buildReason(
+        preference,
+        focus,
+        runningNutrition,
+        cumulativeExpected,
+        nutrition,
+        hasPortions,
+        category,
+        price,
+        isFavourite
+      )
       running.calories += nutrition.calories
       running.protein += nutrition.protein
       running.carbs += nutrition.carbs
       running.fat += nutrition.fat
       running.daysWithNutrition++
+    } else if (preference === 'cheap' && price !== null) {
+      reason = `Opção económica · €${price.toFixed(2)}`
+    } else if (preference === 'taste' && isFavourite) {
+      reason = 'Dos teus preferidos'
     }
 
     result.push({

@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { BottomNav } from '../components/BottomNav'
+import { ConnectionError } from '../components/ConnectionError'
 import { CarModelInput } from '../components/CarModelInput'
 import { MealSpendSheet } from '../components/MealSpendSheet'
 import { VisitFuelTripsSheet } from '../components/VisitFuelTripsSheet'
@@ -22,6 +23,7 @@ import {
   type SupermarketsData,
 } from '../utils/supermarkets'
 import { useUserProfile, DEFAULT_USER_PROFILE } from '../hooks/useUserProfile'
+import { clearPwaCachesAndReload, nudgeServiceWorkerUpdate } from '../utils/pwaRecovery'
 import {
   aggregateMealStats,
   buildMealSpendRows,
@@ -140,18 +142,21 @@ export function Profile() {
     ? formatFuelPricesUpdatedAt(fuelPrices.updated_at)
     : null
 
-  useEffect(() => {
-    let mounted = true
+  const loadProfile = useCallback(() => {
+    setLoading(true)
+    setError(null)
     Promise.all([grocy.getMealPlan(), grocy.getRecipes()])
       .then(([plan, list]) => {
-        if (!mounted) return
         setMealPlan(plan)
         setRecipes(list)
       })
-      .catch((e: Error) => { if (mounted) setError(e.message) })
-      .finally(() => { if (mounted) setLoading(false) })
-    return () => { mounted = false }
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    loadProfile()
+  }, [loadProfile])
 
   const periodMeta = getPeriodMeta(period)
   const resumoPeriodLabel =
@@ -281,9 +286,7 @@ export function Profile() {
         {loading && <Spinner />}
 
         {error && (
-          <div className="p-3 bg-red-900/30 border border-red-800 text-red-400 rounded-xl text-sm">
-            Erro ao carregar: {error}
-          </div>
+          <ConnectionError message={`Erro ao carregar: ${error}`} onRetry={loadProfile} />
         )}
 
         {!loading && !error && tab === 'resumo' && (
@@ -773,7 +776,7 @@ export function Profile() {
               <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
                 Aparência
               </h2>
-              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4">
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4 space-y-4">
                 <label className="flex items-center justify-between gap-3 cursor-pointer">
                   <div>
                     <p className="text-sm font-medium text-nourish-text">Mostrar porções nas refeições</p>
@@ -788,6 +791,37 @@ export function Profile() {
                     className="rounded border-nourish-border w-5 h-5"
                   />
                 </label>
+                <div>
+                  <p className="text-sm font-medium text-nourish-text mb-1.5">Ecrã inicial</p>
+                  <p className="text-xs text-nourish-text-dim mb-2">
+                    Separador aberto ao iniciar a app
+                  </p>
+                  <div
+                    className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-nourish-bg border border-nourish-border"
+                    role="tablist"
+                    aria-label="Ecrã inicial"
+                  >
+                    {([
+                      { key: 'plan' as const, label: 'Planear' },
+                      { key: 'meals' as const, label: 'Refeições' },
+                    ]).map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        role="tab"
+                        aria-selected={prefs.defaultTab === key}
+                        onClick={() => updatePref('defaultTab', key)}
+                        className={`py-2 rounded-md text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                          prefs.defaultTab === key
+                            ? 'bg-nourish-primary text-nourish-on-primary'
+                            : 'text-nourish-text-dim'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -923,6 +957,33 @@ export function Profile() {
                 ) : (
                   <p className="text-xs text-nourish-text-dim">A carregar lista…</p>
                 )}
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
+                App
+              </h2>
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4 space-y-3">
+                <p className="text-xs text-nourish-text-dim">
+                  Se vires &quot;Failed to fetch&quot; no telemóvel, tenta reparar a app em vez de a reinstalar.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void nudgeServiceWorkerUpdate()}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold border border-nourish-border text-nourish-text hover:bg-nourish-border/10 transition-colors focus:outline-none"
+                  >
+                    Verificar atualização
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void clearPwaCachesAndReload()}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold bg-nourish-primary text-nourish-on-primary hover:opacity-90 transition-opacity focus:outline-none"
+                  >
+                    Reparar app
+                  </button>
+                </div>
               </div>
             </section>
           </>

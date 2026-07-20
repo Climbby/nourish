@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
+import { ConnectionError } from '../components/ConnectionError'
 import { VerifiedBadge } from '../components/VerifiedBadge'
 import { CartIcon, ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
 import { StockAmountSheet } from '../components/StockAmountSheet'
@@ -170,6 +171,8 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   const stockEditItem = stockEditId != null ? items.find((i) => i.product_id === stockEditId) : null
 
   const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
     try {
       const [despensaItems, sl, allLogs] = await Promise.all([
         grocy.getDespensaStock(),
@@ -276,7 +279,13 @@ export function DespensaSection({ query = '' }: { query?: string }) {
   )
 
   if (loading) return <div className="flex justify-center pt-12"><Spinner /></div>
-  if (error) return <p className="text-nourish-text-dim text-sm text-center pt-12">{error}</p>
+  if (error) {
+    return (
+      <div className="px-4 pt-12">
+        <ConnectionError message={error} onRetry={() => void load()} />
+      </div>
+    )
+  }
 
   return (
     <div>

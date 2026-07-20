@@ -22,6 +22,10 @@ export interface ParsedRecipe {
   category: string | null
   portions: number | null
   verified: VerifiedField[]
+  /** `supermercado` | `restaurante` — null if unset (legacy) */
+  origin: string | null
+  /** Optional place name for restaurant meals (future use) */
+  location: string | null
 }
 
 export function parseDescription(raw: string): ParsedRecipe {
@@ -31,7 +35,7 @@ export function parseDescription(raw: string): ParsedRecipe {
   let currentKey: string | null = null
 
   for (const line of text.split('\n')) {
-    const match = line.match(/^\[(Ingredientes|Passos|Nutricao|Preco|Categoria|Porcoes|Verificado)\]$/)
+    const match = line.match(/^\[(Ingredientes|Passos|Nutricao|Preco|Categoria|Porcoes|Verificado|Origem|Local)\]$/)
     if (match) {
       currentKey = match[1]
       sections[currentKey] = ''
@@ -50,6 +54,8 @@ export function parseDescription(raw: string): ParsedRecipe {
       category: null,
       portions: null,
       verified: [],
+      origin: null,
+      location: null,
     }
   }
 
@@ -86,6 +92,8 @@ export function parseDescription(raw: string): ParsedRecipe {
   }
 
   const category = sections['Categoria']?.trim() || null
+  const origin = sections['Origem']?.trim().toLowerCase() || null
+  const location = sections['Local']?.trim() || null
 
   let portions: number | null = null
   if (sections['Porcoes'] !== undefined) {
@@ -110,6 +118,8 @@ export function parseDescription(raw: string): ParsedRecipe {
     category,
     portions,
     verified,
+    origin,
+    location,
   }
 }
 

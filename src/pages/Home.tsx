@@ -1,21 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { Recipe } from '../types/grocy'
 import { MealCard } from '../components/MealCard'
+import { ConnectionError } from '../components/ConnectionError'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
 import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
 import { useFavourites } from '../hooks/useFavourites'
+import { useMealAccessOrder } from '../hooks/useMealAccessOrder'
+import { todayIsoDate, slotHasMeal, usePlannedMeals } from '../hooks/usePlannedMeals'
 import { parseDescription } from '../utils/parseDescription'
+import {
+  resolveMealOrigin,
+  type MealOrigin,
+} from '../utils/mealOrigin'
 import {
   mealMatchesVerificationFilters,
   type VerificationFilterKey,
 } from '../utils/mealVerificationFilter'
 import { MEAL_SORT_OPTIONS, sortRecipes } from '../utils/mealSort'
+import { currentMealSlot, logMealConsumption } from '../utils/logMealConsumption'
+import { SLOT_LABEL } from '../utils/weekPlanSlots'
+import type { NavigationFeedback, NavigationFeedbackState } from '../utils/navigationFeedback'
 import { DespensaSection } from './Despensa'
 
 type Filter = 'completa' | 'ligeira' | 'despensa'
+type OriginFilter = 'all' | MealOrigin
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'completa', label: 'Completa' },
@@ -23,9 +34,20 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'despensa', label: 'Despensa' },
 ]
 
+const ORIGIN_FILTERS: { key: OriginFilter; label: string }[] = [
+  { key: 'supermercado', label: 'Casa' },
+  { key: 'restaurante', label: 'Fora' },
+  { key: 'all', label: 'Todas' },
+]
+
 function parseFilter(raw: string | null): Filter {
   if (raw === 'ligeira' || raw === 'despensa') return raw
   return 'completa'
+}
+
+function parseOriginFilter(raw: string | null): OriginFilter {
+  if (raw === 'all' || raw === 'restaurante') return raw
+  return 'supermercado'
 }
 
 function SearchIcon() {
@@ -33,15 +55,6 @@ function SearchIcon() {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
       <circle cx="11" cy="11" r="8" />
       <path strokeLinecap="round" d="m21 21-4.35-4.35" />
-    </svg>
-  )
-}
-
-function CalendarIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
-      <rect x="3" y="4" width="18" height="18" rx="2" />
-      <path strokeLinecap="round" d="M16 2v4M8 2v4M3 10h18" />
     </svg>
   )
 }
@@ -105,22 +118,41 @@ const VERIFICATION_FILTERS: { key: VerificationFilterKey; label: string }[] = [
 ]
 
 export function Home() {
+  const location = useLocation()
   const navigate = useNavigate()
   const { favourites } = useFavourites()
   const { prefs, updatePref } = useDisplayPrefs()
+  const { order: mealAccessOrder } = useMealAccessOrder()
+  const { getSlot } = usePlannedMeals()
   const [recipes, setRecipes] = useState<Recipe[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [plannedLogging, setPlannedLogging] = useState(false)
+  const [plannedLogged, setPlannedLogged] = useState(false)
+  const [plannedLogError, setPlannedLogError] = useState(false)
+  const [loggedTodayIds, setLoggedTodayIds] = useState<Set<number>>(new Set())
   const [searchParams, setSearchParams] = useSearchParams()
   const activeFilter = parseFilter(searchParams.get('filter'))
-  const setActiveFilter = (f: Filter) => setSearchParams({ filter: f }, { replace: true })
+  const setActiveFilter = (f: Filter) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('filter', f)
+    setSearchParams(next, { replace: true })
+  }
+  const originFilter = parseOriginFilter(searchParams.get('origem'))
+  const setOriginFilter = (o: OriginFilter) => {
+    const next = new URLSearchParams(searchParams)
+    if (o === 'supermercado') next.delete('origem')
+    else next.set('origem', o)
+    setSearchParams(next, { replace: true })
+  }
   const [migrating, setMigrating] = useState(false)
   const [migrateProgress, setMigrateProgress] = useState<{ done: number; total: number } | null>(null)
   const [showVerificationFilters, setShowVerificationFilters] = useState(false)
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [verificationFilters, setVerificationFilters] = useState<Set<VerificationFilterKey>>(new Set())
   const [favouritesOnly, setFavouritesOnly] = useState(false)
+  const [feedback, setFeedback] = useState<NavigationFeedback | null>(null)
   const filterRef = useRef<HTMLDivElement>(null)
   const sortRef = useRef<HTMLDivElement>(null)
 
@@ -155,17 +187,79 @@ export function Home() {
     })
   }
 
+  const retryLoadRecipes = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    grocy.getRecipes()
+      .then(setRecipes)
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    retryLoadRecipes()
+  }, [retryLoadRecipes])
+
   useEffect(() => {
     let mounted = true
-    grocy.getRecipes()
-      .then((recipeList) => {
+    const today = todayIsoDate()
+    grocy.getMealPlan()
+      .then((entries) => {
         if (!mounted) return
-        setRecipes(recipeList)
+        const ids = new Set(
+          entries.filter((e) => e.day === today).map((e) => e.recipe_id)
+        )
+        setLoggedTodayIds(ids)
       })
-      .catch((e: Error) => { if (mounted) setError(e.message) })
-      .finally(() => { if (mounted) setLoading(false) })
+      .catch(() => {
+        /* strip still works without this */
+      })
     return () => { mounted = false }
   }, [])
+
+  useEffect(() => {
+    const nextFeedback = (location.state as NavigationFeedbackState | null)?.feedback
+    if (!nextFeedback) return
+
+    setFeedback(nextFeedback)
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null })
+
+    const timeout = window.setTimeout(() => setFeedback(null), 3000)
+    return () => window.clearTimeout(timeout)
+  }, [location.pathname, location.search, location.state, navigate])
+
+  const plannedSlotKey = currentMealSlot()
+  const plannedSlot = getSlot(0, plannedSlotKey)
+  const plannedRecipe = useMemo(() => {
+    if (!slotHasMeal(plannedSlot)) return null
+    return recipes.find((r) => r.id === plannedSlot.recipeId) ?? null
+  }, [plannedSlot, recipes])
+
+  function handleRecipeLogged(recipeId: number, description: string) {
+    setRecipes((prev) =>
+      prev.map((r) => (r.id === recipeId ? { ...r, description } : r))
+    )
+    setLoggedTodayIds((prev) => new Set(prev).add(recipeId))
+  }
+
+  async function handlePlannedLog() {
+    if (!plannedRecipe || plannedLogging || plannedLogged) return
+    setPlannedLogging(true)
+    setPlannedLogError(false)
+    try {
+      const { description } = await logMealConsumption(
+        plannedRecipe.id,
+        plannedRecipe.description ?? ''
+      )
+      handleRecipeLogged(plannedRecipe.id, description)
+      setPlannedLogged(true)
+    } catch {
+      setPlannedLogError(true)
+      setTimeout(() => setPlannedLogError(false), 2500)
+    } finally {
+      setPlannedLogging(false)
+    }
+  }
 
   const legacyPhotoCount = recipes.filter(
     (r) => r.picture_file_name && !grocy.isWebP(r.picture_file_name)
@@ -203,11 +297,12 @@ export function Home() {
       const parsed = parsedById.get(r.id)!
       if (activeFilter === 'completa' && parsed.category !== 'Completa') return false
       if (activeFilter === 'ligeira' && parsed.category !== 'Ligeira') return false
+      if (originFilter !== 'all' && resolveMealOrigin(parsed.origin) !== originFilter) return false
       if (!mealMatchesVerificationFilters(parsed, verificationFilters)) return false
       return activeFilter === 'completa' || activeFilter === 'ligeira'
     })
-    return sortRecipes(list, parsedById, prefs.mealSort)
-  }, [recipes, query, favouritesOnly, favourites, parsedById, activeFilter, verificationFilters, prefs.mealSort])
+    return sortRecipes(list, parsedById, prefs.mealSort, mealAccessOrder)
+  }, [recipes, query, favouritesOnly, favourites, parsedById, activeFilter, originFilter, verificationFilters, prefs.mealSort, mealAccessOrder])
 
   return (
     <div className="min-h-screen bg-nourish-bg">
@@ -218,9 +313,6 @@ export function Home() {
           </div>
           <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold text-nourish-text leading-none">Nourish</h1>
-            <p className="text-nourish-text-dim text-sm mt-0.5">
-              {isDespensa ? 'O que tens em casa?' : 'O que vais comer?'}
-            </p>
           </div>
           {!isDespensa && (
             <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -232,17 +324,21 @@ export function Home() {
               >
                 <ClockIcon />
               </button>
-              <button
-                type="button"
-                onClick={() => navigate('/plan')}
-                className="p-2.5 rounded-lg bg-nourish-surface-high border border-nourish-border text-nourish-text-dim active:bg-nourish-border/20 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-                aria-label="Plano da semana"
-              >
-                <CalendarIcon />
-              </button>
             </div>
           )}
         </div>
+
+        {feedback && (
+          <div
+            className={`mb-3 rounded-xl border px-3 py-2 text-sm ${
+              feedback.kind === 'success'
+                ? 'border-emerald-700 bg-emerald-950/30 text-emerald-300'
+                : 'border-red-800 bg-red-900/30 text-red-400'
+            }`}
+          >
+            {feedback.message}
+          </div>
+        )}
 
         <div className="relative flex items-center mb-3">
           <span className="absolute left-3 text-nourish-text-dim pointer-events-none">
@@ -288,7 +384,7 @@ export function Home() {
                     setShowVerificationFilters(false)
                   }}
                   className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                    prefs.mealSort !== 'recent'
+                    showSortMenu
                       ? 'bg-nourish-primary/15 border-nourish-primary/40 text-nourish-primary'
                       : 'bg-nourish-surface-high border-nourish-border text-nourish-text-dim'
                   }`}
@@ -330,7 +426,7 @@ export function Home() {
                     setShowSortMenu(false)
                   }}
                   className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                    verificationFilters.size > 0 || favouritesOnly
+                    showVerificationFilters
                       ? 'bg-nourish-primary/15 border-nourish-primary/40 text-nourish-primary'
                       : 'bg-nourish-surface-high border-nourish-border text-nourish-text-dim'
                   }`}
@@ -389,6 +485,25 @@ export function Home() {
             </div>
           )}
         </div>
+
+        {!isDespensa && (
+          <div className="flex gap-2 overflow-x-auto mt-2 pb-0.5" style={{ scrollbarWidth: 'none' }}>
+            {ORIGIN_FILTERS.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setOriginFilter(key)}
+                className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-semibold transition-colors focus:outline-none ${
+                  originFilter === key
+                    ? 'bg-nourish-primary/20 text-nourish-primary border border-nourish-primary/40'
+                    : 'bg-nourish-surface text-nourish-text-dim border border-nourish-border'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </header>
 
       {!isDespensa && !loading && legacyPhotoCount > 0 && (
@@ -412,8 +527,46 @@ export function Home() {
         {!isDespensa && loading && <Spinner />}
 
         {!isDespensa && error && (
-          <div className="p-3 bg-red-900/30 border border-red-800 text-red-400 rounded-xl text-sm">
-            Erro ao carregar refeições: {error}
+          <ConnectionError message={`Erro ao carregar refeições: ${error}`} onRetry={retryLoadRecipes} />
+        )}
+
+        {!isDespensa &&
+          !loading &&
+          plannedRecipe &&
+          !plannedLogged &&
+          !loggedTodayIds.has(plannedRecipe.id) && (
+          <div className="mb-4 flex items-center gap-3 bg-nourish-surface border border-nourish-border rounded-2xl p-3">
+            <button
+              type="button"
+              onClick={() => navigate(`/meal/${plannedRecipe.id}`)}
+              className="flex items-center gap-3 min-w-0 flex-1 text-left focus:outline-none"
+            >
+              {plannedRecipe.picture_file_name ? (
+                <img
+                  src={grocy.pictureUrl(plannedRecipe.picture_file_name)}
+                  alt=""
+                  className="w-14 h-14 rounded-xl object-cover flex-shrink-0 bg-nourish-surface-high"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-xl bg-nourish-surface-high flex items-center justify-center text-2xl flex-shrink-0">
+                  🍽️
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
+                  {SLOT_LABEL[plannedSlotKey]} planeado
+                </p>
+                <p className="text-sm font-semibold text-nourish-text truncate">{plannedRecipe.name}</p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={handlePlannedLog}
+              disabled={plannedLogging}
+              className="flex-shrink-0 px-3 py-2 rounded-xl bg-nourish-primary text-nourish-on-primary text-xs font-semibold active:opacity-90 disabled:opacity-70 focus:outline-none"
+            >
+              {plannedLogging ? '…' : plannedLogError ? 'Erro' : 'Registar'}
+            </button>
           </div>
         )}
 
@@ -436,7 +589,12 @@ export function Home() {
         {!isDespensa && !loading && filtered.length > 0 && (
           <div className="grid grid-cols-2 gap-3">
             {filtered.map((r) => (
-              <MealCard key={r.id} recipe={r} showPortions={prefs.showMealPortions} />
+              <MealCard
+                key={r.id}
+                recipe={r}
+                showPortions={prefs.showMealPortions}
+                onLogged={handleRecipeLogged}
+              />
             ))}
           </div>
         )}

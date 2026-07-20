@@ -26,6 +26,8 @@ function parsed(price: number | null): ParsedRecipe {
     category: null,
     portions: null,
     verified: [],
+    origin: null,
+    location: null,
   }
 }
 
@@ -51,5 +53,9 @@ describe('sortRecipes', () => {
 
   it('sorts by lowest price first, missing price last', () => {
     expect(sortRecipes(recipes, parsedById, 'price-asc').map((r) => r.id)).toEqual([1, 2, 3])
+  })
+
+  it('splay sorts by last eaten order, then by id', () => {
+    expect(sortRecipes(recipes, parsedById, 'splay', [3, 1]).map((r) => r.id)).toEqual([3, 1, 2])
   })
 })

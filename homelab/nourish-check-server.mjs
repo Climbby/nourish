@@ -10,6 +10,7 @@ import { buildSupermarketVisits, medianDaysBetweenVisits, realSupermarketVisits 
 import { getFuelPricesCached } from './fuel-prices.mjs'
 import { enrichVisitsWithTripDistance, roundTripToSupermarket } from './trip-distance.mjs'
 import { fetchZoneCoordsFromHa, loadZoneCoords, saveZoneCoords } from './zone-coords.mjs'
+import { fetchHaAtHome, HA_PERSON_ENTITY } from './ha-presence.mjs'
 import {
   blockSupermarket,
   loadSupermarkets,
@@ -284,6 +285,16 @@ const server = http.createServer(async (req, res) => {
         round_trip_km: trip.km,
         source: trip.source,
       })
+    }
+
+    if (req.method === 'GET' && req.url === '/at-home') {
+      const haUrl = process.env.HA_URL
+      const haToken = process.env.HA_TOKEN
+      if (!haUrl || !haToken) {
+        return send(503, { error: 'HA_URL and HA_TOKEN required on server' })
+      }
+      const presence = await fetchHaAtHome(haUrl, haToken, HA_PERSON_ENTITY)
+      return send(200, presence)
     }
 
     if (req.method === 'POST' && req.url === '/sync-zone-coords') {
