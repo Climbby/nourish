@@ -7,15 +7,25 @@ import { spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { buildSupermarketVisits, medianDaysBetweenVisits, realSupermarketVisits } from './supermarket-visits.mjs'
-import { getFuelPricesCached } from './fuel-prices.mjs'
+import { getFuelPricesCached, reportFuelPriceIssue } from './fuel-prices.mjs'
 import { enrichVisitsWithTripDistance, roundTripToSupermarket } from './trip-distance.mjs'
-import { fetchZoneCoordsFromHa, loadZoneCoords, saveZoneCoords } from './zone-coords.mjs'
+import {
+  appendStorePrices,
+  inferPriceUnit,
+  listLatestByProduct,
+  loadStorePrices,
+  newObservationId,
+  productHistory,
+  storeSummary,
+} from './store-prices.mjs'
+import { fetchZoneCoordsFromHa, getZoneCoord, loadZoneCoords, saveZoneCoords } from './zone-coords.mjs'
 import { fetchHaAtHome, HA_PERSON_ENTITY } from './ha-presence.mjs'
 import {
   blockSupermarket,
   loadSupermarkets,
   removeTrackedSupermarket,
   shouldPromptForPlace,
+  syncTrackedSupermarketsToHa,
   trackSupermarket,
   unblockSupermarket,
 } from './supermarkets.mjs'
@@ -250,6 +260,7 @@ const server = http.createServer(async (req, res) => {
           zone_id: j.zone_id,
           radius: j.radius,
           create_ha_zone: j.create_ha_zone,
+          register_visit: j.register_visit === true,
         })
         return send(200, result)
       }
@@ -287,6 +298,19 @@ const server = http.createServer(async (req, res) => {
       })
     }
 
+    if (req.method === 'GET' && req.url === '/home-coords') {
+      const config = loadZoneCoords()
+      const home = getZoneCoord(config, config.home_zone)
+      if (!home) {
+        return send(503, { error: 'Home coords unavailable — configure zone-coords.json' })
+      }
+      return send(200, {
+        latitude: home.latitude,
+        longitude: home.longitude,
+        zone: config.home_zone,
+      })
+    }
+
     if (req.method === 'GET' && req.url === '/at-home') {
       const haUrl = process.env.HA_URL
       const haToken = process.env.HA_TOKEN
@@ -314,6 +338,12 @@ const server = http.createServer(async (req, res) => {
       return send(200, { ok: true, zones: fetched })
     }
 
+    // Create/repair HA zones + enter/leave for every tracked supermarket with coords.
+    if (req.method === 'POST' && req.url === '/supermarkets/ensure-ha-zones') {
+      const result = await syncTrackedSupermarketsToHa()
+      return send(result.ok ? 200 : 503, result)
+    }
+
     if (req.method === 'GET' && req.url === '/cars') {
       return send(200, { cars: loadJsonList('cars.json', 'cars') })
     }
@@ -324,6 +354,68 @@ const server = http.createServer(async (req, res) => {
       const cars = Array.isArray(j.cars) ? j.cars : []
       writeJsonFile('cars.json', { cars })
       return send(200, { ok: true, cars })
+    }
+
+    const DEFAULT_PROFILES = [
+      { id: 'francisco', name: 'Francisco', color: '#2dd4bf' },
+      { id: 'pai', name: 'Pai', color: '#f59e0b' },
+    ]
+
+    if (req.method === 'GET' && req.url === '/profiles') {
+      let profiles = loadJsonList('profiles.json', 'profiles')
+      if (profiles.length === 0) {
+        writeJsonFile('profiles.json', { profiles: DEFAULT_PROFILES })
+        profiles = DEFAULT_PROFILES
+      }
+      return send(200, { profiles })
+    }
+
+    if (req.method === 'PUT' && req.url === '/profiles') {
+      const body = await readBody(req)
+      const j = JSON.parse(body || '{}')
+      const profiles = Array.isArray(j.profiles) ? j.profiles : []
+      if (profiles.length === 0) return send(400, { error: 'profiles required' })
+      for (const p of profiles) {
+        if (!p?.id || !p?.name) return send(400, { error: 'each profile needs id and name' })
+      }
+      writeJsonFile('profiles.json', { profiles })
+      return send(200, { ok: true, profiles })
+    }
+
+    if (req.method === 'GET' && req.url === '/visit-attributions') {
+      return send(200, { attributions: loadJsonList('visit-attributions.json', 'attributions') })
+    }
+
+    if (req.method === 'POST' && req.url === '/visit-attributions') {
+      const body = await readBody(req)
+      const row = JSON.parse(body || '{}')
+      if (!row.visit_entered_at || !row.owner_profile_id) {
+        return send(400, { error: 'visit_entered_at and owner_profile_id required' })
+      }
+      const item = {
+        visit_entered_at: String(row.visit_entered_at),
+        owner_profile_id: String(row.owner_profile_id),
+        share_with_family: Boolean(row.share_with_family),
+      }
+      const attributions = upsertJsonListItem(
+        'visit-attributions.json',
+        'attributions',
+        item,
+        (a) => a.visit_entered_at === item.visit_entered_at
+      )
+      return send(200, { ok: true, attributions })
+    }
+
+    if (req.method === 'DELETE' && req.url === '/visit-attributions') {
+      const body = await readBody(req)
+      const j = JSON.parse(body || '{}')
+      if (!j.visit_entered_at) return send(400, { error: 'visit_entered_at required' })
+      const attributions = removeJsonListItem(
+        'visit-attributions.json',
+        'attributions',
+        (a) => a.visit_entered_at === j.visit_entered_at
+      )
+      return send(200, { ok: true, attributions })
     }
 
     if (req.method === 'GET' && req.url === '/visit-cars') {
@@ -386,6 +478,45 @@ const server = http.createServer(async (req, res) => {
         FUEL_CACHE_FILE
       )
       return send(200, prices)
+    }
+
+    if (req.method === 'POST' && req.url === '/fuel-prices/report') {
+      const body = await readBody(req)
+      const j = JSON.parse(body || '{}')
+      const fuel = String(j.fuel || '').toLowerCase()
+      if (!['diesel', 'gasoline', 'gpl'].includes(fuel)) {
+        return send(400, { error: 'fuel must be diesel, gasoline, or gpl' })
+      }
+      const reportsFile = path.join(DATA_DIR, 'fuel-price-reports.jsonl')
+      const result = await reportFuelPriceIssue(
+        { fuel, note: j.note, prices_snapshot: j.prices_snapshot ?? null },
+        {
+          reportsPath: reportsFile,
+          appendFile: (p, data) => {
+            fs.mkdirSync(path.dirname(p), { recursive: true })
+            fs.appendFileSync(p, data)
+          },
+          notify: async (row) => {
+            const topic = process.env.NTFY_TOPIC
+            const base = (process.env.NTFY_URL || 'https://ntfy.sh').replace(/\/$/, '')
+            if (!topic) return
+            try {
+              await fetch(`${base}/${topic}`, {
+                method: 'POST',
+                headers: {
+                  Title: 'Nourish · preço combustível',
+                  Priority: 'default',
+                  Tags: 'fuel,warning',
+                },
+                body: `Preço em falta/errado: ${row.fuel}${row.note ? ` — ${row.note}` : ''}`,
+              })
+            } catch {
+              /* optional */
+            }
+          },
+        }
+      )
+      return send(200, result)
     }
 
     if (req.method === 'POST' && req.url === '/event') {
@@ -453,6 +584,70 @@ const server = http.createServer(async (req, res) => {
       return send(200, { ok: true })
     }
 
+    if (req.method === 'POST' && req.url === '/store-prices') {
+      const body = await readBody(req)
+      const j = JSON.parse(body || '{}')
+      const items = Array.isArray(j.items) ? j.items : Array.isArray(j) ? j : null
+      if (!items || items.length === 0) return send(400, { error: 'items required' })
+      const observedAt = j.observed_at || new Date().toISOString()
+      const storeId = String(j.store_id || 'unknown')
+      const storeLabel = String(j.store_label || storeId)
+      const source = j.source === 'manual' ? 'manual' : 'receipt'
+      const rows = items
+        .map((it) => {
+          const unitPrice = Number(it.unit_price ?? it.price)
+          const productName = String(it.product_name || it.name || '').trim()
+          if (!productName || !Number.isFinite(unitPrice) || unitPrice < 0) return null
+          return {
+            id: newObservationId(),
+            store_id: storeId,
+            store_label: storeLabel,
+            product_name: productName,
+            product_id: typeof it.product_id === 'number' ? it.product_id : null,
+            unit_price: Math.round(unitPrice * 100) / 100,
+            qty: Number.isFinite(Number(it.qty)) ? Number(it.qty) : null,
+            unit: it.unit === 'kg' || it.unit === 'un' ? it.unit : inferPriceUnit(it.qty),
+            observed_at: String(it.observed_at || observedAt),
+            source,
+          }
+        })
+        .filter(Boolean)
+      if (rows.length === 0) return send(400, { error: 'no valid items' })
+      return send(200, appendStorePrices(rows))
+    }
+
+    if (req.method === 'GET' && (req.url === '/store-prices' || req.url?.startsWith('/store-prices?'))) {
+      const url = new URL(req.url, 'http://localhost')
+      const all = loadStorePrices()
+      const storeId = url.searchParams.get('store_id') || undefined
+      const q = url.searchParams.get('q') || undefined
+      const limit = Number(url.searchParams.get('limit') || 200)
+      return send(200, {
+        items: listLatestByProduct(all, { store_id: storeId, q, limit }),
+        stores: storeSummary(all),
+        total_observations: all.length,
+      })
+    }
+
+    if (req.method === 'GET' && req.url?.startsWith('/store-prices/history')) {
+      const url = new URL(req.url, 'http://localhost')
+      const productIdRaw = url.searchParams.get('product_id')
+      const productId = productIdRaw != null ? Number(productIdRaw) : undefined
+      const productName = url.searchParams.get('product_name') || undefined
+      const storeId = url.searchParams.get('store_id') || undefined
+      if (productId == null && !productName) {
+        return send(400, { error: 'product_id or product_name required' })
+      }
+      const all = loadStorePrices()
+      return send(200, {
+        items: productHistory(all, {
+          product_id: Number.isFinite(productId) ? productId : undefined,
+          product_name: productName,
+          store_id: storeId,
+        }),
+      })
+    }
+
     send(404, { error: 'Not found' })
   } catch (e) {
     send(500, { error: e.message })
@@ -461,4 +656,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`nourish check server on ${HOST}:${PORT}`)
+  if (process.env.HA_URL && process.env.HA_TOKEN && process.env.NOURISH_ENSURE_HA_ZONES_ON_START !== '0') {
+    syncTrackedSupermarketsToHa()
+      .then((r) => console.log('ensure-ha-zones', JSON.stringify(r)))
+      .catch((e) => console.warn('ensure-ha-zones failed', e.message))
+  } else if (!process.env.HA_URL || !process.env.HA_TOKEN) {
+    console.warn('HA_URL/HA_TOKEN unset — tracked supermarkets will not auto-create HA zones')
+  }
 })

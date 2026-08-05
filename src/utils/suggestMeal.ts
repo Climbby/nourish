@@ -1,4 +1,5 @@
 import type { MealPlanEntry, Recipe } from '../types/grocy'
+import { profileScopedKey } from './householdProfiles'
 import { parseDescription } from './parseDescription'
 
 export type SuggestionPreference = 'balanced' | 'cheap' | 'taste'
@@ -9,11 +10,11 @@ export interface SuggestionContext {
   mealPlan: MealPlanEntry[]
 }
 
-const PREF_STORAGE_KEY = 'nourish-suggestion-preference'
+const LEGACY_PREF_KEY = 'nourish-suggestion-preference'
 
 export function loadSuggestionPreference(): SuggestionPreference {
   try {
-    const raw = localStorage.getItem(PREF_STORAGE_KEY)
+    const raw = localStorage.getItem(profileScopedKey(LEGACY_PREF_KEY))
     if (raw === 'cheap' || raw === 'taste' || raw === 'balanced') return raw
   } catch {
     /* ignore */
@@ -23,7 +24,7 @@ export function loadSuggestionPreference(): SuggestionPreference {
 
 export function saveSuggestionPreference(preference: SuggestionPreference): void {
   try {
-    localStorage.setItem(PREF_STORAGE_KEY, preference)
+    localStorage.setItem(profileScopedKey(LEGACY_PREF_KEY), preference)
   } catch {
     /* ignore */
   }

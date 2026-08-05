@@ -1,4 +1,6 @@
 import type { ReceiptStore } from '../features/receipt/types'
+import { getActiveProfileId } from './householdProfiles'
+import { fetchVisitAttributions, upsertVisitAttribution } from './visitAttributions'
 
 export interface VisitReceiptLink {
   visit_entered_at: string
@@ -33,6 +35,15 @@ export async function linkReceiptToVisit(link: VisitReceiptLink): Promise<void> 
   } catch {
     /* local fallback already saved */
   }
+  const owner = getActiveProfileId()
+  if (!owner) return
+  const attrs = await fetchVisitAttributions()
+  if (attrs.some((a) => a.visit_entered_at === link.visit_entered_at)) return
+  await upsertVisitAttribution({
+    visit_entered_at: link.visit_entered_at,
+    owner_profile_id: owner,
+    share_with_family: false,
+  })
 }
 
 const LOCAL_KEY = 'nourish-visit-receipts'

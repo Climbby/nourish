@@ -2,6 +2,8 @@ import { grocy } from '../api/grocy'
 import { todayIsoDate } from '../hooks/usePlannedMeals'
 import { splayMealAccess } from './mealAccess'
 import { decrementPortions } from './buildDescription'
+import { getActiveProfileId } from './householdProfiles'
+import { encodeMealLogNote } from './mealLogAttribution'
 import { parseDescription } from './parseDescription'
 
 export interface LogMealResult {
@@ -17,6 +19,8 @@ export async function logMealConsumption(
   const shouldDecrement = (parseDescription(description).portions ?? 0) > 0
   let nextDesc = description
   let decremented = false
+  const owner = getActiveProfileId()
+  const note = owner ? encodeMealLogNote({ owner, share: false }) : ''
 
   try {
     if (shouldDecrement) {
@@ -24,7 +28,7 @@ export async function logMealConsumption(
       await grocy.updateRecipe(recipeId, { description: nextDesc })
       decremented = true
     }
-    await grocy.logMeal({ day, recipe_id: recipeId, note: '' })
+    await grocy.logMeal({ day, recipe_id: recipeId, note })
     splayMealAccess(recipeId)
     return { description: nextDesc }
   } catch (e) {

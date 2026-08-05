@@ -9,7 +9,15 @@ import { VisitCarSheet } from '../components/VisitCarSheet'
 import { VisitDateTime } from '../components/VisitDateTime'
 import { useCars } from '../hooks/useCars'
 import { useFuelPrices } from '../hooks/useFuelPrices'
+import { useHouseholdProfiles } from '../hooks/useHouseholdProfiles'
+import { OwnershipControls } from '../components/OwnershipControls'
 import { autoLinkUnlinkedVisitCars } from '../utils/autoLinkCar'
+import {
+  encodeMealLogNote,
+  isMealLogUnattributed,
+  isMealLogVisibleToProfile,
+  parseMealLogNote,
+} from '../utils/mealLogAttribution'
 import {
   formatVisitDuration,
   formatVisitMonthYear,
@@ -30,6 +38,14 @@ import {
   visitCarMap,
   type VisitCarLink,
 } from '../utils/visitCars'
+import {
+  fetchVisitAttributions,
+  isVisitUnattributed,
+  isVisitVisibleToProfile,
+  upsertVisitAttribution,
+  visitAttributionMap,
+  type VisitAttribution,
+} from '../utils/visitAttributions'
 import { carDisplayName } from '../utils/carDisplayName'
 import { formatVisitTotalCost } from '../utils/visitVisitCost'
 import { visitTripCostEur } from '../utils/visitTripCost'
@@ -176,12 +192,20 @@ export function History() {
   const [visitsError, setVisitsError] = useState(false)
   const [visitReceipts, setVisitReceipts] = useState<VisitReceiptLink[]>([])
   const [visitCars, setVisitCars] = useState<VisitCarLink[]>([])
+  const [visitAttrs, setVisitAttrs] = useState<VisitAttribution[]>([])
   const [trackedSupermarkets, setTrackedSupermarkets] = useState<TrackedSupermarket[]>([])
   const [carSheetVisit, setCarSheetVisit] = useState<SupermarketVisit | null>(null)
-  const { cars, refreshCars } = useCars()
+  const { cars, refreshCars, enabled: carsEnabled } = useCars()
+  const { profiles, activeId, activeProfile } = useHouseholdProfiles()
+  const activeCars = carsEnabled ? cars : []
   const { priceForCar } = useFuelPrices()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const profileName = useMemo(() => {
+    const map = new Map(profiles.map((p) => [p.id, p.name]))
+    return (id: string | undefined) => (id ? map.get(id) ?? id : null)
+  }, [profiles])
 
   useEffect(() => {
     let mounted = true
@@ -210,22 +234,24 @@ export function History() {
       fetchVisitReceipts(),
       fetchVisitCars(),
       fetchSupermarkets(),
-    ]).then(([list, receipts, carLinks, supermarkets]) => {
+      fetchVisitAttributions(),
+    ]).then(([list, receipts, carLinks, supermarkets, attributions]) => {
         if (!mounted) return
         if (list === null) setVisitsError(true)
         else setVisits(list)
         setVisitReceipts(receipts)
         setVisitCars(carLinks)
         setTrackedSupermarkets(supermarkets?.tracked ?? [])
+        setVisitAttrs(attributions)
       })
     return () => { mounted = false }
   }, [tab])
 
   useEffect(() => {
-    if (tab !== 'supermarket' || !visits?.length || cars.length === 0) return
+    if (tab !== 'supermarket' || !visits?.length || activeCars.length === 0) return
     let mounted = true
     void (async () => {
-      const added = await autoLinkUnlinkedVisitCars(visits, cars, visitCars, priceForCar)
+      const added = await autoLinkUnlinkedVisitCars(visits, activeCars, visitCars, priceForCar)
       if (!mounted || added.length === 0) return
       setVisitCars((prev) => {
         const map = visitCarMap(prev)
@@ -234,11 +260,22 @@ export function History() {
       })
     })()
     return () => { mounted = false }
-  }, [tab, visits, cars, visitCars, priceForCar])
+  }, [tab, visits, activeCars, visitCars, priceForCar])
 
   const receiptByVisit = receiptMapByVisit(visitReceipts)
   const carByVisit = visitCarMap(visitCars)
-  const carsById = useMemo(() => new Map(cars.map((c) => [c.id, c])), [cars])
+  const attrByVisit = visitAttributionMap(visitAttrs)
+  const carsById = useMemo(() => new Map(activeCars.map((c) => [c.id, c])), [activeCars])
+
+  const visibleVisits = useMemo(() => {
+    if (!visits) return []
+    return visits.filter((v) => isVisitVisibleToProfile(v.entered_at, activeId, attrByVisit))
+  }, [visits, activeId, attrByVisit])
+
+  const visibleEntries = useMemo(
+    () => entries.filter((e) => isMealLogVisibleToProfile(e.note, activeId)),
+    [entries, activeId]
+  )
 
   useEffect(() => {
     if (tab === 'supermarket') {
@@ -246,8 +283,43 @@ export function History() {
     }
   }, [tab, refreshCars])
 
+  async function claimVisit(visitEnteredAt: string) {
+    if (!activeId) return
+    const next = await upsertVisitAttribution({
+      visit_entered_at: visitEnteredAt,
+      owner_profile_id: activeId,
+      share_with_family: false,
+    })
+    setVisitAttrs(next)
+  }
+
+  async function toggleVisitShare(visitEnteredAt: string) {
+    const current = attrByVisit.get(visitEnteredAt)
+    if (!current || !activeId || current.owner_profile_id !== activeId) return
+    const next = await upsertVisitAttribution({
+      ...current,
+      share_with_family: !current.share_with_family,
+    })
+    setVisitAttrs(next)
+  }
+
+  async function claimMeal(entry: MealPlanEntry) {
+    if (!activeId) return
+    const note = encodeMealLogNote({ owner: activeId, share: false })
+    await grocy.updateMealPlanEntry(entry.id, { note })
+    setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, note } : e)))
+  }
+
+  async function toggleMealShare(entry: MealPlanEntry) {
+    const attr = parseMealLogNote(entry.note)
+    if (!attr || !activeId || attr.owner !== activeId) return
+    const note = encodeMealLogNote({ owner: attr.owner, share: !attr.share })
+    await grocy.updateMealPlanEntry(entry.id, { note })
+    setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, note } : e)))
+  }
+
   // Group by date
-  const grouped = entries.reduce<Record<string, MealPlanEntry[]>>((acc, entry) => {
+  const grouped = visibleEntries.reduce<Record<string, MealPlanEntry[]>>((acc, entry) => {
     acc[entry.day] = acc[entry.day] ?? []
     acc[entry.day].push(entry)
     return acc
@@ -261,6 +333,7 @@ export function History() {
         <h1 className="text-2xl font-bold text-nourish-text">Historial</h1>
         <p className="text-nourish-text-dim text-sm mt-0.5">
           {tab === 'meals' ? 'O que comeste' : 'Idas ao supermercado'}
+          {activeProfile ? ` · ${activeProfile.name}` : ''}
         </p>
         <div className="flex gap-2 mt-4 p-1 rounded-xl bg-nourish-bg border border-nourish-border">
           <button
@@ -306,20 +379,22 @@ export function History() {
           </div>
         )}
 
-        {tab === 'supermarket' && visits && visits.length === 0 && (
+        {tab === 'supermarket' && visits && visibleVisits.length === 0 && (
           <div className="text-center py-16">
             <div className="text-5xl mb-3">🛒</div>
-            <p className="font-medium text-nourish-text-dim">Sem visitas registadas</p>
+            <p className="font-medium text-nourish-text-dim">Sem visitas para ti</p>
             <p className="text-sm text-nourish-border mt-1 max-w-xs mx-auto leading-snug">
-              Ao entrares e saíres da zona do super no Home Assistant, as idas aparecem aqui com hora e duração.
+              {visits.length === 0
+                ? 'Ao entrares e saíres da zona do super no Home Assistant, as idas aparecem aqui.'
+                : 'As idas de outros perfis só aparecem se forem partilhadas com a família.'}
             </p>
           </div>
         )}
 
-        {tab === 'supermarket' && visits && visits.length > 0 && (
+        {tab === 'supermarket' && visibleVisits.length > 0 && (
           <div className="space-y-6">
             {Object.entries(
-              visits.reduce<Record<string, SupermarketVisit[]>>((acc, v) => {
+              visibleVisits.reduce<Record<string, SupermarketVisit[]>>((acc, v) => {
                 const key = visitMonthYearKey(v.entered_at)
                 acc[key] = acc[key] ?? []
                 acc[key].push(v)
@@ -341,6 +416,8 @@ export function History() {
                       const supermarketName = supermarketLabelForVisit(visit, trackedSupermarkets)
                       const fuelCost = visitTripCostEur(carLink, visit, car)
                       const totalCost = formatVisitTotalCost(receipt, fuelCost)
+                      const attr = attrByVisit.get(visit.entered_at)
+                      const unattributed = isVisitUnattributed(visit.entered_at, attrByVisit)
 
                       return (
                       <div
@@ -358,6 +435,14 @@ export function History() {
                                 Talão: {receiptSummary(receipt, !!totalCost)}
                               </p>
                             )}
+                            <OwnershipControls
+                              ownerLabel={profileName(attr?.owner_profile_id)}
+                              unattributed={unattributed}
+                              shared={Boolean(attr?.share_with_family)}
+                              canToggleShare={Boolean(attr && activeId && attr.owner_profile_id === activeId)}
+                              onClaim={() => void claimVisit(visit.entered_at)}
+                              onToggleShare={() => void toggleVisitShare(visit.entered_at)}
+                            />
                           </div>
                           <div className="flex flex-col items-end shrink-0 gap-1">
                             {totalCost && (
@@ -380,19 +465,21 @@ export function History() {
                               {formatVisitDuration(visit.duration_minutes, visit.ongoing)}
                             </span>
                             <div className="flex items-center gap-1.5 mt-0.5">
-                              <button
-                                type="button"
-                                onClick={() => setCarSheetVisit(visit)}
-                                title={car ? carDisplayName(car, cars) : 'Viatura'}
-                                className={`p-1.5 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                                  car
-                                    ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
-                                    : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
-                                }`}
-                                aria-label={car ? `Viatura: ${carDisplayName(car, cars)}` : 'Escolher viatura'}
-                              >
-                                <CarIcon active={!!car} />
-                              </button>
+                              {carsEnabled && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCarSheetVisit(visit)}
+                                  title={car ? carDisplayName(car, activeCars) : 'Viatura'}
+                                  className={`p-1.5 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                                    car
+                                      ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
+                                      : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
+                                  }`}
+                                  aria-label={car ? `Viatura: ${carDisplayName(car, activeCars)}` : 'Escolher viatura'}
+                                >
+                                  <CarIcon active={!!car} />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() =>
@@ -438,16 +525,19 @@ export function History() {
                   {groupByRecipe(grouped[day]).map((group) => {
                     const { entry, count, allIds } = group
                     const recipe = recipes[entry.recipe_id]
+                    const mealAttr = parseMealLogNote(entry.note)
+                    const mealUnattributed = isMealLogUnattributed(entry.note)
                     return (
                       <div
                         key={entry.id}
                         className="flex items-center gap-2 bg-nourish-surface border border-nourish-border rounded-2xl overflow-hidden"
                       >
-                        <button
-                          onClick={() => navigate(`/meal/${entry.recipe_id}`)}
-                          className="flex items-center gap-3 p-3 text-left flex-1 min-w-0 active:bg-nourish-surface-high transition-colors focus:outline-none"
-                        >
-                          <div className="relative flex-shrink-0">
+                        <div className="flex items-center gap-3 p-3 flex-1 min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/meal/${entry.recipe_id}`)}
+                            className="relative flex-shrink-0 focus:outline-none"
+                          >
                             {recipe?.picture_file_name ? (
                               <img
                                 src={grocy.pictureUrl(recipe.picture_file_name)}
@@ -464,27 +554,38 @@ export function History() {
                                 ×{count}
                               </span>
                             )}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/meal/${entry.recipe_id}`)}
+                              className="text-left w-full focus:outline-none"
+                            >
+                              <p className="font-semibold text-nourish-text text-sm truncate">
+                                {recipe?.name ?? `Refeição ${entry.recipe_id}`}
+                              </p>
+                              {entry.row_created_timestamp && (
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  <span className="text-xs text-nourish-primary font-medium">
+                                    {mealType(entry.row_created_timestamp)}
+                                  </span>
+                                  <span className="text-nourish-border text-xs">·</span>
+                                  <span className="text-xs text-nourish-text-dim tabular-nums">
+                                    {formatTime(entry.row_created_timestamp)}
+                                  </span>
+                                </div>
+                              )}
+                            </button>
+                            <OwnershipControls
+                              ownerLabel={profileName(mealAttr?.owner)}
+                              unattributed={mealUnattributed}
+                              shared={Boolean(mealAttr?.share)}
+                              canToggleShare={Boolean(mealAttr && activeId && mealAttr.owner === activeId)}
+                              onClaim={() => void claimMeal(entry)}
+                              onToggleShare={() => void toggleMealShare(entry)}
+                            />
                           </div>
-                          <div className="min-w-0">
-                            <p className="font-semibold text-nourish-text text-sm truncate">
-                              {recipe?.name ?? `Refeição ${entry.recipe_id}`}
-                            </p>
-                            {entry.row_created_timestamp && (
-                              <div className="flex items-center gap-1.5 mt-0.5">
-                                <span className="text-xs text-nourish-primary font-medium">
-                                  {mealType(entry.row_created_timestamp)}
-                                </span>
-                                <span className="text-nourish-border text-xs">·</span>
-                                <span className="text-xs text-nourish-text-dim tabular-nums">
-                                  {formatTime(entry.row_created_timestamp)}
-                                </span>
-                              </div>
-                            )}
-                            {entry.note && (
-                              <p className="text-xs text-nourish-text-dim mt-0.5 truncate">{entry.note}</p>
-                            )}
-                          </div>
-                        </button>
+                        </div>
                         <button
                           onClick={async () => {
                             const removed = entries.filter((e) => allIds.includes(e.id))
@@ -515,10 +616,10 @@ export function History() {
         )}
       </main>
 
-      {carSheetVisit && (
+      {carSheetVisit && carsEnabled && (
         <VisitCarSheet
           visit={carSheetVisit}
-          cars={cars}
+          cars={activeCars}
           supermarketName={supermarketLabelForVisit(carSheetVisit, trackedSupermarkets)}
           currentLink={carByVisit.get(carSheetVisit.entered_at)}
           onClose={() => setCarSheetVisit(null)}

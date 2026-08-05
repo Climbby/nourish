@@ -1,11 +1,17 @@
-const STORAGE_KEY = 'nourish-meal-access-order'
+import { profileScopedKey } from './householdProfiles'
+
+const LEGACY_KEY = 'nourish-meal-access-order'
 
 type Listener = () => void
 const listeners = new Set<Listener>()
 
+function storageKey(): string {
+  return profileScopedKey(LEGACY_KEY)
+}
+
 function load(): number[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey())
     if (!raw) return []
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
@@ -16,7 +22,7 @@ function load(): number[] {
 }
 
 function save(order: number[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(order))
+  localStorage.setItem(storageKey(), JSON.stringify(order))
 }
 
 function notify() {

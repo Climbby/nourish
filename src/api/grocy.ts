@@ -95,6 +95,13 @@ export const grocy = {
       body: JSON.stringify(entry),
     }),
 
+  updateMealPlanEntry: (id: number, data: Partial<Pick<MealPlanEntry, 'note' | 'day' | 'recipe_id'>>) =>
+    apiFetch<void>(`/objects/meal_plan/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
   async uploadPicture(file: File): Promise<string> {
     const webp = await convertToWebP(file, 0.85)
     const filename = `meal_${Date.now()}.webp`

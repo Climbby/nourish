@@ -1,6 +1,7 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useProfileScopedKey } from './useProfileScopedKey'
 
-const STORAGE_KEY = 'nourish-planned-slots'
+const LEGACY_KEY = 'nourish-planned-slots'
 
 export type MealSlot = 'almoco' | 'jantar'
 export type SlotSource = 'accepted' | 'chosen' | 'dismissed'
@@ -53,9 +54,9 @@ function normalizeSlot(raw: unknown): PlannedSlot | null {
   }
 }
 
-function load(today = todayIsoDate()): StoredPlan {
+function load(key: string, today = todayIsoDate()): StoredPlan {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(key)
     if (!raw) return { weekStart: today, slots: [] }
     const parsed = JSON.parse(raw) as StoredPlan
     if (!parsed || typeof parsed.weekStart !== 'string' || !Array.isArray(parsed.slots)) {
@@ -71,17 +72,25 @@ function load(today = todayIsoDate()): StoredPlan {
   }
 }
 
-function save(plan: StoredPlan) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(plan))
+function save(key: string, plan: StoredPlan) {
+  localStorage.setItem(key, JSON.stringify(plan))
 }
 
 export function usePlannedMeals() {
-  const [plan, setPlan] = useState<StoredPlan>(() => load())
+  const storageKey = useProfileScopedKey(LEGACY_KEY)
+  const [plan, setPlan] = useState<StoredPlan>(() => load(storageKey))
 
-  const persist = useCallback((next: StoredPlan) => {
-    save(next)
-    setPlan(next)
-  }, [])
+  useEffect(() => {
+    setPlan(load(storageKey))
+  }, [storageKey])
+
+  const persist = useCallback(
+    (next: StoredPlan) => {
+      save(storageKey, next)
+      setPlan(next)
+    },
+    [storageKey]
+  )
 
   const getSlot = useCallback(
     (dayOffset: number, slot: MealSlot): PlannedSlot | undefined =>
@@ -99,43 +108,49 @@ export function usePlannedMeals() {
           weekStart: today,
           slots: [...without, { dayOffset, slot, recipeId, source }],
         }
-        save(next)
+        save(storageKey, next)
         return next
       })
     },
-    []
+    [storageKey]
   )
 
-  const dismissSlot = useCallback((dayOffset: number, slot: MealSlot) => {
-    const today = todayIsoDate()
-    setPlan((prev) => {
-      const base = prev.weekStart === today ? prev : { weekStart: today, slots: [] }
-      const without = base.slots.filter((s) => !(s.dayOffset === dayOffset && s.slot === slot))
-      const next: StoredPlan = {
-        weekStart: today,
-        slots: [...without, { dayOffset, slot, recipeId: null, source: 'dismissed' }],
-      }
-      save(next)
-      return next
-    })
-  }, [])
-
-  const clearSlot = useCallback((dayOffset: number, slot: MealSlot) => {
-    setPlan((prev) => {
+  const dismissSlot = useCallback(
+    (dayOffset: number, slot: MealSlot) => {
       const today = todayIsoDate()
-      if (prev.weekStart !== today) {
-        const empty = { weekStart: today, slots: [] as PlannedSlot[] }
-        save(empty)
-        return empty
-      }
-      const next: StoredPlan = {
-        weekStart: prev.weekStart,
-        slots: prev.slots.filter((s) => !(s.dayOffset === dayOffset && s.slot === slot)),
-      }
-      save(next)
-      return next
-    })
-  }, [])
+      setPlan((prev) => {
+        const base = prev.weekStart === today ? prev : { weekStart: today, slots: [] }
+        const without = base.slots.filter((s) => !(s.dayOffset === dayOffset && s.slot === slot))
+        const next: StoredPlan = {
+          weekStart: today,
+          slots: [...without, { dayOffset, slot, recipeId: null, source: 'dismissed' }],
+        }
+        save(storageKey, next)
+        return next
+      })
+    },
+    [storageKey]
+  )
+
+  const clearSlot = useCallback(
+    (dayOffset: number, slot: MealSlot) => {
+      setPlan((prev) => {
+        const today = todayIsoDate()
+        if (prev.weekStart !== today) {
+          const empty = { weekStart: today, slots: [] as PlannedSlot[] }
+          save(storageKey, empty)
+          return empty
+        }
+        const next: StoredPlan = {
+          weekStart: prev.weekStart,
+          slots: prev.slots.filter((s) => !(s.dayOffset === dayOffset && s.slot === slot)),
+        }
+        save(storageKey, next)
+        return next
+      })
+    },
+    [storageKey]
+  )
 
   const clear = useCallback(() => {
     const next = { weekStart: todayIsoDate(), slots: [] as PlannedSlot[] }

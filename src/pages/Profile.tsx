@@ -1,21 +1,27 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
+import { rememberNavPath } from '../utils/navMemory'
 import { grocy } from '../api/grocy'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { BottomNav } from '../components/BottomNav'
 import { ConnectionError } from '../components/ConnectionError'
 import { CarModelInput } from '../components/CarModelInput'
+import { HelpInfo } from '../components/HelpInfo'
 import { MealSpendSheet } from '../components/MealSpendSheet'
 import { VisitFuelTripsSheet } from '../components/VisitFuelTripsSheet'
 import { VisitShoppingTripsSheet } from '../components/VisitShoppingTripsSheet'
 import { NumericInput } from '../components/NumericInput'
 import { Spinner } from '../components/Spinner'
+import { ProfilePicker } from '../components/ProfilePicker'
+import { SupermarketSearchAdd } from '../components/SupermarketSearchAdd'
+import { useHouseholdProfiles } from '../hooks/useHouseholdProfiles'
 import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
 import { useCars, type Car } from '../hooks/useCars'
 import { useFuelPrices } from '../hooks/useFuelPrices'
 import { useNutritionTargets, DEFAULT_TARGETS } from '../hooks/useNutritionTargets'
-import type { FuelType } from '../utils/fuelPrices'
-import { FUEL_TYPE_OPTIONS, formatFuelPricesUpdatedAt } from '../utils/fuelPrices'
+import { useShowNutrition } from '../hooks/useShowNutrition'
+import type { FuelKind, FuelType } from '../utils/fuelPrices'
+import { FUEL_TYPE_OPTIONS, formatFuelPricesUpdatedAt, reportFuelPriceIssue } from '../utils/fuelPrices'
 import {
   fetchSupermarkets,
   removeTracked,
@@ -37,11 +43,12 @@ import {
 import {
   ACTIVITY_LABELS,
   GOAL_LABELS,
+  profileAge,
   profileSummary,
   recommendedDailyTargets,
+  type UserBodyProfile,
 } from '../utils/nutritionRecommendations'
 import {
-  defaultDaysUntilShop,
   fetchHomelabMetrics,
   fetchSupermarketVisits,
   hasShopIntervalMedian,
@@ -58,6 +65,13 @@ import {
   filterVisitsByPeriod,
 } from '../utils/visitSpendStats'
 import { supermarketLabelForVisit } from '../utils/visitSupermarketLabel'
+import { mealLogCountsTowardStats } from '../utils/mealLogAttribution'
+import {
+  fetchVisitAttributions,
+  visitAttributionMap,
+  visitCountsTowardSpend,
+  type VisitAttribution,
+} from '../utils/visitAttributions'
 
 const PERIODS: { key: StatsPeriod; short: string }[] = [
   { key: '7d', short: '7 dias' },
@@ -65,14 +79,211 @@ const PERIODS: { key: StatsPeriod; short: string }[] = [
   { key: 'month', short: 'Mês' },
 ]
 
-type ProfileTab = 'resumo' | 'objectivos' | 'viaturas' | 'definicoes'
+type ProfileTab = 'resumo' | 'objectivos' | 'definicoes'
 
-const PROFILE_TABS: { key: ProfileTab; label: string; subtitle: string }[] = [
-  { key: 'resumo', label: 'Resumo', subtitle: 'Gastos e macros no período' },
-  { key: 'objectivos', label: 'Objectivos', subtitle: 'Metas diárias e dados pessoais' },
-  { key: 'viaturas', label: 'Viaturas', subtitle: 'Km e custo das idas ao super' },
-  { key: 'definicoes', label: 'Casa', subtitle: 'Aparência e supermercado' },
+const PROFILE_TABS: { key: ProfileTab; label: string }[] = [
+  { key: 'resumo', label: 'Resumo' },
+  { key: 'objectivos', label: 'Objectivos' },
+  { key: 'definicoes', label: 'Definições' },
 ]
+
+function parseProfileTab(raw: string | null | undefined): ProfileTab {
+  if (raw === 'definicoes') return 'definicoes'
+  // Legacy deep-link from VisitCarSheet
+  if (raw === 'objectivos' || raw === 'viaturas') return 'objectivos'
+  return 'resumo'
+}
+
+function profilePathForTab(tab: ProfileTab): string {
+  return tab === 'resumo' ? '/profile' : `/profile?tab=${tab}`
+}
+
+function FuelMissingReport({
+  fuel,
+  label,
+  onReported,
+}: {
+  fuel: FuelKind
+  label?: string
+  onReported?: () => void
+}) {
+  const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const fuelLabel =
+    fuel === 'diesel' ? 'gasóleo' : fuel === 'gasoline' ? 'gasolina 95' : 'GPL'
+
+  async function handleReport() {
+    setStatus('sending')
+    const ok = await reportFuelPriceIssue(fuel, `Preço ${fuelLabel} em falta na app`)
+    setStatus(ok ? 'sent' : 'error')
+    if (ok) onReported?.()
+  }
+
+  if (status === 'sent') {
+    return (
+      <p className="text-[11px] text-nourish-primary text-center leading-snug">
+        Problema reportado ({fuelLabel}). Obrigado.
+      </p>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={status === 'sending'}
+      onClick={() => void handleReport()}
+      className="w-full py-2 rounded-xl text-xs font-semibold border border-amber-700/50 text-amber-200/90 active:bg-amber-900/30 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+    >
+      {status === 'sending'
+        ? 'A enviar…'
+        : status === 'error'
+          ? 'Falhou — tentar de novo'
+          : label ?? `Reportar: ${fuelLabel} em falta`}
+    </button>
+  )
+}
+
+function IosToggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative w-[42px] h-[26px] flex-shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-2 focus:ring-offset-nourish-surface ${
+        checked ? 'bg-nourish-primary' : 'bg-nourish-border'
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`absolute top-[2px] left-[2px] w-[22px] h-[22px] rounded-full bg-white shadow transition-transform duration-200 ease-out ${
+          checked ? 'translate-x-[16px]' : 'translate-x-0'
+        }`}
+      />
+    </button>
+  )
+}
+
+function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  options: readonly { key: T; label: string }[]
+  value: T
+  onChange: (next: T) => void
+  ariaLabel: string
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const btnRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const [pill, setPill] = useState({ left: 2, width: 0 })
+
+  const syncPill = useCallback(() => {
+    const container = containerRef.current
+    const index = options.findIndex((o) => o.key === value)
+    const btn = btnRefs.current[index < 0 ? 0 : index]
+    if (!container || !btn) return
+    setPill({
+      left: btn.offsetLeft,
+      width: btn.offsetWidth,
+    })
+  }, [options, value])
+
+  useLayoutEffect(() => {
+    syncPill()
+  }, [syncPill])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => syncPill())
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [syncPill])
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative grid grid-cols-2 p-0.5 rounded-lg bg-nourish-bg border border-nourish-border flex-shrink-0"
+      role="tablist"
+      aria-label={ariaLabel}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute top-0.5 bottom-0.5 rounded-md bg-nourish-primary shadow-sm transition-[left,width] duration-200 ease-out"
+        style={{
+          left: pill.left,
+          width: pill.width || undefined,
+          opacity: pill.width > 0 ? 1 : 0,
+        }}
+      />
+      {options.map(({ key, label }, i) => {
+        const selected = value === key
+        return (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            ref={(el) => {
+              btnRefs.current[i] = el
+            }}
+            onClick={() => {
+              if (selected) {
+                const next = options[(i + 1) % options.length]
+                if (next) onChange(next.key)
+                return
+              }
+              onChange(key)
+            }}
+            className={`relative z-10 min-w-0 px-2.5 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+              selected ? 'text-nourish-on-primary' : 'text-nourish-text-dim'
+            }`}
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function MapPinIcon({ className = 'w-4 h-4' }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" />
+    </svg>
+  )
+}
+
+function TrashIcon({ className = 'w-4 h-4' }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+    </svg>
+  )
+}
+
+function mapsUrl(opts: { latitude?: number; longitude?: number; name: string }): string {
+  const { latitude: lat, longitude: lng, name } = opts
+  if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
+    return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+  }
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}`
+}
+
+const iconBtnClass =
+  'inline-flex items-center justify-center w-8 h-8 rounded-lg text-nourish-text-dim active:bg-nourish-surface-high focus:outline-none focus:ring-2 focus:ring-nourish-primary'
 
 const inputClass =
   'w-full px-3 py-2 bg-nourish-surface border border-nourish-border rounded-xl text-nourish-text text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary'
@@ -82,26 +293,67 @@ const spendCardClass =
 
 export function Profile() {
   const location = useLocation()
-  const initialTab = (location.state as { tab?: ProfileTab } | null)?.tab ?? 'resumo'
-  const { targets, setTargets, resetTargets } = useNutritionTargets()
-  const { profile, updateField } = useUserProfile()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { targets, setTargets, enabled: targetsEnabled, setEnabled: setTargetsEnabled } =
+    useNutritionTargets()
+  const {
+    profile,
+    updateField,
+    enabled: profileEnabled,
+    setEnabled: setProfileEnabled,
+  } = useUserProfile()
   const { prefs, updatePref } = useDisplayPrefs()
-  const { cars, addCar, updateCar, removeCar, refreshCars } = useCars()
+  const { activeProfile, activeId } = useHouseholdProfiles()
+  const { cars, addCar, updateCar, removeCar, refreshCars, enabled: carsEnabled, setEnabled: setCarsEnabled } =
+    useCars()
   const { prices: fuelPrices, refresh: refreshFuel } = useFuelPrices()
-  const [tab, setTab] = useState<ProfileTab>(initialTab)
+  const tab = parseProfileTab(searchParams.get('tab'))
+
+  // Legacy deep-links used location.state.tab — fold into the URL once
+  useEffect(() => {
+    const stateTab = (location.state as { tab?: string } | null)?.tab
+    if (!stateTab || searchParams.get('tab')) return
+    const parsed = parseProfileTab(stateTab)
+    if (parsed === 'resumo') return
+    setSearchParams({ tab: parsed }, { replace: true })
+  }, [location.state, searchParams, setSearchParams])
+
+  const setTab = useCallback(
+    (next: ProfileTab) => {
+      const params = new URLSearchParams(searchParams)
+      if (next === 'resumo') params.delete('tab')
+      else params.set('tab', next)
+      setSearchParams(params, { replace: true })
+      rememberNavPath('profile', profilePathForTab(next))
+    },
+    [searchParams, setSearchParams]
+  )
+
+  useEffect(() => {
+    rememberNavPath('profile', profilePathForTab(tab))
+  }, [tab])
+
+  // Tab switches keep window scroll; reset so the header/title isn't clipped.
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0)
+  }, [tab])
+
   const [period, setPeriod] = useState<StatsPeriod>('7d')
   const [mealPlan, setMealPlan] = useState<MealPlanEntry[]>([])
   const [recipes, setRecipes] = useState<Recipe[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showTargets, setShowTargets] = useState(false)
-  const [showBody, setShowBody] = useState(false)
+  const [bodyOpen, setBodyOpen] = useState(false)
+  const [goalsOpen, setGoalsOpen] = useState(false)
+  const [carsOpen, setCarsOpen] = useState(false)
   const [homelabMetrics, setHomelabMetrics] = useState<HomelabMetrics | null>(null)
   const [homelabMetricsError, setHomelabMetricsError] = useState(false)
   const [supermarkets, setSupermarkets] = useState<SupermarketsData | null>(null)
   const [supermarketVisits, setSupermarketVisits] = useState<SupermarketVisit[]>([])
   const [visitCars, setVisitCars] = useState<VisitCarLink[]>([])
   const [visitReceipts, setVisitReceipts] = useState<VisitReceiptLink[]>([])
+  const [visitAttrs, setVisitAttrs] = useState<VisitAttribution[]>([])
   const [visitSpendLoading, setVisitSpendLoading] = useState(true)
   const [showFuelTripsSheet, setShowFuelTripsSheet] = useState(false)
   const [showShoppingTripsSheet, setShowShoppingTripsSheet] = useState(false)
@@ -124,11 +376,13 @@ export function Profile() {
       fetchSupermarketVisits(90),
       fetchVisitCars(),
       fetchVisitReceipts(),
+      fetchVisitAttributions(),
     ])
-      .then(([visits, carLinks, receipts]) => {
+      .then(([visits, carLinks, receipts, attributions]) => {
         setSupermarketVisits(visits ?? [])
         setVisitCars(carLinks)
         setVisitReceipts(receipts)
+        setVisitAttrs(attributions)
       })
       .finally(() => setVisitSpendLoading(false))
   }, [refreshCars, refreshFuel, refreshSupermarkets])
@@ -138,9 +392,44 @@ export function Profile() {
   }, [tab, refreshSupermarkets])
 
   const recommended = useMemo(() => recommendedDailyTargets(profile), [profile])
+  const ageYears = useMemo(() => profileAge(profile), [profile])
+  const nutritionActive = useShowNutrition()
+  const todayIso = useMemo(() => {
+    const n = new Date()
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
+  }, [])
   const fuelPricesUpdatedLabel = fuelPrices
     ? formatFuelPricesUpdatedAt(fuelPrices.updated_at)
     : null
+
+  function updateBodyField<K extends keyof UserBodyProfile>(key: K, value: UserBodyProfile[K]) {
+    const next = { ...profile, [key]: value }
+    updateField(key, value)
+    setTargets(recommendedDailyTargets(next))
+  }
+
+  function toggleProfileEnabled(next: boolean) {
+    setProfileEnabled(next)
+    if (next) {
+      setTargetsEnabled(true)
+      setTargets(recommendedDailyTargets(profile))
+      setBodyOpen(true)
+      setGoalsOpen(true)
+    }
+  }
+
+  function toggleTargetsEnabled(next: boolean) {
+    setTargetsEnabled(next)
+    if (next) {
+      setGoalsOpen(true)
+      setShowTargets(true)
+    }
+  }
+
+  function toggleCarsEnabled(next: boolean) {
+    setCarsEnabled(next)
+    if (next) setCarsOpen(true)
+  }
 
   const loadProfile = useCallback(() => {
     setLoading(true)
@@ -161,9 +450,13 @@ export function Profile() {
   const periodMeta = getPeriodMeta(period)
   const resumoPeriodLabel =
     period === 'month' ? periodMeta.label : periodMeta.label.toLowerCase()
+  const profileMealPlan = useMemo(
+    () => mealPlan.filter((e) => mealLogCountsTowardStats(e.note, activeId)),
+    [mealPlan, activeId]
+  )
   const periodEntries = useMemo(
-    () => filterMealPlanByPeriod(mealPlan, period),
-    [mealPlan, period]
+    () => filterMealPlanByPeriod(profileMealPlan, period),
+    [profileMealPlan, period]
   )
   const recipesById = useMemo(
     () => Object.fromEntries(recipes.map((r) => [r.id, r])),
@@ -183,11 +476,31 @@ export function Profile() {
   )
   const surplusKeys = useMemo(() => new Set(surpluses.map((s) => s.key)), [surpluses])
 
-  const carsById = useMemo(() => new Map(cars.map((c) => [c.id, c])), [cars])
-  const visitsInPeriod = useMemo(
-    () => filterVisitsByPeriod(supermarketVisits, period),
-    [supermarketVisits, period]
+  const knownSupermarkets = useMemo(() => {
+    if (!supermarkets) return []
+    return [
+      ...supermarkets.tracked.map((s) => ({
+        place_key: s.place_key,
+        name: s.name,
+        latitude: s.latitude,
+        longitude: s.longitude,
+      })),
+      ...supermarkets.blocklist.map((b) => ({
+        place_key: b.place_key,
+        name: b.name,
+      })),
+    ]
+  }, [supermarkets])
+
+  const carsById = useMemo(
+    () => (carsEnabled ? new Map(cars.map((c) => [c.id, c])) : new Map()),
+    [cars, carsEnabled]
   )
+  const attrByVisit = useMemo(() => visitAttributionMap(visitAttrs), [visitAttrs])
+  const visitsInPeriod = useMemo(() => {
+    const inPeriod = filterVisitsByPeriod(supermarketVisits, period)
+    return inPeriod.filter((v) => visitCountsTowardSpend(v.entered_at, activeId, attrByVisit))
+  }, [supermarketVisits, period, activeId, attrByVisit])
   const visitSpend = useMemo(() => {
     return aggregateVisitSpend(visitsInPeriod, visitCars, visitReceipts, carsById)
   }, [visitsInPeriod, visitCars, visitReceipts, carsById])
@@ -235,21 +548,28 @@ export function Profile() {
       }
     : null
 
-  const activeTabMeta = PROFILE_TABS.find((t) => t.key === tab)!
-
   return (
     <div className="min-h-screen bg-nourish-bg">
-      <header className="px-4 pt-12 pb-3 border-b border-nourish-border">
+      <header
+        className="sticky top-0 z-20 px-4 pb-3 border-b border-nourish-border bg-nourish-bg"
+        style={{
+          paddingTop: 'max(3rem, calc(env(safe-area-inset-top, 0px) + 0.75rem))',
+        }}
+      >
         <h1 className="text-2xl font-bold text-nourish-text">Perfil</h1>
-        <p className="text-nourish-text-dim text-sm mt-0.5">{activeTabMeta.subtitle}</p>
         <div
           className="flex gap-2 mt-4 overflow-x-auto pb-0.5"
           style={{ scrollbarWidth: 'none' }}
+          role="tablist"
+          aria-label="Secções do perfil"
         >
           {PROFILE_TABS.map(({ key, label }) => (
             <button
               key={key}
               type="button"
+              role="tab"
+              aria-selected={tab === key}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => setTab(key)}
               className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
                 tab === key
@@ -287,6 +607,31 @@ export function Profile() {
 
         {error && (
           <ConnectionError message={`Erro ao carregar: ${error}`} onRetry={loadProfile} />
+        )}
+
+        {/* Reparar stays reachable on Casa even when profile load failed */}
+        {error && !loading && tab === 'definicoes' && (
+          <section className="space-y-3">
+            <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
+              App
+            </h2>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => void nudgeServiceWorkerUpdate()}
+                className="w-full py-2.5 rounded-xl text-xs font-semibold border border-nourish-border text-nourish-text active:bg-nourish-surface-high focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+              >
+                Verificar atualização
+              </button>
+              <button
+                type="button"
+                onClick={() => void clearPwaCachesAndReload()}
+                className="w-full py-2.5 rounded-xl text-xs font-semibold bg-nourish-primary text-nourish-on-primary active:opacity-90 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+              >
+                Reparar app
+              </button>
+            </div>
+          </section>
         )}
 
         {!loading && !error && tab === 'resumo' && (
@@ -357,12 +702,14 @@ export function Profile() {
                 </p>
                 {totals.mealsLogged === 0 && !loading && (
                   <p className="text-xs text-nourish-border mt-2">
-                    Regista refeições em Historial para ver totais. Só contam refeições com nutrição/preço no cartão.
+                    {nutritionActive
+                      ? 'Regista refeições em Historial para ver totais. Só contam refeições com nutrição/preço no cartão.'
+                      : 'Regista refeições em Historial para ver totais. Só contam refeições com preço no cartão.'}
                   </p>
                 )}
               </button>
 
-              {surpluses.length > 0 && totals.mealsLogged > 0 && (
+              {nutritionActive && surpluses.length > 0 && totals.mealsLogged > 0 && (
                 <div className="p-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 space-y-2">
                   <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
                     Acima do objectivo
@@ -378,612 +725,824 @@ export function Profile() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-2">
-                {gaps.map((g) => {
-                  const pctRaw = g.expected > 0 ? (g.actual / g.expected) * 100 : 0
-                  const isOver = surplusKeys.has(g.key)
-                  const barPct = Math.min(100, Math.round(pctRaw))
-                  return (
-                    <div
-                      key={g.key}
-                      className={`bg-nourish-surface border rounded-xl p-3 ${
-                        isOver ? 'border-amber-500/50' : 'border-nourish-border'
-                      }`}
-                    >
-                      <p className="text-xs text-nourish-text-dim">{g.label}</p>
-                      <p className="text-lg font-bold text-nourish-text tabular-nums">
-                        {Math.round(g.actual)}
-                        <span className="text-xs font-normal text-nourish-text-dim"> {g.unit}</span>
-                      </p>
-                      <div className="mt-2 h-1.5 bg-nourish-surface-high rounded-full overflow-hidden">
+              {nutritionActive && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    {gaps.map((g) => {
+                      const pctRaw = g.expected > 0 ? (g.actual / g.expected) * 100 : 0
+                      const isOver = surplusKeys.has(g.key)
+                      const barPct = Math.min(100, Math.round(pctRaw))
+                      return (
                         <div
-                          className={`h-full rounded-full transition-all ${
-                            isOver ? 'bg-amber-500' : 'bg-nourish-primary'
+                          key={g.key}
+                          className={`bg-nourish-surface border rounded-xl p-3 ${
+                            isOver ? 'border-amber-500/50' : 'border-nourish-border'
                           }`}
-                          style={{ width: `${barPct}%` }}
-                        />
-                      </div>
-                      <p className={`text-[10px] mt-1 tabular-nums ${isOver ? 'text-amber-400' : 'text-nourish-border'}`}>
-                        {Math.round(pctRaw)}% do objectivo ({Math.round(g.expected)} {g.unit})
-                      </p>
-                    </div>
-                  )
-                })}
-              </div>
+                        >
+                          <p className="text-xs text-nourish-text-dim">{g.label}</p>
+                          <p className="text-lg font-bold text-nourish-text tabular-nums">
+                            {Math.round(g.actual)}
+                            <span className="text-xs font-normal text-nourish-text-dim"> {g.unit}</span>
+                          </p>
+                          <div className="mt-2 h-1.5 bg-nourish-surface-high rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                isOver ? 'bg-amber-500' : 'bg-nourish-primary'
+                              }`}
+                              style={{ width: `${barPct}%` }}
+                            />
+                          </div>
+                          <p className={`text-[10px] mt-1 tabular-nums ${isOver ? 'text-amber-400' : 'text-nourish-border'}`}>
+                            {Math.round(pctRaw)}% do objectivo ({Math.round(g.expected)} {g.unit})
+                          </p>
+                        </div>
+                      )
+                    })}
+                  </div>
 
-              {avgPerDay && totals.mealsLogged > 0 && (
-                <p className="text-xs text-nourish-text-dim text-center">
-                  Média ~{avgPerDay.calories} kcal e {avgPerDay.protein} g proteína por dia no período
-                </p>
+                  {avgPerDay && totals.mealsLogged > 0 && (
+                    <p className="text-xs text-nourish-text-dim text-center">
+                      Média ~{avgPerDay.calories} kcal e {avgPerDay.protein} g proteína por dia no período
+                    </p>
+                  )}
+                </>
               )}
             </section>
         )}
 
         {!loading && !error && tab === 'objectivos' && (
+          <>
             <section className="space-y-3">
-              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
-                Objectivos
-              </h2>
-
-              <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
-                <div>
-                  <p className="text-xs font-semibold text-nourish-text mb-1">
-                    Recomendados para ti
-                  </p>
-                  <p className="text-xs text-nourish-text-dim leading-snug">{profileSummary(profile, recommended)}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-center text-xs">
-                  <div className="bg-nourish-surface-high rounded-lg py-2">
-                    <p className="text-nourish-text-dim">kcal/dia</p>
-                    <p className="font-bold text-nourish-text tabular-nums">{recommended.caloriesPerDay}</p>
-                  </div>
-                  <div className="bg-nourish-surface-high rounded-lg py-2">
-                    <p className="text-nourish-text-dim">Proteína</p>
-                    <p className="font-bold text-nourish-text tabular-nums">{recommended.proteinPerDay} g</p>
-                  </div>
-                  <div className="bg-nourish-surface-high rounded-lg py-2">
-                    <p className="text-nourish-text-dim">Hidratos</p>
-                    <p className="font-bold text-nourish-text tabular-nums">{recommended.carbsPerDay} g</p>
-                  </div>
-                  <div className="bg-nourish-surface-high rounded-lg py-2">
-                    <p className="text-nourish-text-dim">Gordura</p>
-                    <p className="font-bold text-nourish-text tabular-nums">{recommended.fatPerDay} g</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setTargets(recommended)}
-                  className="w-full py-2.5 rounded-xl text-sm font-semibold bg-nourish-primary text-nourish-on-primary active:opacity-90 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-                >
-                  Usar estes objectivos
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowBody((v) => !v)}
-                  className="w-full text-xs text-nourish-text-dim underline focus:outline-none"
-                >
-                  {showBody ? 'Ocultar dados pessoais' : 'Idade, peso e meta'}
-                </button>
-                {showBody && (
-                  <div className="grid grid-cols-2 gap-3 pt-1 border-t border-nourish-border">
-                    <label className="text-xs text-nourish-text-dim col-span-1">
-                      Idade
-                      <NumericInput
-                        integer
-                        min={14}
-                        max={99}
-                        fallback={DEFAULT_USER_PROFILE.age}
-                        className={`${inputClass} mt-1`}
-                        value={profile.age}
-                        onChange={(n) => updateField('age', n)}
-                      />
-                    </label>
-                    <label className="text-xs text-nourish-text-dim col-span-1">
-                      Sexo
-                      <select
-                        className={`${inputClass} mt-1`}
-                        value={profile.sex}
-                        onChange={(e) => updateField('sex', e.target.value as 'male' | 'female')}
-                      >
-                        <option value="male">Masculino</option>
-                        <option value="female">Feminino</option>
-                      </select>
-                    </label>
-                    <label className="text-xs text-nourish-text-dim">
-                      Peso (kg)
-                      <NumericInput
-                        integer
-                        min={1}
-                        fallback={DEFAULT_USER_PROFILE.weightKg}
-                        className={`${inputClass} mt-1`}
-                        value={profile.weightKg}
-                        onChange={(n) => updateField('weightKg', n)}
-                      />
-                    </label>
-                    <label className="text-xs text-nourish-text-dim">
-                      Altura (cm)
-                      <NumericInput
-                        integer
-                        min={1}
-                        fallback={DEFAULT_USER_PROFILE.heightCm}
-                        className={`${inputClass} mt-1`}
-                        value={profile.heightCm}
-                        onChange={(n) => updateField('heightCm', n)}
-                      />
-                    </label>
-                    <label className="text-xs text-nourish-text-dim col-span-2">
-                      Actividade
-                      <select
-                        className={`${inputClass} mt-1`}
-                        value={profile.activity}
-                        onChange={(e) => updateField('activity', e.target.value as typeof profile.activity)}
-                      >
-                        {(Object.keys(ACTIVITY_LABELS) as (keyof typeof ACTIVITY_LABELS)[]).map((k) => (
-                          <option key={k} value={k}>{ACTIVITY_LABELS[k]}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs text-nourish-text-dim col-span-2">
-                      Meta
-                      <select
-                        className={`${inputClass} mt-1`}
-                        value={profile.goal}
-                        onChange={(e) => updateField('goal', e.target.value as typeof profile.goal)}
-                      >
-                        {(Object.keys(GOAL_LABELS) as (keyof typeof GOAL_LABELS)[]).map((k) => (
-                          <option key={k} value={k}>{GOAL_LABELS[k]}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowTargets((v) => !v)}
-                className="w-full text-sm text-nourish-text-dim underline focus:outline-none"
-              >
-                {showTargets ? 'Ocultar objectivos manuais' : 'Ajustar objectivos manualmente'}
-              </button>
-
-              {showTargets && (
-                <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <label className="text-xs text-nourish-text-dim">
-                      kcal/dia
-                      <NumericInput
-                        integer
-                        min={0}
-                        fallback={DEFAULT_TARGETS.caloriesPerDay}
-                        className={`${inputClass} mt-1`}
-                        value={targets.caloriesPerDay}
-                        onChange={(n) => setTargets({ ...targets, caloriesPerDay: n })}
-                      />
-                    </label>
-                    <label className="text-xs text-nourish-text-dim">
-                      Proteína g/dia
-                      <NumericInput
-                        integer
-                        min={0}
-                        fallback={DEFAULT_TARGETS.proteinPerDay}
-                        className={`${inputClass} mt-1`}
-                        value={targets.proteinPerDay}
-                        onChange={(n) => setTargets({ ...targets, proteinPerDay: n })}
-                      />
-                    </label>
-                    <label className="text-xs text-nourish-text-dim">
-                      Hidratos g/dia
-                      <NumericInput
-                        integer
-                        min={0}
-                        fallback={DEFAULT_TARGETS.carbsPerDay}
-                        className={`${inputClass} mt-1`}
-                        value={targets.carbsPerDay}
-                        onChange={(n) => setTargets({ ...targets, carbsPerDay: n })}
-                      />
-                    </label>
-                    <label className="text-xs text-nourish-text-dim">
-                      Gordura g/dia
-                      <NumericInput
-                        integer
-                        min={0}
-                        fallback={DEFAULT_TARGETS.fatPerDay}
-                        className={`${inputClass} mt-1`}
-                        value={targets.fatPerDay}
-                        onChange={(n) => setTargets({ ...targets, fatPerDay: n })}
-                      />
-                    </label>
-                  </div>
+              <div className="bg-nourish-surface border border-nourish-border rounded-2xl overflow-hidden">
+                <div className="flex items-center gap-3 p-4">
                   <button
                     type="button"
-                    onClick={resetTargets}
-                    className="text-xs text-nourish-text-dim underline focus:outline-none"
+                    onClick={() => setBodyOpen((v) => !v)}
+                    className="flex-1 min-w-0 text-left focus:outline-none"
+                    aria-expanded={bodyOpen}
                   >
-                    Repor predefinições ({DEFAULT_TARGETS.caloriesPerDay} kcal…)
-                  </button>
-                </div>
-              )}
-            </section>
-        )}
-
-        {!loading && !error && tab === 'viaturas' && (
-            <section className="space-y-3">
-              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
-                Viaturas
-              </h2>
-              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4 space-y-3">
-                <p className="text-xs text-nourish-text-dim leading-snug">
-                  Km ida/volta calculados automaticamente (estradas via OSRM, ou coordenadas das zonas HA). Preço do combustível vem da DGEG. Consumo em L/100 km — GPL nos bicombustíveis.
-                </p>
-                {fuelPrices && (
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                      <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
-                        <p className="text-nourish-text-dim">Gasóleo</p>
-                        <p className="font-bold text-nourish-primary tabular-nums">
-                          €{fuelPrices.diesel_eur_per_l.toFixed(3)}/L
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
-                        <p className="text-nourish-text-dim">Gasolina 95</p>
-                        <p className="font-bold text-nourish-primary tabular-nums">
-                          €{fuelPrices.gasoline_eur_per_l.toFixed(3)}/L
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-nourish-bg border border-nourish-border py-2">
-                        <p className="text-nourish-text-dim">GPL</p>
-                        <p className="font-bold text-nourish-primary tabular-nums">
-                          €{fuelPrices.gpl_eur_per_l.toFixed(3)}/L
-                        </p>
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-nourish-text">Dados pessoais</p>
+                      <span
+                        className={`text-[10px] font-semibold uppercase tracking-wide ${
+                          profileEnabled ? 'text-nourish-primary' : 'text-nourish-text-dim'
+                        }`}
+                      >
+                        {profileEnabled ? 'Activo' : 'Desactivado'}
+                      </span>
                     </div>
-                    {fuelPricesUpdatedLabel && (
-                      <p className="text-[11px] text-nourish-text-dim text-center leading-snug">
-                        Actualizado a {fuelPricesUpdatedLabel}
-                        {fuelPrices.source !== 'dgeg' ? ' · estimativa local' : ''}
-                      </p>
+                    <p className="text-xs text-nourish-text-dim leading-snug mt-0.5">
+                      Opcional · melhora recomendações no Planear e no Resumo
+                    </p>
+                  </button>
+                  <IosToggle
+                    checked={profileEnabled}
+                    onChange={toggleProfileEnabled}
+                    label="Activar dados pessoais"
+                  />
+                </div>
+                {bodyOpen && profileEnabled && (
+                  <div className="border-t border-nourish-border p-4 space-y-3 animate-soft-fade">
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs text-nourish-text-dim col-span-1">
+                        Data de nascimento
+                        <input
+                          type="date"
+                          className={`${inputClass} mt-1`}
+                          value={profile.birthDate}
+                          max={todayIso}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            if (v) updateBodyField('birthDate', v)
+                          }}
+                        />
+                        <span className="mt-1 block text-[11px] text-nourish-text-dim tabular-nums">
+                          {ageYears} anos
+                        </span>
+                      </label>
+                      <label className="text-xs text-nourish-text-dim col-span-1">
+                        Sexo
+                        <select
+                          className={`${inputClass} mt-1`}
+                          value={profile.sex}
+                          onChange={(e) => updateBodyField('sex', e.target.value as 'male' | 'female')}
+                        >
+                          <option value="male">Masculino</option>
+                          <option value="female">Feminino</option>
+                        </select>
+                      </label>
+                      <label className="text-xs text-nourish-text-dim">
+                        Peso (kg)
+                        <NumericInput
+                          integer
+                          min={1}
+                          fallback={DEFAULT_USER_PROFILE.weightKg}
+                          className={`${inputClass} mt-1`}
+                          value={profile.weightKg}
+                          onChange={(n) => updateBodyField('weightKg', n)}
+                        />
+                      </label>
+                      <label className="text-xs text-nourish-text-dim">
+                        Altura (cm)
+                        <NumericInput
+                          integer
+                          min={1}
+                          fallback={DEFAULT_USER_PROFILE.heightCm}
+                          className={`${inputClass} mt-1`}
+                          value={profile.heightCm}
+                          onChange={(n) => updateBodyField('heightCm', n)}
+                        />
+                      </label>
+                      <label className="text-xs text-nourish-text-dim col-span-2">
+                        Actividade
+                        <select
+                          className={`${inputClass} mt-1`}
+                          value={profile.activity}
+                          onChange={(e) =>
+                            updateBodyField('activity', e.target.value as typeof profile.activity)
+                          }
+                        >
+                          {(Object.keys(ACTIVITY_LABELS) as (keyof typeof ACTIVITY_LABELS)[]).map((k) => (
+                            <option key={k} value={k}>{ACTIVITY_LABELS[k]}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-xs text-nourish-text-dim col-span-2">
+                        Meta
+                        <select
+                          className={`${inputClass} mt-1`}
+                          value={profile.goal}
+                          onChange={(e) =>
+                            updateBodyField('goal', e.target.value as typeof profile.goal)
+                          }
+                        >
+                          {(Object.keys(GOAL_LABELS) as (keyof typeof GOAL_LABELS)[]).map((k) => (
+                            <option key={k} value={k}>{GOAL_LABELS[k]}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                )}
+                {bodyOpen && !profileEnabled && (
+                  <p className="border-t border-nourish-border px-4 py-3 text-xs text-nourish-text-dim animate-soft-fade">
+                    Activa para configurar os teus dados.
+                  </p>
+                )}
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <div className="bg-nourish-surface border border-nourish-border rounded-2xl overflow-hidden">
+                <div className="flex items-center gap-3 p-4">
+                  <button
+                    type="button"
+                    onClick={() => setGoalsOpen((v) => !v)}
+                    className="flex-1 min-w-0 text-left focus:outline-none"
+                    aria-expanded={goalsOpen}
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-nourish-text">Objectivos</p>
+                      <span
+                        className={`text-[10px] font-semibold uppercase tracking-wide ${
+                          targetsEnabled ? 'text-nourish-primary' : 'text-nourish-text-dim'
+                        }`}
+                      >
+                        {targetsEnabled ? 'Activo' : 'Desactivado'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-nourish-text-dim leading-snug mt-0.5">
+                      Opcional · metas diárias para o plano e progresso
+                    </p>
+                  </button>
+                  <IosToggle
+                    checked={targetsEnabled}
+                    onChange={toggleTargetsEnabled}
+                    label="Activar objectivos"
+                  />
+                </div>
+                {goalsOpen && targetsEnabled && (
+                  <div className="border-t border-nourish-border p-4 space-y-3 animate-soft-fade">
+                    {profileEnabled && (
+                      <div>
+                        <p className="text-xs font-semibold text-nourish-text mb-1">
+                          Com base nos teus dados
+                        </p>
+                        <p className="text-xs text-nourish-text-dim leading-snug">
+                          {profileSummary(profile, recommended)}
+                        </p>
+                      </div>
+                    )}
+
+                    <div
+                      key={showTargets ? 'edit' : 'view'}
+                      className="grid grid-cols-2 gap-2 text-center text-xs animate-soft-fade"
+                    >
+                      {showTargets ? (
+                        <>
+                          <label className="bg-nourish-surface-high rounded-lg py-2 px-2 block">
+                            <span className="text-nourish-text-dim">kcal/dia</span>
+                            <NumericInput
+                              integer
+                              min={0}
+                              fallback={DEFAULT_TARGETS.caloriesPerDay}
+                              className="mt-1 w-full bg-transparent text-center font-bold text-nourish-text tabular-nums text-sm focus:outline-none focus:ring-1 focus:ring-nourish-primary rounded-md"
+                              value={targets.caloriesPerDay}
+                              onChange={(n) => setTargets({ ...targets, caloriesPerDay: n })}
+                            />
+                          </label>
+                          <label className="bg-nourish-surface-high rounded-lg py-2 px-2 block">
+                            <span className="text-nourish-text-dim">Proteína (g)</span>
+                            <NumericInput
+                              integer
+                              min={0}
+                              fallback={DEFAULT_TARGETS.proteinPerDay}
+                              className="mt-1 w-full bg-transparent text-center font-bold text-nourish-text tabular-nums text-sm focus:outline-none focus:ring-1 focus:ring-nourish-primary rounded-md"
+                              value={targets.proteinPerDay}
+                              onChange={(n) => setTargets({ ...targets, proteinPerDay: n })}
+                            />
+                          </label>
+                          <label className="bg-nourish-surface-high rounded-lg py-2 px-2 block">
+                            <span className="text-nourish-text-dim">Hidratos (g)</span>
+                            <NumericInput
+                              integer
+                              min={0}
+                              fallback={DEFAULT_TARGETS.carbsPerDay}
+                              className="mt-1 w-full bg-transparent text-center font-bold text-nourish-text tabular-nums text-sm focus:outline-none focus:ring-1 focus:ring-nourish-primary rounded-md"
+                              value={targets.carbsPerDay}
+                              onChange={(n) => setTargets({ ...targets, carbsPerDay: n })}
+                            />
+                          </label>
+                          <label className="bg-nourish-surface-high rounded-lg py-2 px-2 block">
+                            <span className="text-nourish-text-dim">Gordura (g)</span>
+                            <NumericInput
+                              integer
+                              min={0}
+                              fallback={DEFAULT_TARGETS.fatPerDay}
+                              className="mt-1 w-full bg-transparent text-center font-bold text-nourish-text tabular-nums text-sm focus:outline-none focus:ring-1 focus:ring-nourish-primary rounded-md"
+                              value={targets.fatPerDay}
+                              onChange={(n) => setTargets({ ...targets, fatPerDay: n })}
+                            />
+                          </label>
+                        </>
+                      ) : (
+                        <>
+                          <div className="bg-nourish-surface-high rounded-lg py-2">
+                            <p className="text-nourish-text-dim">kcal/dia</p>
+                            <p className="font-bold text-nourish-text tabular-nums">{targets.caloriesPerDay}</p>
+                          </div>
+                          <div className="bg-nourish-surface-high rounded-lg py-2">
+                            <p className="text-nourish-text-dim">Proteína</p>
+                            <p className="font-bold text-nourish-text tabular-nums">{targets.proteinPerDay} g</p>
+                          </div>
+                          <div className="bg-nourish-surface-high rounded-lg py-2">
+                            <p className="text-nourish-text-dim">Hidratos</p>
+                            <p className="font-bold text-nourish-text tabular-nums">{targets.carbsPerDay} g</p>
+                          </div>
+                          <div className="bg-nourish-surface-high rounded-lg py-2">
+                            <p className="text-nourish-text-dim">Gordura</p>
+                            <p className="font-bold text-nourish-text tabular-nums">{targets.fatPerDay} g</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {showTargets && profileEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => setTargets(recommended)}
+                        className="w-full text-xs text-nourish-text-dim underline focus:outline-none animate-soft-fade"
+                      >
+                        Recalcular a partir dos dados pessoais
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setShowTargets((v) => !v)}
+                      className="w-full text-xs text-nourish-text-dim underline focus:outline-none"
+                    >
+                      {showTargets ? 'Concluir ajuste' : 'Ajustar objectivos manualmente'}
+                    </button>
+                  </div>
+                )}
+                {goalsOpen && !targetsEnabled && (
+                  <p className="border-t border-nourish-border px-4 py-3 text-xs text-nourish-text-dim animate-soft-fade">
+                    Activa para definir as metas diárias.
+                  </p>
+                )}
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <div className="bg-nourish-surface border border-nourish-border rounded-2xl overflow-hidden">
+                <div className="flex items-center gap-3 p-4">
+                  <button
+                    type="button"
+                    onClick={() => setCarsOpen((v) => !v)}
+                    className="flex-1 min-w-0 text-left focus:outline-none"
+                    aria-expanded={carsOpen}
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-nourish-text">Viatura</p>
+                      <span
+                        className={`text-[10px] font-semibold uppercase tracking-wide ${
+                          carsEnabled ? 'text-nourish-primary' : 'text-nourish-text-dim'
+                        }`}
+                      >
+                        {carsEnabled ? 'Activo' : 'Desactivado'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-nourish-text-dim leading-snug mt-0.5">
+                      Opcional · custo de combustível nas idas ao supermercado
+                    </p>
+                  </button>
+                  <HelpInfo
+                    title="Porquê a viatura?"
+                    label="Porquê a viatura?"
+                    sections={[
+                      {
+                        title: 'Custo das compras',
+                        body: 'Com o consumo e o combustível estimamos o custo de cada viagem Casa → supermercado, além do valor do talão.',
+                      },
+                      {
+                        title: 'Distância e preço',
+                        body: 'Os km ida/volta vêm do percurso nas estradas (ou das zonas HA). O preço do combustível vem da DGEG (precoscombustiveis.dgeg.gov.pt); nos bicombustíveis usamos o GPL Auto.',
+                      },
+                    ]}
+                  />
+                  <IosToggle
+                    checked={carsEnabled}
+                    onChange={toggleCarsEnabled}
+                    label="Activar viatura"
+                  />
+                </div>
+                {carsOpen && (
+                  <div
+                    className={`border-t border-nourish-border p-4 space-y-3 animate-soft-fade ${
+                      carsEnabled ? '' : 'opacity-50'
+                    }`}
+                  >
+                    {fuelPrices && (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                          {(
+                            [
+                              { key: 'diesel' as const, label: 'Gasóleo', value: fuelPrices.diesel_eur_per_l },
+                              {
+                                key: 'gasoline' as const,
+                                label: 'Gasolina 95',
+                                value: fuelPrices.gasoline_eur_per_l,
+                              },
+                              { key: 'gpl' as const, label: 'GPL', value: fuelPrices.gpl_eur_per_l },
+                            ] as const
+                          ).map(({ key, label, value }) => (
+                            <div
+                              key={key}
+                              className="rounded-lg bg-nourish-bg border border-nourish-border py-2 px-1"
+                            >
+                              <p className="text-nourish-text-dim">{label}</p>
+                              {value != null ? (
+                                <p className="font-bold text-nourish-primary tabular-nums">
+                                  €{value.toFixed(3)}/L
+                                </p>
+                              ) : (
+                                <p className="font-bold text-amber-400/90 text-[11px] leading-tight mt-0.5">
+                                  Sem dados DGEG
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        {fuelPrices.missing && fuelPrices.missing.length > 0 && (
+                          <div className="space-y-1.5">
+                            {fuelPrices.missing.map((fuel) => (
+                              <FuelMissingReport
+                                key={fuel}
+                                fuel={fuel}
+                                onReported={() => refreshFuel()}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        {fuelPricesUpdatedLabel && (
+                          <p className="text-[11px] text-nourish-text-dim text-center leading-snug">
+                            Fonte:{' '}
+                            {fuelPrices.source_label ?? 'DGEG · precoscombustiveis.dgeg.gov.pt'}
+                            <br />
+                            Actualizado a {fuelPricesUpdatedLabel}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {!fuelPrices && (
+                      <div className="rounded-xl border border-amber-800/40 bg-amber-900/20 p-3 space-y-2">
+                        <p className="text-xs text-amber-200/90 leading-snug">
+                          Preços DGEG indisponíveis — sem estimativas. Podes reportar o problema.
+                        </p>
+                        <FuelMissingReport fuel="gpl" label="Reportar problema" onReported={() => refreshFuel()} />
+                      </div>
+                    )}
+                    {cars.length === 0 && !showCarForm && (
+                      <p className="text-sm text-nourish-text-dim text-center py-2">Sem viaturas registadas</p>
+                    )}
+                    {cars.map((car) => (
+                      <div key={car.id} className="rounded-xl border border-nourish-border bg-nourish-bg p-3 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm font-semibold text-nourish-text">{car.name}</p>
+                          <button
+                            type="button"
+                            onClick={() => removeCar(car.id)}
+                            disabled={!carsEnabled}
+                            className="inline-flex items-center gap-1 text-xs text-red-400 focus:outline-none disabled:opacity-50"
+                          >
+                            <TrashIcon className="w-3.5 h-3.5" />
+                            Remover
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="text-[10px] text-nourish-text-dim">
+                            L/100 km
+                            <NumericInput
+                              min={0}
+                              step={0.1}
+                              fallback={6}
+                              className={`${inputClass} mt-0.5 text-xs py-1.5`}
+                              value={car.consumption_l100km}
+                              disabled={!carsEnabled}
+                              onChange={(n) => updateCar(car.id, { consumption_l100km: n })}
+                            />
+                          </label>
+                          <label className="text-[10px] text-nourish-text-dim">
+                            Combustível
+                            <select
+                              className={`${inputClass} mt-0.5 text-xs py-1.5`}
+                              value={car.fuel_type ?? 'diesel'}
+                              disabled={!carsEnabled}
+                              onChange={(e) =>
+                                updateCar(car.id, { fuel_type: e.target.value as FuelType })
+                              }
+                            >
+                              {FUEL_TYPE_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                    {showCarForm ? (
+                      <div className="rounded-xl border border-nourish-primary/40 bg-nourish-bg p-3 space-y-2">
+                        <CarModelInput
+                          value={carDraft.name}
+                          onChange={(name) => setCarDraft((d) => ({ ...d, name }))}
+                          onSelectPreset={(preset) =>
+                            setCarDraft((d) => ({
+                              ...d,
+                              name: preset.label,
+                              consumption_l100km:
+                                preset.consumption_l100km > 0 ? preset.consumption_l100km : d.consumption_l100km,
+                              fuel_type: preset.fuel_type ?? d.fuel_type,
+                            }))
+                          }
+                          className={inputClass}
+                        />
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="text-[10px] text-nourish-text-dim">
+                            L/100 km
+                            <NumericInput
+                              min={0}
+                              step={0.1}
+                              fallback={6}
+                              className={`${inputClass} mt-0.5 text-xs py-1.5`}
+                              value={carDraft.consumption_l100km}
+                              onChange={(n) => setCarDraft((d) => ({ ...d, consumption_l100km: n }))}
+                            />
+                          </label>
+                          <label className="text-[10px] text-nourish-text-dim">
+                            Combustível
+                            <select
+                              className={`${inputClass} mt-0.5 text-xs py-1.5`}
+                              value={carDraft.fuel_type ?? 'diesel'}
+                              onChange={(e) =>
+                                setCarDraft((d) => ({
+                                  ...d,
+                                  fuel_type: e.target.value as FuelType,
+                                }))
+                              }
+                            >
+                              {FUEL_TYPE_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowCarForm(false)}
+                            className="flex-1 py-2 text-sm text-nourish-text-dim"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleAddCar}
+                            className="flex-1 py-2 rounded-xl bg-nourish-primary text-nourish-on-primary text-sm font-semibold"
+                          >
+                            Guardar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setShowCarForm(true)}
+                        disabled={!carsEnabled}
+                        className="w-full py-2.5 rounded-xl border border-dashed border-nourish-border text-sm text-nourish-primary font-medium disabled:opacity-50"
+                      >
+                        + Adicionar viatura
+                      </button>
                     )}
                   </div>
                 )}
-                {cars.length === 0 && !showCarForm && (
-                  <p className="text-sm text-nourish-text-dim text-center py-2">Sem viaturas registadas</p>
-                )}
-                {cars.map((car) => (
-                  <div key={car.id} className="rounded-xl border border-nourish-border bg-nourish-bg p-3 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-semibold text-nourish-text">{car.name}</p>
-                      <button
-                        type="button"
-                        onClick={() => removeCar(car.id)}
-                        className="text-xs text-red-400 focus:outline-none"
-                      >
-                        Remover
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="text-[10px] text-nourish-text-dim">
-                        L/100 km
-                        <NumericInput
-                          min={0}
-                          step={0.1}
-                          fallback={6}
-                          className={`${inputClass} mt-0.5 text-xs py-1.5`}
-                          value={car.consumption_l100km}
-                          onChange={(n) => updateCar(car.id, { consumption_l100km: n })}
-                        />
-                      </label>
-                      <label className="text-[10px] text-nourish-text-dim">
-                        Combustível
-                        <select
-                          className={`${inputClass} mt-0.5 text-xs py-1.5`}
-                          value={car.fuel_type ?? 'diesel'}
-                          onChange={(e) =>
-                            updateCar(car.id, { fuel_type: e.target.value as FuelType })
-                          }
-                        >
-                          {FUEL_TYPE_OPTIONS.map((o) => (
-                            <option key={o.value} value={o.value}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  </div>
-                ))}
-                {showCarForm ? (
-                  <div className="rounded-xl border border-nourish-primary/40 bg-nourish-bg p-3 space-y-2">
-                    <CarModelInput
-                      value={carDraft.name}
-                      onChange={(name) => setCarDraft((d) => ({ ...d, name }))}
-                      onSelectPreset={(preset) =>
-                        setCarDraft((d) => ({
-                          ...d,
-                          name: preset.label,
-                          consumption_l100km:
-                            preset.consumption_l100km > 0 ? preset.consumption_l100km : d.consumption_l100km,
-                          fuel_type: preset.fuel_type ?? d.fuel_type,
-                        }))
-                      }
-                      className={inputClass}
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="text-[10px] text-nourish-text-dim">
-                        L/100 km
-                        <NumericInput
-                          min={0}
-                          step={0.1}
-                          fallback={6}
-                          className={`${inputClass} mt-0.5 text-xs py-1.5`}
-                          value={carDraft.consumption_l100km}
-                          onChange={(n) => setCarDraft((d) => ({ ...d, consumption_l100km: n }))}
-                        />
-                      </label>
-                      <label className="text-[10px] text-nourish-text-dim">
-                        Combustível
-                        <select
-                          className={`${inputClass} mt-0.5 text-xs py-1.5`}
-                          value={carDraft.fuel_type ?? 'diesel'}
-                          onChange={(e) =>
-                            setCarDraft((d) => ({
-                              ...d,
-                              fuel_type: e.target.value as FuelType,
-                            }))
-                          }
-                        >
-                          {FUEL_TYPE_OPTIONS.map((o) => (
-                            <option key={o.value} value={o.value}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowCarForm(false)}
-                        className="flex-1 py-2 text-sm text-nourish-text-dim"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleAddCar}
-                        className="flex-1 py-2 rounded-xl bg-nourish-primary text-nourish-on-primary text-sm font-semibold"
-                      >
-                        Guardar
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShowCarForm(true)}
-                    className="w-full py-2.5 rounded-xl border border-dashed border-nourish-border text-sm text-nourish-primary font-medium"
-                  >
-                    + Adicionar viatura
-                  </button>
-                )}
               </div>
             </section>
+          </>
         )}
 
         {!loading && !error && tab === 'definicoes' && (
           <>
             <section className="space-y-3">
               <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
-                Aparência
+                Quem está a usar
               </h2>
-              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4 space-y-4">
-                <label className="flex items-center justify-between gap-3 cursor-pointer">
-                  <div>
-                    <p className="text-sm font-medium text-nourish-text">Mostrar porções nas refeições</p>
-                    <p className="text-xs text-nourish-text-dim mt-0.5">
-                      O número no canto dos cartões no separador Refeições
-                    </p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={prefs.showMealPortions}
-                    onChange={(e) => updatePref('showMealPortions', e.target.checked)}
-                    className="rounded border-nourish-border w-5 h-5"
-                  />
-                </label>
-                <div>
-                  <p className="text-sm font-medium text-nourish-text mb-1.5">Ecrã inicial</p>
-                  <p className="text-xs text-nourish-text-dim mb-2">
-                    Separador aberto ao iniciar a app
-                  </p>
-                  <div
-                    className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-nourish-bg border border-nourish-border"
-                    role="tablist"
-                    aria-label="Ecrã inicial"
-                  >
-                    {([
-                      { key: 'plan' as const, label: 'Planear' },
-                      { key: 'meals' as const, label: 'Refeições' },
-                    ]).map(({ key, label }) => (
-                      <button
-                        key={key}
-                        type="button"
-                        role="tab"
-                        aria-selected={prefs.defaultTab === key}
-                        onClick={() => updatePref('defaultTab', key)}
-                        className={`py-2 rounded-md text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                          prefs.defaultTab === key
-                            ? 'bg-nourish-primary text-nourish-on-primary'
-                            : 'text-nourish-text-dim'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              <p className="text-xs text-nourish-text-dim leading-snug px-0.5">
+                Perfil activo:{' '}
+                <span className="font-semibold text-nourish-text">
+                  {activeProfile?.name ?? '—'}
+                </span>
+                . Idas ao super e “comi isto” ficam teus por defeito; podes partilhar com a família.
+              </p>
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-3">
+                <ProfilePicker embedded />
               </div>
             </section>
 
             <section className="space-y-3">
               <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
-                Casa e supermercado
+                Aparência
               </h2>
-              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4">
-                <div className="text-center mb-4 py-2 rounded-xl bg-nourish-bg border border-nourish-border">
-                  <p className="text-3xl font-bold text-nourish-primary tabular-nums">
-                    {hasShopIntervalMedian(homelabMetrics)
-                      ? homelabMetrics!.avg_days_between_shops
-                      : homelabMetrics
-                        ? shopIntervalDays(homelabMetrics)
-                        : defaultDaysUntilShop()}
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface divide-y divide-nourish-border">
+                <div className="flex items-center justify-between gap-3 p-4">
+                  <p className="text-sm font-medium text-nourish-text min-w-0">
+                    Mostrar porções nas Refeições
                   </p>
-                  <p className="text-xs text-nourish-text-dim mt-1">
-                    {hasShopIntervalMedian(homelabMetrics)
-                      ? 'dias entre compras (mediana do historial)'
-                      : 'dias até à próxima ida ao super (estimativa)'}
+                  <IosToggle
+                    checked={prefs.showMealPortions}
+                    onChange={(next) => updatePref('showMealPortions', next)}
+                    label="Mostrar porções nas Refeições"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 p-4">
+                  <p className="text-sm font-medium text-nourish-text flex-shrink-0">
+                    Vista das refeições
+                  </p>
+                  <SegmentedControl
+                    ariaLabel="Vista das refeições"
+                    value={prefs.mealListView}
+                    onChange={(next) => updatePref('mealListView', next)}
+                    options={[
+                      { key: 'cards', label: 'Grelha' },
+                      { key: 'list', label: 'Compacta' },
+                    ]}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 p-4">
+                  <p className="text-sm font-medium text-nourish-text flex-shrink-0">
+                    Ecrã inicial
+                  </p>
+                  <SegmentedControl
+                    ariaLabel="Ecrã inicial"
+                    value={prefs.defaultTab}
+                    onChange={(next) => updatePref('defaultTab', next)}
+                    options={[
+                      { key: 'plan', label: 'Planear' },
+                      { key: 'meals', label: 'Refeições' },
+                    ]}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <div className="flex items-center gap-1">
+                <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
+                  Supermercados
+                </h2>
+                <HelpInfo
+                  title="Acompanhar vs Ignorar"
+                  label="Ajuda supermercados"
+                  sections={[
+                    {
+                      title: 'Acompanhar',
+                      body: 'Cria uma zona no Home Assistant. Se estiveres no local (≤250 m), também regista a ida; à distância só passa a acompanhar.',
+                    },
+                    {
+                      title: 'Ignorar',
+                      body: 'Não cria zona e a app deixa de sugerir esse sítio. Não entra no historial de idas.',
+                    },
+                    {
+                      title: 'Estou aqui',
+                      body: 'Lista supers perto de ti. Se já acompanhas esse sítio, podes “Registar ida agora”.',
+                    },
+                  ]}
+                />
+              </div>
+              <div className="rounded-2xl border border-nourish-border bg-nourish-surface divide-y divide-nourish-border">
+                <div className="flex items-center justify-between gap-3 p-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-nourish-text">Dias entre compras</p>
+                    <p className="text-[11px] text-nourish-text-dim mt-0.5">
+                      {hasShopIntervalMedian(homelabMetrics)
+                        ? 'Mediana · últimos 90 dias'
+                        : 'Estimativa (sem historial suficiente)'}
+                    </p>
+                  </div>
+                  <p className="text-sm font-bold text-nourish-primary tabular-nums flex-shrink-0">
+                    {shopIntervalDays(homelabMetrics)}
                   </p>
                 </div>
                 {homelabMetricsError && (
-                  <p className="text-xs text-amber-600/90 mb-3 text-center">
-                    Visitas e intervalos não carregaram — verifica ligação a /nourish/metrics
+                  <p className="px-4 py-2 text-xs text-amber-600/90">
+                    Intervalo não carregou — verifica /nourish/metrics
                   </p>
                 )}
-                {homelabMetrics && (
-                  <>
-                    <div className="grid grid-cols-2 gap-3 text-center">
-                      <div>
-                        <p className="text-xl font-bold text-nourish-text tabular-nums">
-                          {homelabMetrics.supermarket_visits_week}
-                        </p>
-                        <p className="text-[10px] text-nourish-text-dim">visitas ao super / semana</p>
-                      </div>
-                      <div>
-                        <p className="text-xl font-bold text-nourish-text tabular-nums">
-                          {homelabMetrics.leave_home_week}
-                        </p>
-                        <p className="text-[10px] text-nourish-text-dim">saídas de casa / semana</p>
-                      </div>
-                      <div>
-                        <p className="text-xl font-bold text-nourish-text tabular-nums">
-                          {homelabMetrics.supermarket_visits_month}
-                        </p>
-                        <p className="text-[10px] text-nourish-text-dim">visitas / mês</p>
-                      </div>
-                      <div>
-                        <p className="text-xl font-bold text-nourish-text tabular-nums">
-                          {homelabMetrics.avg_days_between_shops ?? '—'}
-                        </p>
-                        <p className="text-[10px] text-nourish-text-dim">dias entre compras (mediana)</p>
-                      </div>
-                    </div>
-                    <p className="text-xs text-nourish-text-dim mt-3 text-center">
-                      Lista automática ao sair: ~{shopIntervalDays(homelabMetrics)} dias de despensa
-                      {hasShopIntervalMedian(homelabMetrics) ? ' (mediana)' : ''}
-                    </p>
-                  </>
-                )}
-              </div>
-
-              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4 space-y-3">
-                <div>
-                  <p className="text-sm font-semibold text-nourish-text">Supermercados</p>
-                  <p className="text-xs text-nourish-text-dim mt-0.5 leading-snug">
-                    Após ~3 min num super novo, recebes notificação no telemóvel. Acompanhar cria uma zona HA
-                    (~130 m) e regista visitas; ignorar não volta a perguntar.
-                  </p>
+                <div className="p-4 border-t border-nourish-border">
+                  <SupermarketSearchAdd
+                    onChanged={refreshSupermarkets}
+                    known={knownSupermarkets}
+                    tracked={supermarkets?.tracked ?? []}
+                  />
                 </div>
-                {supermarkets ? (
-                  <>
-                    <div>
-                      <p className="text-[10px] font-semibold text-nourish-primary uppercase tracking-wider mb-1.5">
-                        A acompanhar
-                      </p>
-                      {supermarkets.tracked.length === 0 ? (
-                        <p className="text-xs text-nourish-text-dim">Nenhum registado</p>
-                      ) : (
-                        <ul className="space-y-1">
-                          {supermarkets.tracked.map((s) => (
-                            <li
-                              key={s.place_key}
-                              className="flex items-center justify-between gap-2 text-sm text-nourish-text"
-                            >
-                              <span className="truncate">{s.name}</span>
-                              {s.place_key !== 'auchan' && (
+                <div className="p-4 space-y-4">
+                  {supermarkets ? (
+                    <>
+                      <div>
+                        <p className="text-[10px] font-semibold text-nourish-primary uppercase tracking-wider mb-1.5">
+                          A acompanhar
+                        </p>
+                        {supermarkets.tracked.length === 0 ? (
+                          <p className="text-xs text-nourish-text-dim">Nenhum registado</p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {supermarkets.tracked.map((s) => {
+                              const hasCoords =
+                                typeof s.latitude === 'number' &&
+                                typeof s.longitude === 'number' &&
+                                Number.isFinite(s.latitude) &&
+                                Number.isFinite(s.longitude)
+                              return (
+                                <li
+                                  key={s.place_key}
+                                  className="flex items-center gap-1 text-sm text-nourish-text min-h-[36px]"
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <p className="truncate">{s.name}</p>
+                                    {!hasCoords && (
+                                      <p className="text-[10px] text-amber-500/90 truncate">
+                                        Sem GPS — pesquisa e acompanha o sítio certo
+                                      </p>
+                                    )}
+                                  </div>
+                                  {hasCoords ? (
+                                    <a
+                                      href={mapsUrl({
+                                        latitude: s.latitude,
+                                        longitude: s.longitude,
+                                        name: s.name,
+                                      })}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={iconBtnClass}
+                                      aria-label={`Ver ${s.name} no mapa`}
+                                      title="Ver no mapa"
+                                    >
+                                      <MapPinIcon />
+                                    </a>
+                                  ) : (
+                                    <span
+                                      className={`${iconBtnClass} opacity-30`}
+                                      title="Sem coordenadas"
+                                      aria-hidden
+                                    >
+                                      <MapPinIcon />
+                                    </span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      if (await removeTracked(s.place_key)) refreshSupermarkets()
+                                    }}
+                                    className={`${iconBtnClass} text-red-400`}
+                                    aria-label={`Remover ${s.name}`}
+                                    title="Remover"
+                                  >
+                                    <TrashIcon />
+                                  </button>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-semibold text-nourish-text-dim uppercase tracking-wider mb-1.5">
+                          Ignorados
+                        </p>
+                        {supermarkets.blocklist.length === 0 ? (
+                          <p className="text-xs text-nourish-text-dim">Nenhum</p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {supermarkets.blocklist.map((b) => (
+                              <li
+                                key={b.place_key}
+                                className="flex items-center gap-1 text-sm text-nourish-text-dim min-h-[36px]"
+                              >
+                                <span className="truncate flex-1 min-w-0">{b.name}</span>
+                                <a
+                                  href={mapsUrl({ name: b.name })}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={iconBtnClass}
+                                  aria-label={`Ver ${b.name} no mapa`}
+                                  title="Ver no mapa"
+                                >
+                                  <MapPinIcon />
+                                </a>
                                 <button
                                   type="button"
                                   onClick={async () => {
-                                    if (await removeTracked(s.place_key)) refreshSupermarkets()
+                                    if (await unblockPlace(b.place_key)) refreshSupermarkets()
                                   }}
-                                  className="text-xs text-nourish-text-dim shrink-0 focus:outline-none"
+                                  className={`${iconBtnClass} text-red-400`}
+                                  aria-label={`Remover ${b.name}`}
+                                  title="Remover"
                                 >
-                                  Remover
+                                  <TrashIcon />
                                 </button>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-semibold text-nourish-text-dim uppercase tracking-wider mb-1.5">
-                        Ignorados
-                      </p>
-                      {supermarkets.blocklist.length === 0 ? (
-                        <p className="text-xs text-nourish-text-dim">Nenhum</p>
-                      ) : (
-                        <ul className="space-y-1">
-                          {supermarkets.blocklist.map((b) => (
-                            <li
-                              key={b.place_key}
-                              className="flex items-center justify-between gap-2 text-sm text-nourish-text-dim"
-                            >
-                              <span className="truncate">{b.name}</span>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  if (await unblockPlace(b.place_key)) refreshSupermarkets()
-                                }}
-                                className="text-xs text-nourish-primary shrink-0 focus:outline-none"
-                              >
-                                Reativar
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <p className="text-xs text-nourish-text-dim">A carregar lista…</p>
-                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-nourish-text-dim">A carregar lista…</p>
+                  )}
+                </div>
               </div>
             </section>
 
             <section className="space-y-3">
-              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
-                App
-              </h2>
-              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-4 space-y-3">
-                <p className="text-xs text-nourish-text-dim">
-                  Se vires &quot;Failed to fetch&quot; no telemóvel, tenta reparar a app em vez de a reinstalar.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void nudgeServiceWorkerUpdate()}
-                    className="px-3 py-2 rounded-xl text-xs font-semibold border border-nourish-border text-nourish-text hover:bg-nourish-border/10 transition-colors focus:outline-none"
-                  >
-                    Verificar atualização
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void clearPwaCachesAndReload()}
-                    className="px-3 py-2 rounded-xl text-xs font-semibold bg-nourish-primary text-nourish-on-primary hover:opacity-90 transition-opacity focus:outline-none"
-                  >
-                    Reparar app
-                  </button>
-                </div>
+              <div className="flex items-center gap-1.5">
+                <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
+                  App
+                </h2>
+                <HelpInfo
+                  title="Actualizar ou reparar"
+                  label="Ajuda sobre actualizar e reparar a app"
+                  sections={[
+                    {
+                      title: 'Verificar atualização',
+                      body: 'Procura uma versão nova da app (PWA). Usa quando a interface parece desatualizada ou falta uma funcionalidade recente.',
+                    },
+                    {
+                      title: 'Reparar app',
+                      body: 'Limpa a cache e o service worker e recarrega. Usa quando vês “Failed to fetch” ou a app não liga ao servidor.',
+                    },
+                  ]}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => void nudgeServiceWorkerUpdate()}
+                  className="w-full py-2.5 rounded-xl text-xs font-semibold border border-nourish-border text-nourish-text active:bg-nourish-surface-high focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                >
+                  Verificar atualização
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void clearPwaCachesAndReload()}
+                  className="w-full py-2.5 rounded-xl text-xs font-semibold bg-nourish-primary text-nourish-on-primary active:opacity-90 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                >
+                  Reparar app
+                </button>
               </div>
             </section>
           </>
