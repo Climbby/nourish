@@ -3,16 +3,25 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { analyzeMeal, analyzeProduct, suggestIngredients } from '../api/ai'
 import { grocyConfig } from '../config/grocy'
+import type { Product } from '../types/grocy'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
-import { buildDespensaDescription } from '../utils/despensaAnalytics'
+import { buildDespensaDescription, cookingName } from '../utils/despensaAnalytics'
+import {
+  filterProductsForIngredient,
+  resolveIngredientFromProduct,
+} from '../utils/ingredientFromProduct'
 import type { NavigationFeedbackState } from '../utils/navigationFeedback'
 import type { VerifiedField } from '../utils/verification'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
 import { AiGenerateButton } from '../components/AiGenerateButton'
 import { MealOriginField } from '../components/MealOriginField'
+import { MealLocalityField } from '../components/MealLocalityField'
 import { PhotoField } from '../components/PhotoField'
 import { type MealOrigin } from '../utils/mealOrigin'
+import type { Coords } from '../utils/locality'
 import { fetchAtHome, originFromAtHome } from '../utils/haPresence'
+import { useShowNutrition } from '../hooks/useShowNutrition'
+import { CATEGORY_FOR_ROLE, isPartRole } from '../utils/mealRole'
 
 const { despensaGroupId: DESPENSA_GROUP_ID, defaultLocationId: DEFAULT_LOCATION_ID, defaultQuId: DEFAULT_QU_ID } = grocyConfig
 
@@ -40,6 +49,7 @@ const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
 export function AddMeal() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const showNutrition = useShowNutrition()
   const rowIdRef = useRef(1)
 
   const typeParam = searchParams.get('type') ?? ''
@@ -53,6 +63,8 @@ export function AddMeal() {
     { id: rowIdRef.current++, name: '', price: '' },
   ])
   const [comoFazer, setComoFazer] = useState('')
+  const [timeMinutes, setTimeMinutes] = useState('')
+  const [notes, setNotes] = useState('')
   const [calories, setCalories] = useState('')
   const [protein, setProtein] = useState('')
   const [carbs, setCarbs] = useState('')
@@ -60,9 +72,14 @@ export function AddMeal() {
   const [category, setCategory] = useState(() => {
     if (typeParam === 'completa') return 'Completa'
     if (typeParam === 'ligeira') return 'Ligeira'
+    // Parts of a meal — a soup earns the full form; the rest usually come from
+    // the Despensa shortcut in the plan, but the form stays open to them.
+    if (isPartRole(typeParam)) return CATEGORY_FOR_ROLE[typeParam]
     return ''
   })
   const [origin, setOrigin] = useState<MealOrigin>('supermercado')
+  const [location, setLocation] = useState('')
+  const [locationCoords, setLocationCoords] = useState<Coords | null>(null)
   const [buyAmount, setBuyAmount] = useState('1')
   const [unitPrice, setUnitPrice] = useState('')
   const [verifyPrice, setVerifyPrice] = useState(false)
@@ -76,7 +93,9 @@ export function AddMeal() {
   const [error, setError] = useState<string | null>(null)
   const [nameError, setNameError] = useState(false)
   const [existingProducts, setExistingProducts] = useState<string[]>([])
-  const [suggestions, setSuggestions] = useState<Record<number, string[]>>({})
+  const [despensaProducts, setDespensaProducts] = useState<Product[]>([])
+  const [productSuggestions, setProductSuggestions] = useState<Record<number, Product[]>>({})
+  const [textSuggestions, setTextSuggestions] = useState<Record<number, string[]>>({})
   const [focusedRow, setFocusedRow] = useState<number | null>(null)
   const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -85,7 +104,11 @@ export function AddMeal() {
   useEffect(() => {
     if (!isDespensa) {
       grocy.getProducts().then((products) => {
-        setExistingProducts(products.map((p) => p.name))
+        const despensa = products.filter(
+          (p) => p.product_group_id === DESPENSA_GROUP_ID && p.active !== 0
+        )
+        setDespensaProducts(despensa)
+        setExistingProducts(despensa.map((p) => cookingName(p.name, p.description)))
       }).catch(() => {})
     }
   }, [isDespensa])
@@ -104,13 +127,26 @@ export function AddMeal() {
   }, [isDespensa])
 
   const debouncedSuggest = useCallback(async (id: number, query: string) => {
-    if (!query.trim() || query.length < 2) {
-      setSuggestions((prev) => ({ ...prev, [id]: [] }))
+    if (!query.trim() || query.length < 1) {
+      setProductSuggestions((prev) => ({ ...prev, [id]: [] }))
+      setTextSuggestions((prev) => ({ ...prev, [id]: [] }))
+      return
+    }
+    const matched = filterProductsForIngredient(query, despensaProducts)
+    setProductSuggestions((prev) => ({ ...prev, [id]: matched }))
+    if (matched.length >= 3 || query.length < 2) {
+      setTextSuggestions((prev) => ({ ...prev, [id]: [] }))
       return
     }
     const results = await suggestIngredients(query, existingProducts)
-    setSuggestions((prev) => ({ ...prev, [id]: results }))
-  }, [existingProducts])
+    const matchedNames = new Set(
+      matched.flatMap((p) => [p.name.toLowerCase(), cookingName(p.name, p.description).toLowerCase()])
+    )
+    setTextSuggestions((prev) => ({
+      ...prev,
+      [id]: results.filter((s) => !matchedNames.has(s.toLowerCase())),
+    }))
+  }, [despensaProducts, existingProducts])
 
   async function handleAnalyze() {
     setAnalyzing(true)
@@ -172,12 +208,67 @@ export function AddMeal() {
     }
   }
 
-  function updateRow(id: number, field: 'name' | 'price', value: string) {
-    setIngredientRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)))
+  function updateRow(id: number, field: 'name' | 'price' | 'grams' | 'qty', value: string) {
+    setIngredientRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== id) return r
+        if (field === 'name') {
+          return {
+            ...r,
+            name: value,
+            productId: undefined,
+            unitGrams: undefined,
+            qty: undefined,
+          }
+        }
+        if (field === 'qty') {
+          const count = parseFloat(value)
+          if (r.productId != null && count > 0) {
+            const product = despensaProducts.find((p) => p.id === r.productId)
+            if (product) {
+              const resolved = resolveIngredientFromProduct(product, count)
+              return {
+                ...r,
+                qty: value,
+                price: resolved.price,
+                grams: resolved.grams,
+                name: resolved.name,
+                unitGrams: resolved.unitGrams,
+              }
+            }
+          }
+          return { ...r, qty: value }
+        }
+        return { ...r, [field]: value }
+      })
+    )
     if (field === 'name') {
       if (suggestTimeoutRef.current) clearTimeout(suggestTimeoutRef.current)
       suggestTimeoutRef.current = setTimeout(() => debouncedSuggest(id, value), 300)
     }
+  }
+
+  function selectProduct(id: number, product: Product) {
+    const existing = ingredientRows.find((r) => r.id === id)
+    const count = parseFloat(existing?.qty ?? '')
+    const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1)
+    setIngredientRows((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              name: resolved.name,
+              price: resolved.price,
+              grams: resolved.grams,
+              qty: resolved.qty,
+              productId: resolved.productId,
+              unitGrams: resolved.unitGrams,
+            }
+          : r
+      )
+    )
+    setProductSuggestions((prev) => ({ ...prev, [id]: [] }))
+    setTextSuggestions((prev) => ({ ...prev, [id]: [] }))
   }
 
   function addRow() {
@@ -194,17 +285,18 @@ export function AddMeal() {
   function buildDespensaVerified(): Set<VerifiedField> {
     const v = new Set<VerifiedField>()
     if (verifyPrice && unitPrice.trim() && parseFloat(unitPrice) > 0) v.add('preco')
-    if (verifyCalories && calories.trim() && parseFloat(calories) > 0) v.add('calorias')
+    if (showNutrition && verifyCalories && calories.trim() && parseFloat(calories) > 0) v.add('calorias')
     return v
   }
 
   function buildMealVerified(): Set<VerifiedField> {
     const v = new Set<VerifiedField>()
     const hasNutricao =
-      (calories.trim() && parseFloat(calories) > 0) ||
-      (protein.trim() && parseFloat(protein) > 0) ||
-      (carbs.trim() && parseFloat(carbs) > 0) ||
-      (fat.trim() && parseFloat(fat) > 0)
+      showNutrition &&
+      ((calories.trim() && parseFloat(calories) > 0) ||
+        (protein.trim() && parseFloat(protein) > 0) ||
+        (carbs.trim() && parseFloat(carbs) > 0) ||
+        (fat.trim() && parseFloat(fat) > 0))
     const finalPrice = priceOverride !== '' ? parseFloat(priceOverride) : autoTotal
     if (verifyNutricao && hasNutricao) v.add('nutricao')
     if (verifyMealPrice && !isNaN(finalPrice) && finalPrice > 0) v.add('preco')
@@ -226,7 +318,7 @@ export function AddMeal() {
           qu_id_stock: DEFAULT_QU_ID,
           qu_id_consume: DEFAULT_QU_ID,
           qu_id_price: DEFAULT_QU_ID,
-          calories: calories ? parseFloat(calories) : null,
+          calories: showNutrition && calories ? parseFloat(calories) : null,
           active: 1,
           quick_consume_amount: 1,
           default_best_before_days: 0,
@@ -251,17 +343,22 @@ export function AddMeal() {
         let pictureName: string | null = null
         if (photoFile) pictureName = await grocy.uploadPicture(photoFile)
 
-        const description = buildDescription(
+        const description = buildDescription({
           ingredientRows,
-          comoFazer,
-          { calories, protein, carbs, fat },
+          steps: comoFazer,
+          nutrition: showNutrition
+            ? { calories, protein, carbs, fat }
+            : { calories: '', protein: '', carbs: '', fat: '' },
           priceOverride,
           autoTotal,
           category,
-          undefined,
-          buildMealVerified(),
-          origin
-        )
+          verified: buildMealVerified(),
+          origin,
+          location: origin === 'restaurante' ? location : null,
+          locationCoords: origin === 'restaurante' ? locationCoords : null,
+          timeMinutes,
+          notes,
+        })
 
         await grocy.createRecipe({
           name: name.trim(),
@@ -320,29 +417,31 @@ export function AddMeal() {
 
         {isDespensa ? (
           <>
-            <div>
-              <label className={labelClass}>Calorias (por unidade)</label>
-              <input
-                type="number"
-                value={calories}
-                onChange={(e) => {
-                  setCalories(e.target.value)
-                  setVerifyCalories(false)
-                }}
-                placeholder="ex: 52"
-                min="0"
-                className={inputClass}
-              />
-              <div className="mt-1.5">
-                <VerifyCheckbox
-                  id="despensa-verify-calories"
-                  checked={verifyCalories}
-                  onChange={setVerifyCalories}
-                  label="Calorias verificadas"
-                  disabled={!calories.trim() || parseFloat(calories) <= 0}
+            {showNutrition && (
+              <div>
+                <label className={labelClass}>Calorias (por unidade)</label>
+                <input
+                  type="number"
+                  value={calories}
+                  onChange={(e) => {
+                    setCalories(e.target.value)
+                    setVerifyCalories(false)
+                  }}
+                  placeholder="ex: 52"
+                  min="0"
+                  className={inputClass}
                 />
+                <div className="mt-1.5">
+                  <VerifyCheckbox
+                    id="despensa-verify-calories"
+                    checked={verifyCalories}
+                    onChange={setVerifyCalories}
+                    label="Calorias verificadas"
+                    disabled={!calories.trim() || parseFloat(calories) <= 0}
+                  />
+                </div>
               </div>
-            </div>
+            )}
             <div>
               <label className={labelClass}>Preço (por unidade, €)</label>
               <input
@@ -377,6 +476,18 @@ export function AddMeal() {
         ) : (
           <>
             <MealOriginField value={origin} onChange={setOrigin} labelClass={labelClass} />
+            {origin === 'restaurante' && (
+              <MealLocalityField
+                location={location}
+                coords={locationCoords}
+                onChange={(label, coords) => {
+                  setLocation(label)
+                  setLocationCoords(coords)
+                }}
+                labelClass={labelClass}
+                inputClass={inputClass}
+              />
+            )}
             {origin === 'supermercado' && (
               <>
                 <IngredientSection
@@ -384,9 +495,11 @@ export function AddMeal() {
                   onUpdate={updateRow}
                   onAdd={addRow}
                   onRemove={removeRow}
+                  onSelectProduct={selectProduct}
                   inputClass={inputClass}
                   labelClass={labelClass}
-                  suggestions={suggestions}
+                  productSuggestions={productSuggestions}
+                  textSuggestions={textSuggestions}
                   focusedRow={focusedRow}
                   onFocus={setFocusedRow}
                 />
@@ -395,46 +508,58 @@ export function AddMeal() {
                   <textarea value={comoFazer} onChange={(e) => setComoFazer(e.target.value)}
                     rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
                 </div>
+                <TimeNotesSection
+                  timeMinutes={timeMinutes}
+                  notes={notes}
+                  onTimeChange={setTimeMinutes}
+                  onNotesChange={setNotes}
+                  inputClass={inputClass}
+                  labelClass={labelClass}
+                />
               </>
             )}
-            <NutritionSection
-              calories={calories}
-              protein={protein}
-              carbs={carbs}
-              fat={fat}
-              onChange={{
-                calories: (v) => {
-                  setCalories(v)
-                  setVerifyNutricao(false)
-                },
-                protein: (v) => {
-                  setProtein(v)
-                  setVerifyNutricao(false)
-                },
-                carbs: (v) => {
-                  setCarbs(v)
-                  setVerifyNutricao(false)
-                },
-                fat: (v) => {
-                  setFat(v)
-                  setVerifyNutricao(false)
-                },
-              }}
-              inputClass={inputClass}
-              labelClass={labelClass}
-            />
-            <VerifyCheckbox
-              id="meal-verify-nutricao"
-              checked={verifyNutricao}
-              onChange={setVerifyNutricao}
-              label="Nutrição verificada"
-              disabled={
-                !(calories.trim() && parseFloat(calories) > 0) &&
-                !(protein.trim() && parseFloat(protein) > 0) &&
-                !(carbs.trim() && parseFloat(carbs) > 0) &&
-                !(fat.trim() && parseFloat(fat) > 0)
-              }
-            />
+            {showNutrition && (
+              <>
+                <NutritionSection
+                  calories={calories}
+                  protein={protein}
+                  carbs={carbs}
+                  fat={fat}
+                  onChange={{
+                    calories: (v) => {
+                      setCalories(v)
+                      setVerifyNutricao(false)
+                    },
+                    protein: (v) => {
+                      setProtein(v)
+                      setVerifyNutricao(false)
+                    },
+                    carbs: (v) => {
+                      setCarbs(v)
+                      setVerifyNutricao(false)
+                    },
+                    fat: (v) => {
+                      setFat(v)
+                      setVerifyNutricao(false)
+                    },
+                  }}
+                  inputClass={inputClass}
+                  labelClass={labelClass}
+                />
+                <VerifyCheckbox
+                  id="meal-verify-nutricao"
+                  checked={verifyNutricao}
+                  onChange={setVerifyNutricao}
+                  label="Nutrição verificada"
+                  disabled={
+                    !(calories.trim() && parseFloat(calories) > 0) &&
+                    !(protein.trim() && parseFloat(protein) > 0) &&
+                    !(carbs.trim() && parseFloat(carbs) > 0) &&
+                    !(fat.trim() && parseFloat(fat) > 0)
+                  }
+                />
+              </>
+            )}
             <PriceSection
               autoTotal={origin === 'supermercado' ? autoTotal : 0}
               priceOverride={priceOverride}
@@ -474,56 +599,156 @@ export function AddMeal() {
 
 // ── Shared sub-sections (also used by EditMeal) ──────────────────────────────
 
-export function IngredientSection({ rows, onUpdate, onAdd, onRemove, inputClass, labelClass, suggestions = {}, focusedRow = null, onFocus }: {
+export function IngredientSection({
+  rows,
+  onUpdate,
+  onAdd,
+  onRemove,
+  onSelectProduct,
+  inputClass,
+  labelClass,
+  productSuggestions = {},
+  textSuggestions = {},
+  focusedRow = null,
+  onFocus,
+}: {
   rows: IngredientRow[]
-  onUpdate: (id: number, field: 'name' | 'price', value: string) => void
+  onUpdate: (id: number, field: 'name' | 'price' | 'grams' | 'qty', value: string) => void
   onAdd: () => void
   onRemove: (id: number) => void
+  onSelectProduct: (id: number, product: Product) => void
   inputClass: string
   labelClass: string
-  suggestions?: Record<number, string[]>
+  productSuggestions?: Record<number, Product[]>
+  textSuggestions?: Record<number, string[]>
   focusedRow?: number | null
   onFocus?: (id: number | null) => void
 }) {
   return (
     <div>
       <label className={labelClass}>Ingredientes <span className="text-nourish-border font-normal">(opcional)</span></label>
-      <div className="space-y-2">
-        {rows.map((row) => (
-          <div key={row.id} className="space-y-1">
-            <div className="flex gap-2 items-start">
-              <div className="flex-1 relative">
-                <input type="text" value={row.name} onChange={(e) => onUpdate(row.id, 'name', e.target.value)}
-                  onFocus={() => onFocus?.(row.id)}
-                  onBlur={() => setTimeout(() => onFocus?.(null), 200)}
-                  placeholder="Ingrediente" className={`${inputClass} w-full`} />
-                {onFocus && focusedRow === row.id && suggestions[row.id]?.length > 0 && (
-                  <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-nourish-surface border border-nourish-border rounded-xl shadow-lg overflow-hidden">
-                    {suggestions[row.id].map((s, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        onMouseDown={(e) => { e.preventDefault(); onUpdate(row.id, 'name', s); onFocus(null) }}
-                        className="w-full text-left px-4 py-2 text-sm text-nourish-text hover:bg-nourish-border/20 transition-colors focus:outline-none"
-                      >
-                        {s}
-                      </button>
-                    ))}
+      <p className="text-xs text-nourish-text-dim mb-2">
+        Escolhe da Despensa para preencher preço e gramas. Com gramas/unidade no produto, podes contar (ex: 2 latas).
+      </p>
+      <div className="space-y-3">
+        {rows.map((row) => {
+          const useCount = row.productId != null && row.unitGrams != null && row.unitGrams > 0
+          const products = productSuggestions[row.id] ?? []
+          const texts = textSuggestions[row.id] ?? []
+          const showSuggest = onFocus && focusedRow === row.id && (products.length > 0 || texts.length > 0)
+          return (
+            <div key={row.id} className="space-y-1">
+              <div className="flex gap-2 items-start">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    value={row.name}
+                    onChange={(e) => onUpdate(row.id, 'name', e.target.value)}
+                    onFocus={() => onFocus?.(row.id)}
+                    onBlur={() => setTimeout(() => onFocus?.(null), 200)}
+                    placeholder="Ingrediente da Despensa…"
+                    className={`${inputClass} w-full`}
+                  />
+                  {showSuggest && (
+                    <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-nourish-surface border border-nourish-border rounded-xl shadow-lg overflow-hidden max-h-56 overflow-y-auto">
+                      {products.map((p) => {
+                        const label = cookingName(p.name, p.description)
+                        const showFull = label !== p.name
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault()
+                              onSelectProduct(row.id, p)
+                              onFocus?.(null)
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-nourish-text hover:bg-nourish-border/20 transition-colors focus:outline-none"
+                          >
+                            <span className="font-medium">{label}</span>
+                            {showFull && (
+                              <span className="block text-xs text-nourish-text-dim truncate">{p.name}</span>
+                            )}
+                          </button>
+                        )
+                      })}
+                      {texts.map((s, i) => (
+                        <button
+                          key={`t-${i}`}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            onUpdate(row.id, 'name', s)
+                            onFocus?.(null)
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm text-nourish-text-dim hover:bg-nourish-border/20 transition-colors focus:outline-none"
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onRemove(row.id)}
+                  className="p-2 text-nourish-border hover:text-red-400 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded-lg mt-2"
+                >
+                  <TrashIcon />
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">€</span>
+                  <input
+                    type="number"
+                    value={row.price}
+                    onChange={(e) => onUpdate(row.id, 'price', e.target.value)}
+                    placeholder="0.00"
+                    className={`${inputClass} pl-7 pr-2`}
+                    min="0"
+                    step="0.01"
+                  />
+                </div>
+                {useCount ? (
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      value={row.qty ?? ''}
+                      onChange={(e) => onUpdate(row.id, 'qty', e.target.value)}
+                      placeholder="Qtd"
+                      className={`${inputClass} pr-10`}
+                      min="0"
+                      step="1"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">un</span>
+                  </div>
+                ) : (
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={row.grams ?? ''}
+                      onChange={(e) => onUpdate(row.id, 'grams', e.target.value)}
+                      placeholder="Quantidade"
+                      className={`${inputClass} pr-8`}
+                      min="0"
+                      step="1"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">g</span>
                   </div>
                 )}
               </div>
-              <div className="relative w-24 flex-shrink-0">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">€</span>
-                <input type="number" value={row.price} onChange={(e) => onUpdate(row.id, 'price', e.target.value)}
-                  placeholder="0.00" className={`${inputClass} pl-7 pr-2`} min="0" step="0.01" />
-              </div>
-              <button type="button" onClick={() => onRemove(row.id)}
-                className="p-2 text-nourish-border hover:text-red-400 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded-lg mt-2">
-                <TrashIcon />
-              </button>
+              {useCount && row.grams && (
+                <p className="text-xs text-nourish-text-dim pl-0.5">
+                  ≈ {row.grams} g
+                  {row.unitGrams != null ? ` (${row.unitGrams} g/un)` : ''}
+                </p>
+              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
       <button type="button" onClick={onAdd} className="mt-2 text-sm text-nourish-primary font-medium focus:outline-none">
         + Adicionar ingrediente
@@ -598,5 +823,48 @@ export function PortionsSection({ portions, onChange, inputClass, labelClass }: 
       />
       <p className="text-xs text-nourish-text-dim mt-1">Quantas porções prontas tens guardadas</p>
     </div>
+  )
+}
+
+export function TimeNotesSection({ timeMinutes, notes, onTimeChange, onNotesChange, inputClass, labelClass }: {
+  timeMinutes: string
+  notes: string
+  onTimeChange: (v: string) => void
+  onNotesChange: (v: string) => void
+  inputClass: string
+  labelClass: string
+}) {
+  return (
+    <>
+      <div>
+        <label className={labelClass}>Tempo <span className="text-nourish-border font-normal">(minutos)</span></label>
+        <input
+          type="number"
+          inputMode="numeric"
+          value={timeMinutes}
+          onChange={(e) => onTimeChange(e.target.value)}
+          min="0"
+          placeholder="30"
+          className={inputClass}
+        />
+        <p className="text-xs text-nourish-text-dim mt-1">
+          Actualiza com o tempo real depois de cozinhares
+        </p>
+      </div>
+
+      <div>
+        <label className={labelClass}>Notas <span className="text-nourish-border font-normal">(opcional)</span></label>
+        <textarea
+          value={notes}
+          onChange={(e) => onNotesChange(e.target.value)}
+          rows={3}
+          placeholder="Ex: menos sal da próxima, 20 min chegam..."
+          className={`${inputClass} resize-none`}
+        />
+        <p className="text-xs text-nourish-text-dim mt-1">
+          O que mudar da próxima vez — vai-se acumulando a cada repetição
+        </p>
+      </div>
+    </>
   )
 }

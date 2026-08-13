@@ -1,27 +1,31 @@
 export type FuelType = 'diesel' | 'gasoline' | 'gpl' | 'gpl_gasoline'
+export type FuelKind = 'diesel' | 'gasoline' | 'gpl'
 
 export interface FuelPrices {
-  diesel_eur_per_l: number
-  gasoline_eur_per_l: number
-  gpl_eur_per_l: number
+  diesel_eur_per_l: number | null
+  gasoline_eur_per_l: number | null
+  gpl_eur_per_l: number | null
   source: string
+  /** Human-readable provider, e.g. DGEG URL. */
+  source_label?: string
+  missing?: FuelKind[]
+  gpl_samples?: number
+  diesel_samples?: number
+  gasoline_samples?: number
   sampled_stations?: number
   updated_at: string
-}
-
-const FALLBACK: FuelPrices = {
-  diesel_eur_per_l: 1.75,
-  gasoline_eur_per_l: 1.8,
-  gpl_eur_per_l: 0.92,
-  source: 'fallback',
-  updated_at: new Date().toISOString(),
 }
 
 let memoryCache: FuelPrices | null = null
 let memoryCacheAt = 0
 const CLIENT_CACHE_MS = 6 * 60 * 60 * 1000
 
-export async function fetchFuelPrices(): Promise<FuelPrices> {
+function positiveOrNull(n: unknown): number | null {
+  const v = Number(n)
+  return Number.isFinite(v) && v > 0 ? v : null
+}
+
+export async function fetchFuelPrices(): Promise<FuelPrices | null> {
   if (memoryCache && Date.now() - memoryCacheAt < CLIENT_CACHE_MS) {
     return memoryCache
   }
@@ -29,31 +33,44 @@ export async function fetchFuelPrices(): Promise<FuelPrices> {
     const res = await fetch('/nourish/fuel-prices', { cache: 'no-store' })
     if (!res.ok) throw new Error('fuel prices unavailable')
     const data = (await res.json()) as Partial<FuelPrices>
-    if (Number(data.diesel_eur_per_l) > 0 || Number(data.gasoline_eur_per_l) > 0) {
-      const merged: FuelPrices = {
-        ...FALLBACK,
-        ...data,
-        diesel_eur_per_l: Number(data.diesel_eur_per_l) > 0 ? data.diesel_eur_per_l! : FALLBACK.diesel_eur_per_l,
-        gasoline_eur_per_l:
-          Number(data.gasoline_eur_per_l) > 0 ? data.gasoline_eur_per_l! : FALLBACK.gasoline_eur_per_l,
-        gpl_eur_per_l: Number(data.gpl_eur_per_l) > 0 ? data.gpl_eur_per_l! : FALLBACK.gpl_eur_per_l,
-        source: data.source ?? FALLBACK.source,
-        updated_at: data.updated_at ?? FALLBACK.updated_at,
-      }
-      memoryCache = merged
-      memoryCacheAt = Date.now()
-      return merged
+    const diesel = positiveOrNull(data.diesel_eur_per_l)
+    const gasoline = positiveOrNull(data.gasoline_eur_per_l)
+    const gpl = positiveOrNull(data.gpl_eur_per_l)
+    if (diesel == null && gasoline == null && gpl == null) return null
+
+    const missing: FuelKind[] = Array.isArray(data.missing)
+      ? (data.missing.filter((m) => m === 'diesel' || m === 'gasoline' || m === 'gpl') as FuelKind[])
+      : [
+          ...(diesel == null ? (['diesel'] as const) : []),
+          ...(gasoline == null ? (['gasoline'] as const) : []),
+          ...(gpl == null ? (['gpl'] as const) : []),
+        ]
+
+    const merged: FuelPrices = {
+      diesel_eur_per_l: diesel,
+      gasoline_eur_per_l: gasoline,
+      gpl_eur_per_l: gpl,
+      missing,
+      source: data.source ?? 'dgeg',
+      source_label: data.source_label ?? 'DGEG · precoscombustiveis.dgeg.gov.pt',
+      gpl_samples: data.gpl_samples,
+      diesel_samples: data.diesel_samples,
+      gasoline_samples: data.gasoline_samples,
+      sampled_stations: data.sampled_stations,
+      updated_at: data.updated_at ?? new Date().toISOString(),
     }
+    memoryCache = merged
+    memoryCacheAt = Date.now()
+    return merged
   } catch {
-    /* homelab offline */
+    return null
   }
-  return FALLBACK
 }
 
 export function fuelPriceForCar(
   prices: FuelPrices,
   fuelType: FuelType = 'diesel'
-): number {
+): number | null {
   switch (fuelType) {
     case 'gasoline':
       return prices.gasoline_eur_per_l
@@ -62,6 +79,19 @@ export function fuelPriceForCar(
       return prices.gpl_eur_per_l
     default:
       return prices.diesel_eur_per_l
+  }
+}
+
+export async function reportFuelPriceIssue(fuel: FuelKind, note?: string): Promise<boolean> {
+  try {
+    const res = await fetch('/nourish/fuel-prices/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fuel, note }),
+    })
+    return res.ok
+  } catch {
+    return false
   }
 }
 

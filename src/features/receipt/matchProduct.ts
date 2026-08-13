@@ -1,4 +1,5 @@
 import type { Product } from '../../types/grocy'
+import { editDistance, fuzzyNameEqual } from './editDistance'
 import { getAliasProductId } from './receiptAliases'
 import { normalizeReceiptName } from './parsers/utils'
 
@@ -11,20 +12,36 @@ function tokenSet(s: string): Set<string> {
 function similarity(a: string, b: string): number {
   const ta = tokenSet(a)
   const tb = tokenSet(b)
-  if (ta.size === 0 || tb.size === 0) return 0
+  if (ta.size === 0 || tb.size === 0) {
+    // Fall back to short edit distance on whole normalized names (e.g. cerais↔cereais)
+    if (fuzzyNameEqual(a, b, 2)) return 0.85
+    return 0
+  }
 
   let overlap = 0
   for (const t of ta) {
     if (tb.has(t)) overlap++
   }
+  // Soft token overlap: tokens within edit distance 1 count as half a match
+  for (const t of ta) {
+    if (tb.has(t)) continue
+    for (const u of tb) {
+      if (Math.abs(t.length - u.length) <= 1 && editDistance(t, u) <= 1) {
+        overlap += 0.5
+        break
+      }
+    }
+  }
+
   const union = new Set([...ta, ...tb]).size
   const jaccard = overlap / union
 
   const na = normalizeReceiptName(a)
   const nb = normalizeReceiptName(b)
   const contains = na.includes(nb) || nb.includes(na) ? 0.25 : 0
+  const editBoost = fuzzyNameEqual(a, b, 2) ? 0.35 : 0
 
-  return Math.min(1, jaccard + contains)
+  return Math.min(1, jaccard + contains + editBoost)
 }
 
 export interface ProductMatch {

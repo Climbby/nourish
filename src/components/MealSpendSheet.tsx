@@ -1,3 +1,4 @@
+import { useShowNutrition } from '../hooks/useShowNutrition'
 import type { MealSpendRow } from '../utils/mealStats'
 import { formatTripCost } from '../utils/visitTripCost'
 
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function MealSpendSheet({ meals, periodLabel, totalSpendEur, onClose }: Props) {
+  const showNutrition = useShowNutrition()
   return (
     <div className="fixed inset-0 z-50 bg-black/60" onClick={onClose}>
       <div
@@ -62,7 +64,7 @@ export function MealSpendSheet({ meals, periodLabel, totalSpendEur, onClose }: P
                     <span className="text-nourish-text-dim"> · {meal.time}</span>
                   )}
                 </p>
-                {meal.calories != null && meal.calories > 0 && (
+                {showNutrition && meal.calories != null && meal.calories > 0 && (
                   <p className="text-xs text-nourish-text-dim tabular-nums">
                     {Math.round(meal.calories)} kcal
                   </p>

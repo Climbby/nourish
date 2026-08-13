@@ -2,17 +2,29 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { analyzeMeal, suggestIngredients } from '../api/ai'
-import type { Recipe } from '../types/grocy'
+import { grocyConfig } from '../config/grocy'
+import type { Product, Recipe } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription } from '../utils/parseDescription'
 import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
-import { IngredientSection, NutritionSection, PriceSection, PortionsSection } from './AddMeal'
+import { cookingName } from '../utils/despensaAnalytics'
+import {
+  filterProductsForIngredient,
+  hydrateIngredientFromProducts,
+  resolveIngredientFromProduct,
+} from '../utils/ingredientFromProduct'
+import { IngredientSection, NutritionSection, PriceSection, PortionsSection, TimeNotesSection } from './AddMeal'
 import { AiGenerateButton } from '../components/AiGenerateButton'
 import { MealOriginField } from '../components/MealOriginField'
+import { MealLocalityField } from '../components/MealLocalityField'
 import { PhotoField } from '../components/PhotoField'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
 import type { VerifiedField } from '../utils/verification'
 import { resolveMealOrigin, type MealOrigin } from '../utils/mealOrigin'
+import type { Coords } from '../utils/locality'
+import { useShowNutrition } from '../hooks/useShowNutrition'
+
+const { despensaGroupId: DESPENSA_GROUP_ID } = grocyConfig
 
 function BackIcon() {
   return (
@@ -30,6 +42,7 @@ const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
 export function EditMeal() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const showNutrition = useShowNutrition()
   const rowIdRef = useRef(1)
 
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -42,12 +55,16 @@ export function EditMeal() {
   const [name, setName] = useState('')
   const [ingredientRows, setIngredientRows] = useState<IngredientRow[]>([])
   const [comoFazer, setComoFazer] = useState('')
+  const [timeMinutes, setTimeMinutes] = useState('')
+  const [notes, setNotes] = useState('')
   const [calories, setCalories] = useState('')
   const [protein, setProtein] = useState('')
   const [carbs, setCarbs] = useState('')
   const [fat, setFat] = useState('')
   const [category, setCategory] = useState('')
   const [origin, setOrigin] = useState<MealOrigin>('supermercado')
+  const [location, setLocation] = useState('')
+  const [locationCoords, setLocationCoords] = useState<Coords | null>(null)
   const [portions, setPortions] = useState('')
   const [priceOverride, setPriceOverride] = useState('')
   const [verifyNutricao, setVerifyNutricao] = useState(false)
@@ -58,7 +75,9 @@ export function EditMeal() {
   const [analyzing, setAnalyzing] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
   const [existingProducts, setExistingProducts] = useState<string[]>([])
-  const [suggestions, setSuggestions] = useState<Record<number, string[]>>({})
+  const [despensaProducts, setDespensaProducts] = useState<Product[]>([])
+  const [productSuggestions, setProductSuggestions] = useState<Record<number, Product[]>>({})
+  const [textSuggestions, setTextSuggestions] = useState<Record<number, string[]>>({})
   const [focusedRow, setFocusedRow] = useState<number | null>(null)
   const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -66,18 +85,35 @@ export function EditMeal() {
 
   useEffect(() => {
     grocy.getProducts().then((products) => {
-      setExistingProducts(products.map((p) => p.name))
+      const despensa = products.filter(
+        (p) => p.product_group_id === DESPENSA_GROUP_ID && p.active !== 0
+      )
+      setDespensaProducts(despensa)
+      setExistingProducts(despensa.map((p) => cookingName(p.name, p.description)))
     }).catch(() => {})
   }, [])
 
   const debouncedSuggest = useCallback(async (rowId: number, query: string) => {
-    if (!query.trim() || query.length < 2) {
-      setSuggestions((prev) => ({ ...prev, [rowId]: [] }))
+    if (!query.trim() || query.length < 1) {
+      setProductSuggestions((prev) => ({ ...prev, [rowId]: [] }))
+      setTextSuggestions((prev) => ({ ...prev, [rowId]: [] }))
+      return
+    }
+    const matched = filterProductsForIngredient(query, despensaProducts)
+    setProductSuggestions((prev) => ({ ...prev, [rowId]: matched }))
+    if (matched.length >= 3 || query.length < 2) {
+      setTextSuggestions((prev) => ({ ...prev, [rowId]: [] }))
       return
     }
     const results = await suggestIngredients(query, existingProducts)
-    setSuggestions((prev) => ({ ...prev, [rowId]: results }))
-  }, [existingProducts])
+    const matchedNames = new Set(
+      matched.flatMap((p) => [p.name.toLowerCase(), cookingName(p.name, p.description).toLowerCase()])
+    )
+    setTextSuggestions((prev) => ({
+      ...prev,
+      [rowId]: results.filter((s) => !matchedNames.has(s.toLowerCase())),
+    }))
+  }, [despensaProducts, existingProducts])
 
   useEffect(() => {
     if (!id || isNaN(numId)) {
@@ -86,50 +122,69 @@ export function EditMeal() {
       return
     }
 
-    grocy.getRecipe(numId).then((r) => {
-      setRecipe(r)
-      setName(r.name)
+    Promise.all([grocy.getRecipe(numId), grocy.getProducts()])
+      .then(([r, products]) => {
+        const despensa = products.filter(
+          (p) => p.product_group_id === DESPENSA_GROUP_ID && p.active !== 0
+        )
+        setDespensaProducts(despensa)
+        setExistingProducts(despensa.map((p) => cookingName(p.name, p.description)))
 
-      const parsed = parseDescription(r.description ?? '')
+        setRecipe(r)
+        setName(r.name)
 
-      if (parsed.ingredientItems.length > 0) {
-        const rows = parsed.ingredientItems.map((item, i) => ({
-          id: i + 1,
-          name: item.name,
-          price: item.price !== null ? item.price.toFixed(2) : '',
-        }))
-        setIngredientRows(rows)
-        rowIdRef.current = rows.length + 1
-      } else {
-        setIngredientRows([{ id: rowIdRef.current++, name: '', price: '' }])
-      }
+        const parsed = parseDescription(r.description ?? '')
 
-      setComoFazer(parsed.steps ?? '')
+        if (parsed.ingredientItems.length > 0) {
+          const rows = parsed.ingredientItems.map((item, i) => {
+            const link = hydrateIngredientFromProducts(item.name, item.grams, despensa)
+            return {
+              id: i + 1,
+              name: link.name,
+              price: item.price !== null ? item.price.toFixed(2) : '',
+              grams: item.grams !== null ? String(item.grams) : '',
+              qty: link.qty || undefined,
+              productId: link.productId,
+              unitGrams: link.unitGrams,
+            }
+          })
+          setIngredientRows(rows)
+          rowIdRef.current = rows.length + 1
+        } else {
+          setIngredientRows([{ id: rowIdRef.current++, name: '', price: '' }])
+        }
 
-      if (parsed.nutrition) {
-        setCalories(parsed.nutrition.calories > 0 ? String(parsed.nutrition.calories) : '')
-        setProtein(parsed.nutrition.protein > 0 ? String(parsed.nutrition.protein) : '')
-        setCarbs(parsed.nutrition.carbs > 0 ? String(parsed.nutrition.carbs) : '')
-        setFat(parsed.nutrition.fat > 0 ? String(parsed.nutrition.fat) : '')
-      }
+        setComoFazer(parsed.steps ?? '')
+        setTimeMinutes(parsed.timeMinutes !== null ? String(parsed.timeMinutes) : '')
+        setNotes(parsed.notes ?? '')
 
-      if (parsed.price !== null) setPriceOverride(parsed.price.toFixed(2))
-      setVerifyNutricao(parsed.verified.includes('nutricao'))
-      setVerifyMealPrice(parsed.verified.includes('preco'))
-      setCategory(parsed.category ?? '')
-      setOrigin(resolveMealOrigin(parsed.origin))
-      setPortions(parsed.portions !== null ? String(parsed.portions) : '')
+        if (parsed.nutrition) {
+          setCalories(parsed.nutrition.calories > 0 ? String(parsed.nutrition.calories) : '')
+          setProtein(parsed.nutrition.protein > 0 ? String(parsed.nutrition.protein) : '')
+          setCarbs(parsed.nutrition.carbs > 0 ? String(parsed.nutrition.carbs) : '')
+          setFat(parsed.nutrition.fat > 0 ? String(parsed.nutrition.fat) : '')
+        }
 
-      if (r.picture_file_name) {
-        setExistingPhoto(r.picture_file_name)
-        setPhotoPreview(grocy.pictureUrl(r.picture_file_name))
-      }
+        if (parsed.price !== null) setPriceOverride(parsed.price.toFixed(2))
+        setVerifyNutricao(parsed.verified.includes('nutricao'))
+        setVerifyMealPrice(parsed.verified.includes('preco'))
+        setCategory(parsed.category ?? '')
+        setOrigin(resolveMealOrigin(parsed.origin))
+        setLocation(parsed.location ?? '')
+        setLocationCoords(parsed.locationCoords)
+        setPortions(parsed.portions !== null ? String(parsed.portions) : '')
 
-      setLoading(false)
-    }).catch((e: Error) => {
-      setLoadError(e.message)
-      setLoading(false)
-    })
+        if (r.picture_file_name) {
+          setExistingPhoto(r.picture_file_name)
+          setPhotoPreview(grocy.pictureUrl(r.picture_file_name))
+        }
+
+        setLoading(false)
+      })
+      .catch((e: Error) => {
+        setLoadError(e.message)
+        setLoading(false)
+      })
   }, [numId])
 
   const autoTotal = computeAutoTotal(ingredientRows)
@@ -190,12 +245,67 @@ export function EditMeal() {
     }
   }
 
-  function updateRow(rowId: number, field: 'name' | 'price', value: string) {
-    setIngredientRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, [field]: value } : r)))
+  function updateRow(rowId: number, field: 'name' | 'price' | 'grams' | 'qty', value: string) {
+    setIngredientRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r
+        if (field === 'name') {
+          return {
+            ...r,
+            name: value,
+            productId: undefined,
+            unitGrams: undefined,
+            qty: undefined,
+          }
+        }
+        if (field === 'qty') {
+          const count = parseFloat(value)
+          if (r.productId != null && count > 0) {
+            const product = despensaProducts.find((p) => p.id === r.productId)
+            if (product) {
+              const resolved = resolveIngredientFromProduct(product, count)
+              return {
+                ...r,
+                qty: value,
+                price: resolved.price,
+                grams: resolved.grams,
+                name: resolved.name,
+                unitGrams: resolved.unitGrams,
+              }
+            }
+          }
+          return { ...r, qty: value }
+        }
+        return { ...r, [field]: value }
+      })
+    )
     if (field === 'name') {
       if (suggestTimeoutRef.current) clearTimeout(suggestTimeoutRef.current)
       suggestTimeoutRef.current = setTimeout(() => debouncedSuggest(rowId, value), 300)
     }
+  }
+
+  function selectProduct(rowId: number, product: Product) {
+    const existing = ingredientRows.find((r) => r.id === rowId)
+    const count = parseFloat(existing?.qty ?? '')
+    const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1)
+    setIngredientRows((prev) =>
+      prev.map((r) =>
+        r.id === rowId
+          ? {
+              ...r,
+              name: resolved.name,
+              price: resolved.price,
+              grams: resolved.grams,
+              qty: resolved.qty,
+              productId: resolved.productId,
+              unitGrams: resolved.unitGrams,
+            }
+          : r
+      )
+    )
+    setProductSuggestions((prev) => ({ ...prev, [rowId]: [] }))
+    setTextSuggestions((prev) => ({ ...prev, [rowId]: [] }))
   }
 
   function addRow() {
@@ -228,17 +338,21 @@ export function EditMeal() {
       if (verifyNutricao && hasNutricao) verified.add('nutricao')
       if (verifyMealPrice && !isNaN(finalPrice) && finalPrice > 0) verified.add('preco')
 
-      const description = buildDescription(
+      const description = buildDescription({
         ingredientRows,
-        comoFazer,
-        { calories, protein, carbs, fat },
+        steps: comoFazer,
+        nutrition: { calories, protein, carbs, fat },
         priceOverride,
         autoTotal,
         category,
-        origin === 'supermercado' && portions !== '' ? parseInt(portions, 10) : null,
+        portions: origin === 'supermercado' && portions !== '' ? parseInt(portions, 10) : null,
         verified,
-        origin
-      )
+        origin,
+        location: origin === 'restaurante' ? location : null,
+        locationCoords: origin === 'restaurante' ? locationCoords : null,
+        timeMinutes,
+        notes,
+      })
 
       await grocy.updateRecipe(numId, {
         name: name.trim(),
@@ -314,6 +428,18 @@ export function EditMeal() {
         </div>
 
         <MealOriginField value={origin} onChange={setOrigin} labelClass={labelClass} />
+        {origin === 'restaurante' && (
+          <MealLocalityField
+            location={location}
+            coords={locationCoords}
+            onChange={(label, coords) => {
+              setLocation(label)
+              setLocationCoords(coords)
+            }}
+            labelClass={labelClass}
+            inputClass={inputClass}
+          />
+        )}
 
         {origin === 'supermercado' && (
           <>
@@ -322,9 +448,11 @@ export function EditMeal() {
               onUpdate={updateRow}
               onAdd={addRow}
               onRemove={removeRow}
+              onSelectProduct={selectProduct}
               inputClass={inputClass}
               labelClass={labelClass}
-              suggestions={suggestions}
+              productSuggestions={productSuggestions}
+              textSuggestions={textSuggestions}
               focusedRow={focusedRow}
               onFocus={setFocusedRow}
             />
@@ -334,47 +462,60 @@ export function EditMeal() {
               <textarea value={comoFazer} onChange={(e) => setComoFazer(e.target.value)}
                 rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
             </div>
+
+            <TimeNotesSection
+              timeMinutes={timeMinutes}
+              notes={notes}
+              onTimeChange={setTimeMinutes}
+              onNotesChange={setNotes}
+              inputClass={inputClass}
+              labelClass={labelClass}
+            />
           </>
         )}
 
-        <NutritionSection
-          calories={calories}
-          protein={protein}
-          carbs={carbs}
-          fat={fat}
-          onChange={{
-            calories: (v) => {
-              setCalories(v)
-              setVerifyNutricao(false)
-            },
-            protein: (v) => {
-              setProtein(v)
-              setVerifyNutricao(false)
-            },
-            carbs: (v) => {
-              setCarbs(v)
-              setVerifyNutricao(false)
-            },
-            fat: (v) => {
-              setFat(v)
-              setVerifyNutricao(false)
-            },
-          }}
-          inputClass={inputClass}
-          labelClass={labelClass}
-        />
-        <VerifyCheckbox
-          id="edit-verify-nutricao"
-          checked={verifyNutricao}
-          onChange={setVerifyNutricao}
-          label="Nutrição verificada"
-          disabled={
-            !(calories.trim() && parseFloat(calories) > 0) &&
-            !(protein.trim() && parseFloat(protein) > 0) &&
-            !(carbs.trim() && parseFloat(carbs) > 0) &&
-            !(fat.trim() && parseFloat(fat) > 0)
-          }
-        />
+        {showNutrition && (
+          <>
+            <NutritionSection
+              calories={calories}
+              protein={protein}
+              carbs={carbs}
+              fat={fat}
+              onChange={{
+                calories: (v) => {
+                  setCalories(v)
+                  setVerifyNutricao(false)
+                },
+                protein: (v) => {
+                  setProtein(v)
+                  setVerifyNutricao(false)
+                },
+                carbs: (v) => {
+                  setCarbs(v)
+                  setVerifyNutricao(false)
+                },
+                fat: (v) => {
+                  setFat(v)
+                  setVerifyNutricao(false)
+                },
+              }}
+              inputClass={inputClass}
+              labelClass={labelClass}
+            />
+            <VerifyCheckbox
+              id="edit-verify-nutricao"
+              checked={verifyNutricao}
+              onChange={setVerifyNutricao}
+              label="Nutrição verificada"
+              disabled={
+                !(calories.trim() && parseFloat(calories) > 0) &&
+                !(protein.trim() && parseFloat(protein) > 0) &&
+                !(carbs.trim() && parseFloat(carbs) > 0) &&
+                !(fat.trim() && parseFloat(fat) > 0)
+              }
+            />
+          </>
+        )}
 
         <PriceSection
           autoTotal={origin === 'supermercado' ? autoTotal : 0}

@@ -2,7 +2,10 @@ import { useState, type MouseEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Recipe } from '../types/grocy'
 import { grocy } from '../api/grocy'
+import { useShowNutrition } from '../hooks/useShowNutrition'
 import { parseDescription } from '../utils/parseDescription'
+import { isRestaurantMeal, resolveMealOrigin } from '../utils/mealOrigin'
+import { distanceFromHome, formatLocalityMeta, type Coords } from '../utils/locality'
 import { logMealConsumption } from '../utils/logMealConsumption'
 import { VerifiedBadge } from './VerifiedBadge'
 
@@ -10,17 +13,28 @@ interface Props {
   recipe: Recipe
   showPortions?: boolean
   onLogged?: (recipeId: number, description: string) => void
+  homeCoords?: Coords | null
 }
 
-export function MealCard({ recipe, showPortions, onLogged }: Props) {
+export function MealCard({ recipe, showPortions, onLogged, homeCoords }: Props) {
   const navigate = useNavigate()
+  const showNutrition = useShowNutrition()
   const [imgError, setImgError] = useState(false)
   const [logging, setLogging] = useState(false)
   const [logged, setLogged] = useState(false)
   const [logError, setLogError] = useState(false)
-  const { nutrition, price, portions, verified } = parseDescription(recipe.description ?? '')
+  const { nutrition, price, portions, verified, location, locationCoords, origin } = parseDescription(
+    recipe.description ?? ''
+  )
   const nutricaoOk = verified.includes('nutricao')
   const precoOk = verified.includes('preco')
+  const showMacros = showNutrition && nutrition
+  const isFora = isRestaurantMeal(resolveMealOrigin(origin))
+  const distMeta =
+    isFora && location
+      ? formatLocalityMeta(distanceFromHome(homeCoords, locationCoords))
+      : null
+
 
   async function handleComi(e: MouseEvent) {
     e.stopPropagation()
@@ -74,8 +88,14 @@ export function MealCard({ recipe, showPortions, onLogged }: Props) {
           <h3 className="font-semibold text-nourish-text text-sm leading-snug line-clamp-2 min-h-[2.5rem]">
             {recipe.name}
           </h3>
+          {isFora && location && (
+            <p className="text-[11px] text-nourish-text-dim leading-snug">
+              {location}
+              {distMeta && <span className="tabular-nums"> · {distMeta}</span>}
+            </p>
+          )}
 
-          {(price !== null || nutrition) && (
+          {(price !== null || showMacros) && (
             <div className="mt-auto flex items-center justify-between gap-1 flex-wrap">
               {price !== null && (
                 <span className="text-nourish-primary text-xs font-semibold inline-flex items-center gap-1">
@@ -83,7 +103,7 @@ export function MealCard({ recipe, showPortions, onLogged }: Props) {
                   {precoOk && <VerifiedBadge verified />}
                 </span>
               )}
-              {nutrition && (
+              {showMacros && (
                 <div className="flex gap-1 items-center">
                   {nutricaoOk && <VerifiedBadge verified className="mr-0.5" />}
                   <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums">

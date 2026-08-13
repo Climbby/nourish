@@ -11,6 +11,8 @@ export interface Nutrition {
 export interface IngredientLine {
   name: string
   price: number | null
+  /** Quantity in grams (or ml), used to derive nutrition from product macros. */
+  grams: number | null
 }
 
 export interface ParsedRecipe {
@@ -21,11 +23,67 @@ export interface ParsedRecipe {
   price: number | null
   category: string | null
   portions: number | null
+  /** Cook time in minutes — an estimate until replaced by a measured time. */
+  timeMinutes: number | null
+  /** Free-text notes that accumulate as the recipe gets repeated. */
+  notes: string | null
   verified: VerifiedField[]
   /** `supermercado` | `restaurante` — null if unset (legacy) */
   origin: string | null
-  /** Optional place name for restaurant meals (future use) */
+  /** Locality label for restaurant meals, e.g. "Condeixa, Coimbra" */
   location: string | null
+  /** Coords for distance sort (from [Coords] section) */
+  locationCoords: { latitude: number; longitude: number } | null
+}
+
+function parseCoordsBlock(raw: string | undefined): { latitude: number; longitude: number } | null {
+  if (!raw) return null
+  const line = raw.trim().split('\n')[0]?.trim() ?? ''
+  const m = line.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/)
+  if (!m) return null
+  const latitude = parseFloat(m[1])
+  const longitude = parseFloat(m[2])
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
+  return { latitude, longitude }
+}
+
+function parseLocalLabel(raw: string | undefined): string | null {
+  if (!raw) return null
+  const first = raw.trim().split('\n')[0]?.trim() ?? ''
+  return first || null
+}
+
+function numOrNull(raw: string | undefined): number | null {
+  const val = parseFloat((raw ?? '').trim())
+  return isNaN(val) ? null : val
+}
+
+/**
+ * Ingredient lines are `Nome`, `Nome|preco`, or `Nome|preco|gramas` (with the
+ * price optionally blank: `Nome||gramas`). Names containing a literal `|` still
+ * parse the way they always did, so legacy recipes are unaffected.
+ */
+export function parseIngredientLine(line: string): IngredientLine {
+  const parts = line.split('|')
+
+  if (parts.length >= 3) {
+    const grams = numOrNull(parts[parts.length - 1])
+    const priceRaw = parts[parts.length - 2].trim()
+    const price = numOrNull(priceRaw)
+    // Only read the 3-field form when the trailing fields really are numeric —
+    // otherwise fall through to the legacy `name|price` split below.
+    if (grams !== null && (price !== null || priceRaw === '')) {
+      return { name: parts.slice(0, -2).join('|').trim(), price, grams }
+    }
+  }
+
+  const pipeIdx = line.lastIndexOf('|')
+  if (pipeIdx === -1) return { name: line.trim(), price: null, grams: null }
+  return {
+    name: line.slice(0, pipeIdx).trim(),
+    price: numOrNull(line.slice(pipeIdx + 1)),
+    grams: null,
+  }
 }
 
 export function parseDescription(raw: string): ParsedRecipe {
@@ -35,7 +93,7 @@ export function parseDescription(raw: string): ParsedRecipe {
   let currentKey: string | null = null
 
   for (const line of text.split('\n')) {
-    const match = line.match(/^\[(Ingredientes|Passos|Nutricao|Preco|Categoria|Porcoes|Verificado|Origem|Local)\]$/)
+    const match = line.match(/^\[(Ingredientes|Passos|Nutricao|Preco|Categoria|Porcoes|Verificado|Origem|Local|Coords|Tempo|Notas)\]$/)
     if (match) {
       currentKey = match[1]
       sections[currentKey] = ''
@@ -53,21 +111,18 @@ export function parseDescription(raw: string): ParsedRecipe {
       price: null,
       category: null,
       portions: null,
+      timeMinutes: null,
+      notes: null,
       verified: [],
       origin: null,
       location: null,
+      locationCoords: null,
     }
   }
 
   const rawIngredients = sections['Ingredientes']?.trim() || null
   const ingredientItems: IngredientLine[] = rawIngredients
-    ? rawIngredients.split('\n').filter(Boolean).map((line) => {
-        const pipeIdx = line.lastIndexOf('|')
-        if (pipeIdx === -1) return { name: line.trim(), price: null }
-        const name = line.slice(0, pipeIdx).trim()
-        const val = parseFloat(line.slice(pipeIdx + 1).trim())
-        return { name, price: isNaN(val) ? null : val }
-      })
+    ? rawIngredients.split('\n').filter(Boolean).map(parseIngredientLine)
     : []
 
   let nutrition: Nutrition | null = null
@@ -93,13 +148,22 @@ export function parseDescription(raw: string): ParsedRecipe {
 
   const category = sections['Categoria']?.trim() || null
   const origin = sections['Origem']?.trim().toLowerCase() || null
-  const location = sections['Local']?.trim() || null
+  const location = parseLocalLabel(sections['Local'])
+  const locationCoords = parseCoordsBlock(sections['Coords'])
 
   let portions: number | null = null
   if (sections['Porcoes'] !== undefined) {
     const val = parseInt(sections['Porcoes'].trim(), 10)
     if (!isNaN(val)) portions = val
   }
+
+  let timeMinutes: number | null = null
+  if (sections['Tempo'] !== undefined) {
+    const val = parseInt(sections['Tempo'].trim(), 10)
+    if (!isNaN(val) && val >= 0) timeMinutes = val
+  }
+
+  const notes = sections['Notas']?.trim() || null
 
   const verified: VerifiedField[] = []
   if (sections['Verificado']) {
@@ -117,9 +181,12 @@ export function parseDescription(raw: string): ParsedRecipe {
     price,
     category,
     portions,
+    timeMinutes,
+    notes,
     verified,
     origin,
     location,
+    locationCoords,
   }
 }
 

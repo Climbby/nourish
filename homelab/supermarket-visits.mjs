@@ -3,7 +3,8 @@
 const ONGOING_MAX_MS = 4 * 60 * 60 * 1000
 const ENTER_DEBOUNCE_MS = 2 * 60 * 1000
 const LEAVE_BOUNCE_MS = 15 * 1000
-const VISIT_MERGE_GAP_MS = 2 * 60 * 1000
+/** GPS often splits one trip into blocks a few minutes apart — merge same-store gaps under this. */
+const VISIT_MERGE_GAP_MS = 15 * 60 * 1000
 /** Shorter completed visits are drive-bys (GPS clipped the zone). */
 const MIN_VISIT_DURATION_MINUTES = 3
 
@@ -18,15 +19,30 @@ function finalizeOpenVisit(visit, nowMs) {
   return { ...visit, ongoing: false }
 }
 
+function visitEndMs(visit) {
+  if (visit.left_at) {
+    const ms = parseMs(visit.left_at)
+    return Number.isFinite(ms) ? ms : null
+  }
+  const enteredMs = parseMs(visit.entered_at)
+  if (!Number.isFinite(enteredMs)) return null
+  if (visit.duration_minutes != null && !visit.ongoing) {
+    return enteredMs + visit.duration_minutes * 60000
+  }
+  return enteredMs
+}
+
+function sameSupermarketZone(a, b) {
+  if (a.zone && b.zone) return a.zone === b.zone
+  return true
+}
+
 function shouldConsolidateVisits(a, b) {
-  const aEndMs = a.left_at ? parseMs(a.left_at) : parseMs(a.entered_at)
+  if (!sameSupermarketZone(a, b)) return false
+  const aEndMs = visitEndMs(a)
   const bStartMs = parseMs(b.entered_at)
-  if (!Number.isFinite(aEndMs) || !Number.isFinite(bStartMs)) return false
-  const gap = bStartMs - aEndMs
-  if (gap > VISIT_MERGE_GAP_MS) return false
-  if ((a.duration_minutes ?? 0) <= 1) return true
-  if (gap <= 0 && (b.duration_minutes ?? 0) <= 1) return true
-  return false
+  if (aEndMs == null || !Number.isFinite(bStartMs)) return false
+  return bStartMs - aEndMs <= VISIT_MERGE_GAP_MS
 }
 
 function consolidateVisits(a, b) {
@@ -105,7 +121,10 @@ export function buildSupermarketVisits(events, nowMs = Date.now()) {
         if (ev.zone && !openEnter.zone) openEnter.zone = ev.zone
         continue
       }
-      if (openEnter) closeOpen(ev.t)
+      if (openEnter) {
+        if (ev.t - openEnter.t > ONGOING_MAX_MS) closeOpen(null)
+        else closeOpen(ev.t)
+      }
       openEnter = ev
     } else if (openEnter) {
       if (ev.t - openEnter.t < LEAVE_BOUNCE_MS) continue

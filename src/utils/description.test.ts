@@ -10,21 +10,21 @@ const sampleRows: IngredientRow[] = [
 
 describe('buildDescription + parseDescription round-trip', () => {
   it('preserves ingredients, steps, nutrition, price, category, and portions', () => {
-    const built = buildDescription(
-      sampleRows,
-      'Cozer o esparguete.\nMisturar com o atum.',
-      { calories: '450', protein: '30', carbs: '60', fat: '12' },
-      '',
-      2.3,
-      'Completa',
-      3
-    )
+    const built = buildDescription({
+      ingredientRows: sampleRows,
+      steps: 'Cozer o esparguete.\nMisturar com o atum.',
+      nutrition: { calories: '450', protein: '30', carbs: '60', fat: '12' },
+      priceOverride: '',
+      autoTotal: 2.3,
+      category: 'Completa',
+      portions: 3,
+    })
 
     const parsed = parseDescription(built)
 
     expect(parsed.ingredientItems).toEqual([
-      { name: 'Atum', price: 1.5 },
-      { name: 'Esparguete', price: 0.8 },
+      { name: 'Atum', price: 1.5, grams: null },
+      { name: 'Esparguete', price: 0.8, grams: null },
     ])
     expect(parsed.steps).toBe('Cozer o esparguete.\nMisturar com o atum.')
     expect(parsed.nutrition).toEqual({ calories: 450, protein: 30, carbs: 60, fat: 12 })
@@ -36,61 +36,159 @@ describe('buildDescription + parseDescription round-trip', () => {
   })
 
   it('stores meal origin and skips ingredients/steps for restaurant', () => {
-    const built = buildDescription(
-      sampleRows,
-      'Não deve aparecer',
-      { calories: '600', protein: '25', carbs: '50', fat: '20' },
-      '8.50',
-      0,
-      'Completa',
-      null,
-      undefined,
-      'restaurante',
-      'Cantina do ISCTE'
-    )
+    const built = buildDescription({
+      ingredientRows: sampleRows,
+      steps: 'Não deve aparecer',
+      nutrition: { calories: '600', protein: '25', carbs: '50', fat: '20' },
+      priceOverride: '8.50',
+      autoTotal: 0,
+      category: 'Completa',
+      portions: null,
+      origin: 'restaurante',
+      location: 'Cantina do ISCTE',
+    })
     const parsed = parseDescription(built)
     expect(parsed.origin).toBe('restaurante')
     expect(parsed.location).toBe('Cantina do ISCTE')
+    expect(parsed.locationCoords).toBeNull()
     expect(parsed.ingredientItems).toEqual([])
     expect(parsed.steps).toBeNull()
     expect(parsed.price).toBe(8.5)
   })
 
+  it('round-trips locality label and coords', () => {
+    const built = buildDescription({
+      ingredientRows: [],
+      steps: '',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '12.00',
+      autoTotal: 0,
+      category: 'Completa',
+      portions: null,
+      origin: 'restaurante',
+      location: 'Condeixa, Coimbra',
+      locationCoords: { latitude: 40.114, longitude: -8.499 },
+    })
+    const parsed = parseDescription(built)
+    expect(parsed.location).toBe('Condeixa, Coimbra')
+    expect(parsed.locationCoords).toEqual({ latitude: 40.114, longitude: -8.499 })
+  })
+
   it('round-trips supermercado origin', () => {
-    const built = buildDescription(
-      sampleRows,
-      'Misturar',
-      { calories: '400', protein: '20', carbs: '40', fat: '10' },
-      '',
-      2.3,
-      'Ligeira',
-      undefined,
-      undefined,
-      'supermercado'
-    )
+    const built = buildDescription({
+      ingredientRows: sampleRows,
+      steps: 'Misturar',
+      nutrition: { calories: '400', protein: '20', carbs: '40', fat: '10' },
+      priceOverride: '',
+      autoTotal: 2.3,
+      category: 'Ligeira',
+      origin: 'supermercado',
+    })
     expect(parseDescription(built).origin).toBe('supermercado')
   })
 
   it('round-trips verification flags', () => {
     const verified = new Set<VerifiedField>(['preco', 'nutricao'])
-    const built = buildDescription(
-      sampleRows,
-      '',
-      { calories: '400', protein: '20', carbs: '40', fat: '10' },
-      '5.00',
-      0,
-      undefined,
-      undefined,
-      verified
-    )
+    const built = buildDescription({
+      ingredientRows: sampleRows,
+      steps: '',
+      nutrition: { calories: '400', protein: '20', carbs: '40', fat: '10' },
+      priceOverride: '5.00',
+      autoTotal: 0,
+      verified,
+    })
     expect(parseDescription(built).verified).toEqual(['nutricao', 'preco'])
   })
 
-  it('treats unsectioned text as steps for legacy recipes', () => {
+  it('round-trips cook time and notes', () => {
+    const built = buildDescription({
+      ingredientRows: sampleRows,
+      steps: 'Misturar',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '',
+      autoTotal: 2.3,
+      timeMinutes: '25',
+      notes: 'Menos sal.\n20 min chegam.',
+    })
+    const parsed = parseDescription(built)
+    expect(parsed.timeMinutes).toBe(25)
+    expect(parsed.notes).toBe('Menos sal.\n20 min chegam.')
+  })
+
+  it('omits time and notes when empty', () => {
+    const built = buildDescription({
+      ingredientRows: sampleRows,
+      steps: '',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '',
+      autoTotal: 0,
+      timeMinutes: '',
+      notes: '   ',
+    })
+    expect(built).not.toContain('[Tempo]')
+    expect(built).not.toContain('[Notas]')
+    const parsed = parseDescription(built)
+    expect(parsed.timeMinutes).toBeNull()
+    expect(parsed.notes).toBeNull()
+  })
+})
+
+describe('ingredient quantities', () => {
+  it('round-trips name, price, and grams', () => {
+    const built = buildDescription({
+      ingredientRows: [
+        { id: 1, name: 'Atum', price: '1.50', grams: '80' },
+        { id: 2, name: 'Esparguete', price: '0.80', grams: '250' },
+      ],
+      steps: '',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '',
+      autoTotal: 2.3,
+    })
+    expect(parseDescription(built).ingredientItems).toEqual([
+      { name: 'Atum', price: 1.5, grams: 80 },
+      { name: 'Esparguete', price: 0.8, grams: 250 },
+    ])
+  })
+
+  it('stores grams when the price is missing', () => {
+    const built = buildDescription({
+      ingredientRows: [{ id: 1, name: 'Espinafres', price: '', grams: '150' }],
+      steps: '',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '',
+      autoTotal: 0,
+    })
+    expect(built).toContain('Espinafres||150')
+    expect(parseDescription(built).ingredientItems).toEqual([
+      { name: 'Espinafres', price: null, grams: 150 },
+    ])
+  })
+
+  it('still parses legacy two-field and bare lines', () => {
+    const parsed = parseDescription('[Ingredientes]\nAtum|1.50\nSal')
+    expect(parsed.ingredientItems).toEqual([
+      { name: 'Atum', price: 1.5, grams: null },
+      { name: 'Sal', price: null, grams: null },
+    ])
+  })
+
+  it('does not mistake a pipe in the name for a quantity', () => {
+    const parsed = parseDescription('[Ingredientes]\nArroz|Massa|1.50')
+    expect(parsed.ingredientItems).toEqual([
+      { name: 'Arroz|Massa', price: 1.5, grams: null },
+    ])
+  })
+})
+
+describe('legacy recipes', () => {
+  it('treats unsectioned text as steps', () => {
     const parsed = parseDescription('Passo um\nPasso dois')
     expect(parsed.steps).toBe('Passo um\nPasso dois')
     expect(parsed.ingredientItems).toEqual([])
     expect(parsed.verified).toEqual([])
+    expect(parsed.timeMinutes).toBeNull()
+    expect(parsed.notes).toBeNull()
   })
 })
 

@@ -14,14 +14,6 @@ export function CartIcon({ className = 'w-5 h-5' }: { className?: string }) {
   )
 }
 
-export function ListIcon({ className = 'w-5 h-5' }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
-      <path strokeLinecap="round" d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-    </svg>
-  )
-}
-
 interface ShoppingListSheetProps {
   open: boolean
   onClose: () => void
@@ -41,10 +33,10 @@ export function ShoppingListButton({
       type="button"
       onClick={onClick}
       className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl bg-nourish-surface-high border border-nourish-border text-nourish-text text-xs font-semibold active:bg-nourish-border/20 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-      aria-label="Lista de compras"
+      aria-label="Compras"
     >
-      <ListIcon />
-      Lista
+      <CartIcon />
+      Compras
       {count > 0 && (
         <span className="min-w-[1.25rem] h-5 px-1 flex items-center justify-center rounded-full bg-nourish-primary text-nourish-on-primary text-[10px] font-bold">
           {count > 99 ? '99+' : count}

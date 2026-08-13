@@ -51,6 +51,42 @@ describe('buildSupermarketVisits', () => {
     expect(visits[0].zone).toBe('zone.auchan')
   })
 
+  it('merges same-store visits with a short gap into one trip', () => {
+    const visits = buildSupermarketVisits([
+      { type: 'supermarket_enter', at: '2026-06-01T10:00:00.000Z', zone: 'zone.continente' },
+      { type: 'supermarket_leave', at: '2026-06-01T10:20:00.000Z', zone: 'zone.continente' },
+      { type: 'supermarket_enter', at: '2026-06-01T10:28:00.000Z', zone: 'zone.continente' },
+      { type: 'supermarket_leave', at: '2026-06-01T10:40:00.000Z', zone: 'zone.continente' },
+    ])
+    expect(visits).toHaveLength(1)
+    expect(visits[0].entered_at).toBe('2026-06-01T10:00:00.000Z')
+    expect(visits[0].left_at).toBe('2026-06-01T10:40:00.000Z')
+    expect(visits[0].duration_minutes).toBe(40)
+  })
+
+  it('does not merge nearby visits at different supermarkets', () => {
+    const visits = buildSupermarketVisits([
+      { type: 'supermarket_enter', at: '2026-06-01T10:00:00.000Z', zone: 'zone.continente' },
+      { type: 'supermarket_leave', at: '2026-06-01T10:20:00.000Z', zone: 'zone.continente' },
+      { type: 'supermarket_enter', at: '2026-06-01T10:25:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_leave', at: '2026-06-01T10:45:00.000Z', zone: 'zone.auchan' },
+    ])
+    expect(visits).toHaveLength(2)
+    expect(visits[0].zone).toBe('zone.auchan')
+    expect(visits[1].zone).toBe('zone.continente')
+  })
+
+  it('merges a 1-minute gap at the same store', () => {
+    const visits = buildSupermarketVisits([
+      { type: 'supermarket_enter', at: '2026-06-01T10:00:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_leave', at: '2026-06-01T10:15:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_enter', at: '2026-06-01T10:16:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_leave', at: '2026-06-01T10:30:00.000Z', zone: 'zone.auchan' },
+    ])
+    expect(visits).toHaveLength(1)
+    expect(visits[0].duration_minutes).toBe(30)
+  })
+
   it('ignores duplicate enter events within debounce window', () => {
     const visits = buildSupermarketVisits([
       { type: 'supermarket_enter', at: '2026-06-12T08:24:29.515Z' },
@@ -105,7 +141,7 @@ describe('visit status helpers', () => {
     expect(visitExitTime(visit)).toBe('2026-06-01T10:45:00.000Z')
   })
 
-  it('shows missing leave only for recent incomplete visits', () => {
+  it('shows missing leave for incomplete visits (including old ones)', () => {
     const recent = {
       entered_at: '2026-06-01T10:00:00.000Z',
       left_at: null,
@@ -122,22 +158,51 @@ describe('visit status helpers', () => {
       duration_minutes: null,
       ongoing: false,
     }
-    expect(visitStatusLabel(old)).toBeNull()
+    expect(visitStatusLabel(old)).toBe('Saída não registada')
   })
 
-  it('closes previous visit when re-enter without leave', () => {
+  it('does not invent a multi-hour left_at when re-entering after a long gap', () => {
+    const visits = buildSupermarketVisits(
+      [
+        { type: 'supermarket_enter', at: '2026-06-01T10:00:00.000Z', zone: 'zone.auchan' },
+        { type: 'supermarket_enter', at: '2026-06-03T23:00:00.000Z', zone: 'zone.auchan' },
+        { type: 'supermarket_leave', at: '2026-06-03T23:30:00.000Z', zone: 'zone.auchan' },
+      ],
+      new Date('2026-06-03T23:45:00.000Z').getTime()
+    )
+    expect(visits).toHaveLength(2)
+    expect(visits[1].left_at).toBeNull()
+    expect(visits[1].duration_minutes).toBeNull()
+    expect(visits[1].ongoing).toBe(false)
+    expect(formatVisitDuration(visits[1].duration_minutes, visits[1].ongoing)).toBe('—')
+    expect(visitStatusLabel(visits[1], new Date('2026-06-03T23:45:00.000Z').getTime())).toBe(
+      'Saída não registada'
+    )
+  })
+
+  it('closes previous visit when re-enter without leave, then merges if gap is tiny', () => {
     const visits = buildSupermarketVisits([
-      { type: 'supermarket_enter', at: '2026-06-01T10:00:00.000Z' },
-      { type: 'supermarket_enter', at: '2026-06-01T11:00:00.000Z' },
-      { type: 'supermarket_leave', at: '2026-06-01T11:30:00.000Z' },
+      { type: 'supermarket_enter', at: '2026-06-01T10:00:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_enter', at: '2026-06-01T11:00:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_leave', at: '2026-06-01T11:30:00.000Z', zone: 'zone.auchan' },
+    ])
+    // Closed at second enter (gap 0) → same store merge into one trip
+    expect(visits).toHaveLength(1)
+    expect(visits[0].entered_at).toBe('2026-06-01T10:00:00.000Z')
+    expect(visits[0].left_at).toBe('2026-06-01T11:30:00.000Z')
+    expect(visitStatusLabel(visits[0])).toBeNull()
+  })
+
+  it('keeps separate trips when the gap between same-store visits is large', () => {
+    const visits = buildSupermarketVisits([
+      { type: 'supermarket_enter', at: '2026-06-01T10:00:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_leave', at: '2026-06-01T10:30:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_enter', at: '2026-06-01T11:00:00.000Z', zone: 'zone.auchan' },
+      { type: 'supermarket_leave', at: '2026-06-01T11:20:00.000Z', zone: 'zone.auchan' },
     ])
     expect(visits).toHaveLength(2)
-    expect(visits[0].entered_at).toBe('2026-06-01T11:00:00.000Z')
-    expect(visits[0].left_at).toBe('2026-06-01T11:30:00.000Z')
-    expect(visits[1].entered_at).toBe('2026-06-01T10:00:00.000Z')
-    expect(visits[1].left_at).toBe('2026-06-01T11:00:00.000Z')
-    expect(visitStatusLabel(visits[1])).toBeNull()
   })
+
   it('hides status when exit time is shown', () => {
     const visit = {
       entered_at: '2026-06-01T10:00:00.000Z',

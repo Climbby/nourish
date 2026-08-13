@@ -8,6 +8,13 @@ describe('isNetworkFetchError', () => {
     expect(isNetworkFetchError(new Error('Load failed'))).toBe(true)
   })
 
+  it('detects friendly Portuguese messages (Error or string)', () => {
+    const friendly = 'Não foi possível ligar ao servidor. Tenta de novo ou repara a app.'
+    expect(isNetworkFetchError(new Error(friendly))).toBe(true)
+    expect(isNetworkFetchError(`Erro ao carregar: ${friendly}`)).toBe(true)
+    expect(isNetworkFetchError('Sem ligação à internet. Verifica a rede e tenta de novo.')).toBe(true)
+  })
+
   it('ignores HTTP-level errors', () => {
     expect(isNetworkFetchError(new Error('Grocy 500: boom'))).toBe(false)
   })

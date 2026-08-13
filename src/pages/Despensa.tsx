@@ -6,169 +6,284 @@ import { Spinner } from '../components/Spinner'
 import { ConnectionError } from '../components/ConnectionError'
 import { VerifiedBadge } from '../components/VerifiedBadge'
 import { CartIcon, ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
-import { StockAmountSheet } from '../components/StockAmountSheet'
 import { fetchHomelabMetrics, hasShopIntervalMedian, shopIntervalDays } from '../api/homelabMetrics'
 import {
   computeDespensaAnalytics,
+  despensaDisplayName,
   getBuyAmountFromDesc,
-  getDespensaUnitPrice,
-  purchaseTotalPrice,
+  getGenericoFromDesc,
 } from '../utils/despensaAnalytics'
+import {
+  familyMatchesQuery,
+  groupDespensaFamilies,
+  sortFamiliesByConsumption,
+  type DespensaFamily,
+} from '../utils/despensaFamilies'
 import { isVerified } from '../utils/verification'
+import { useShowNutrition } from '../hooks/useShowNutrition'
 
-interface DespensaCardProps {
-  item: StockItem
-  log: StockLogEntry[]
-  onShoppingList: boolean
-  onConsume: (id: number) => void
-  onAdd: (id: number) => void
-  onAddToShoppingList: (id: number) => void
-  onAdjustStock: (id: number) => void
-  daysUntilShop: number | null
+function TrashIcon({ className = 'w-3.5 h-3.5' }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+      <path
+        fillRule="evenodd"
+        d="M16.5 4.478v.227a48.816 48.816 0 0 1 3.878.512.75.75 0 1 1-.256 1.478l-.209-.035-1.005 13.07a3 3 0 0 1-2.991 2.77H8.084a3 3 0 0 1-2.991-2.77L4.087 6.66l-.209.035a.75.75 0 0 1-.256-1.478A48.567 48.567 0 0 1 7.5 4.705v-.227c0-1.564 1.213-2.9 2.816-2.951a52.662 52.662 0 0 1 3.369 0c1.603.051 2.815 1.387 2.815 2.951Zm-6.136-1.452a51.196 51.196 0 0 1 3.273 0C14.39 3.05 15 3.684 15 4.478v.113a49.488 49.488 0 0 0-6 0v-.113c0-.794.609-1.428 1.364-1.452Zm-.355 5.945a.75.75 0 1 0-1.5.058l.347 9a.75.75 0 1 0 1.499-.058l-.346-9Zm5.48.058a.75.75 0 1 0-1.498-.058l-.347 9a.75.75 0 0 0 1.499.058l.346-9Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  )
 }
 
-function DespensaCard({
+const iconBtn =
+  'h-8 w-8 flex-shrink-0 rounded-lg flex items-center justify-center bg-nourish-surface-high text-nourish-text-dim active:bg-nourish-border/30 focus:outline-none focus:ring-2 focus:ring-nourish-primary disabled:opacity-100'
+
+interface DespensaRowProps {
+  item: StockItem
+  /** Override title (family Generico); defaults to product name / Generico. */
+  title?: string
+  subtitle?: string | null
+  log: StockLogEntry[]
+  onShoppingList: boolean
+  onAddToShoppingList: (id: number) => void
+  onClearStock?: (id: number) => void
+  daysUntilShop: number | null
+  showNutrition: boolean
+  /** When set, row opens expansion instead of navigating. */
+  onToggleExpand?: () => void
+  expanded?: boolean
+  variantCount?: number
+}
+
+function DespensaListRow({
   item,
+  title,
+  subtitle,
   log,
   onShoppingList,
-  onConsume,
-  onAdd,
   onAddToShoppingList,
-  onAdjustStock,
+  onClearStock,
   daysUntilShop,
-}: DespensaCardProps) {
+  showNutrition,
+  onToggleExpand,
+  expanded,
+  variantCount,
+}: DespensaRowProps) {
   const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
   const analytics = computeDespensaAnalytics(log, item.amount, daysUntilShop)
-  const pricePerUnit = getDespensaUnitPrice(item.amount, item.value, item.product.description)
-  const priceVerified = isVerified(item.product.description, 'preco')
   const caloriesVerified = isVerified(item.product.description, 'calorias')
-  const hasCalories = (item.product.calories ?? 0) > 0
+  const hasCalories = showNutrition && (item.product.calories ?? 0) > 0
+  const hasPhoto = Boolean(item.product.picture_file_name) && !imgError
+  const displayTitle =
+    title ?? despensaDisplayName(item.product.name, item.product.description)
+
+  useEffect(() => {
+    if (!confirmClear) return
+    const t = window.setTimeout(() => setConfirmClear(false), 3000)
+    return () => window.clearTimeout(t)
+  }, [confirmClear])
 
   return (
-    <div className="bg-nourish-surface rounded-2xl overflow-hidden border border-nourish-border flex flex-col h-full">
-      {/* Image */}
-      <div className="relative flex-shrink-0">
-        <button
-          type="button"
-          className="block w-full text-left focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-inset rounded-t-2xl"
-          onClick={() => navigate(`/product/${item.product_id}`)}
-        >
-          {item.product.picture_file_name && !imgError ? (
-            <img
-              src={grocy.productPictureUrl(item.product.picture_file_name)}
-              alt={item.product.name}
-              className="w-full object-cover"
-              style={{ aspectRatio: '4/3' }}
-              onError={() => setImgError(true)}
-            />
-          ) : (
-            <div className="w-full bg-nourish-surface-high flex items-center justify-center text-4xl" style={{ aspectRatio: '4/3' }}>
-              🛒
-            </div>
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => onAdjustStock(item.product_id)}
-          className="absolute top-1.5 right-1.5 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full focus:outline-none focus:ring-2 focus:ring-white/50"
-          aria-label={`Stock: ${item.amount}. Toca para corrigir`}
-        >
-          {item.amount}
-        </button>
-        <button
-          type="button"
-          onClick={() => onAddToShoppingList(item.product.id)}
-          disabled={onShoppingList}
-          className={`absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full flex items-center justify-center shadow-sm backdrop-blur-sm transition-colors focus:outline-none focus:ring-2 focus:ring-white/50 disabled:opacity-100 ${
-            onShoppingList
-              ? 'bg-nourish-primary text-nourish-on-primary'
-              : analytics?.isLow
-                ? 'bg-amber-500/90 text-white active:bg-amber-600'
-                : 'bg-black/55 text-white active:bg-black/70'
-          }`}
-          aria-label={onShoppingList ? 'Na lista de compras' : 'Adicionar à lista de compras'}
-        >
-          <CartIcon className="w-3 h-3" />
-        </button>
-        {analytics?.isLow && !onShoppingList && (
-          <span className="absolute top-2 left-2 bg-amber-500/90 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-            ⚠
-          </span>
+    <div className="flex items-center gap-1 pr-2">
+      <button
+        type="button"
+        onClick={() => {
+          if (onToggleExpand) onToggleExpand()
+          else navigate(`/product/${item.product_id}`)
+        }}
+        className="flex-1 min-w-0 flex items-center gap-3 p-2 rounded-lg text-left active:bg-nourish-surface-high focus:outline-none focus:ring-2 focus:ring-inset focus:ring-nourish-primary"
+      >
+        {hasPhoto ? (
+          <img
+            src={grocy.productPictureUrl(item.product.picture_file_name!)}
+            alt=""
+            className="w-12 h-12 rounded-lg object-cover flex-shrink-0 bg-nourish-surface-high"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <div className="w-12 h-12 rounded-lg bg-nourish-surface-high flex items-center justify-center text-xl flex-shrink-0">
+            🛒
+          </div>
         )}
-      </div>
-
-      {/* Info */}
-      <div className="p-3 flex flex-col flex-1 min-h-0">
-        <button
-          type="button"
-          onClick={() => navigate(`/product/${item.product_id}`)}
-          className="font-semibold text-nourish-text text-sm leading-snug line-clamp-2 min-h-[2.5rem] text-left focus:outline-none focus:underline"
-        >
-          {item.product.name}
-        </button>
-
-        <div className="min-h-[1.25rem] flex items-center justify-between gap-1 flex-wrap">
-          {pricePerUnit !== null && (
-            <span className="text-nourish-primary text-xs font-semibold inline-flex items-center gap-1">
-              €{pricePerUnit.toFixed(2)}
-              {priceVerified && <VerifiedBadge verified />}
-            </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-nourish-text truncate">
+            {displayTitle}
+            {analytics?.isLow && !onShoppingList && (
+              <span className="ml-1.5 text-amber-500" aria-label="Stock baixo">
+                ⚠
+              </span>
+            )}
+            {variantCount != null && variantCount > 1 && (
+              <span className="ml-1.5 text-[10px] font-medium text-nourish-text-dim">
+                · {variantCount} variantes
+              </span>
+            )}
+            {expanded != null && variantCount != null && variantCount > 1 && (
+              <span className="ml-1 text-nourish-text-dim text-xs">{expanded ? '▾' : '▸'}</span>
+            )}
+          </p>
+          {subtitle && (
+            <p className="text-[10px] text-nourish-text-dim mt-0.5 truncate">{subtitle}</p>
           )}
           {hasCalories && (
-            <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded-full text-nourish-text-dim text-xs tabular-nums inline-flex items-center gap-1 ml-auto">
+            <p className="text-xs text-nourish-text-dim tabular-nums mt-0.5 truncate inline-flex items-center gap-0.5">
               {item.product.calories} kcal
               {caloriesVerified && <VerifiedBadge verified />}
-            </span>
+            </p>
           )}
-        </div>
-
-        <div className="min-h-[1rem]">
-          {analytics && (
-            <p className="text-xs text-nourish-text-dim">
+          {analytics && item.amount > 0 && (
+            <p className="text-[11px] text-nourish-text-dim mt-0.5 truncate">
               {analytics.dailyAvg.toFixed(1)}/dia
               {analytics.daysRemaining !== null && (
-                <> · <span className="text-nourish-text">{analytics.daysRemaining.toFixed(1)} dias</span></>
+                <>
+                  {' '}
+                  · <span className="text-nourish-text">{analytics.daysRemaining.toFixed(1)} dias</span>
+                </>
               )}
             </p>
           )}
         </div>
+      </button>
 
-        <div className="flex gap-1.5 pt-2 mt-auto">
+      <div className="flex items-center gap-1 flex-shrink-0 mr-1">
+        {onClearStock && (
           <button
             type="button"
-            onClick={() => onConsume(item.product.id)}
-            disabled={item.amount <= 0}
-            className="flex-1 h-9 rounded-xl text-xs font-semibold bg-nourish-surface-high text-nourish-text disabled:opacity-30 active:bg-nourish-surface-highest transition-colors"
+            onClick={() => {
+              if (!confirmClear) {
+                setConfirmClear(true)
+                return
+              }
+              onClearStock(item.product_id)
+            }}
+            className={iconBtn}
+            aria-label={confirmClear ? 'Confirmar esgotar stock' : 'Esgotar stock'}
+            title={confirmClear ? 'Toca outra vez para esgotar' : 'Esgotar stock'}
           >
-            Consumir
+            {confirmClear ? (
+              <span className="text-[10px] font-bold">OK</span>
+            ) : (
+              <TrashIcon />
+            )}
           </button>
-          <button
-            type="button"
-            onClick={() => onAdd(item.product.id)}
-            className="flex-1 h-9 rounded-xl text-xs font-semibold bg-nourish-primary text-nourish-on-primary active:bg-nourish-primary-dim transition-colors"
-          >
-            Comprar
-          </button>
-        </div>
+        )}
+        <button
+          type="button"
+          onClick={() => onAddToShoppingList(item.product.id)}
+          disabled={onShoppingList}
+          className={`${iconBtn} ${
+            onShoppingList ? 'bg-nourish-primary text-nourish-on-primary' : ''
+          }`}
+          aria-label={onShoppingList ? 'Na lista de compras' : 'Adicionar à lista de compras'}
+        >
+          <CartIcon className="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   )
 }
 
+function FamilyBlock({
+  family,
+  logs,
+  shoppingListProductIds,
+  onAddToShoppingList,
+  onClearStock,
+  daysUntilShop,
+  showNutrition,
+  clearable,
+}: {
+  family: DespensaFamily
+  logs: Record<number, StockLogEntry[]>
+  shoppingListProductIds: Set<number>
+  onAddToShoppingList: (id: number) => void
+  onClearStock?: (id: number) => void
+  daysUntilShop: number | null
+  showNutrition: boolean
+  clearable?: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const multi = family.variants.length > 1
+  const primary = family.primary
+  // Synthetic amount for analytics on family header
+  const familyItem: StockItem = { ...primary, amount: family.totalAmount }
+
+  const mergedLog = family.variants.flatMap((v) => logs[v.product_id] ?? [])
+
+  if (!multi) {
+    const only = family.variants[0]
+    return (
+      <DespensaListRow
+        item={only}
+        title={family.title}
+        subtitle={
+          getGenericoFromDesc(only.product.description) && only.product.name !== family.title
+            ? only.product.name
+            : null
+        }
+        log={logs[only.product_id] ?? []}
+        onShoppingList={shoppingListProductIds.has(only.product_id)}
+        onAddToShoppingList={onAddToShoppingList}
+        onClearStock={clearable ? onClearStock : undefined}
+        daysUntilShop={daysUntilShop}
+        showNutrition={showNutrition}
+      />
+    )
+  }
+
+  return (
+    <div>
+      <DespensaListRow
+        item={familyItem}
+        title={family.title}
+        log={mergedLog}
+        onShoppingList={family.variants.every((v) => shoppingListProductIds.has(v.product_id))}
+        onAddToShoppingList={(id) => {
+          // Add primary (or first out-of-list) to shopping list
+          const target =
+            family.variants.find((v) => !shoppingListProductIds.has(v.product_id)) ?? primary
+          onAddToShoppingList(target.product.id)
+        }}
+        onClearStock={undefined}
+        daysUntilShop={daysUntilShop}
+        showNutrition={showNutrition}
+        onToggleExpand={() => setExpanded((e) => !e)}
+        expanded={expanded}
+        variantCount={family.variants.length}
+      />
+      {expanded && (
+        <ul className="border-t border-nourish-border/40 bg-nourish-bg/50">
+          {family.variants.map((v) => (
+            <li key={v.product_id} className="pl-4">
+              <DespensaListRow
+                item={v}
+                title={v.product.name}
+                log={logs[v.product_id] ?? []}
+                onShoppingList={shoppingListProductIds.has(v.product_id)}
+                onAddToShoppingList={onAddToShoppingList}
+                onClearStock={clearable && v.amount > 0 ? onClearStock : undefined}
+                daysUntilShop={daysUntilShop}
+                showNutrition={showNutrition}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function DespensaSection({ query = '' }: { query?: string }) {
+  const showNutrition = useShowNutrition()
   const [items, setItems] = useState<StockItem[]>([])
   const [logs, setLogs] = useState<Record<number, StockLogEntry[]>>({})
   const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>([])
   const [daysUntilShop, setDaysUntilShop] = useState<number | null>(null)
   const [shopIntervalFromMedian, setShopIntervalFromMedian] = useState(false)
   const [showList, setShowList] = useState(false)
-  const [stockEditId, setStockEditId] = useState<number | null>(null)
-  const [stockSaving, setStockSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  const stockEditItem = stockEditId != null ? items.find((i) => i.product_id === stockEditId) : null
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -197,7 +312,9 @@ export function DespensaSection({ query = '' }: { query?: string }) {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+  }, [load])
 
   useEffect(() => {
     fetchHomelabMetrics().then((m) => {
@@ -208,77 +325,70 @@ export function DespensaSection({ query = '' }: { query?: string }) {
     })
   }, [])
 
-  const handleConsume = async (id: number) => {
-    setItems(prev => prev.map(s => s.product_id === id ? { ...s, amount: Math.max(0, s.amount - 1) } : s))
-    try {
-      await grocy.consumeStock(id, 1)
-      const newLog = await grocy.getStockLog(id)
-      setLogs(prev => ({ ...prev, [id]: newLog }))
-    } catch { load() }
-  }
-
-  const handleAdd = async (id: number) => {
-    const stockItem = items.find((s) => s.product_id === id)!
-    const product = stockItem.product
-    const amount = getBuyAmountFromDesc(product.description, product.id)
-    const unitPrice = getDespensaUnitPrice(stockItem.amount, stockItem.value, product.description)
-    const totalPrice = purchaseTotalPrice(unitPrice, amount)
-    setItems(prev => prev.map(s => s.product_id === id ? { ...s, amount: s.amount + amount } : s))
-    try {
-      await grocy.addStock(id, amount, totalPrice != null ? { price: totalPrice } : undefined)
-      const [newLog, sl] = await Promise.all([grocy.getStockLog(id), grocy.getShoppingList()])
-      setLogs(prev => ({ ...prev, [id]: newLog }))
-      setShoppingList(sl)
-    } catch { load() }
-  }
-
-  const handleSaveStock = async (newAmount: number) => {
-    if (stockEditId == null) return
-    setStockSaving(true)
-    try {
-      await grocy.setStockAmount(stockEditId, newAmount)
-      setItems((prev) =>
-        prev.map((s) => (s.product_id === stockEditId ? { ...s, amount: newAmount } : s))
-      )
-      const newLog = await grocy.getStockLog(stockEditId)
-      setLogs((prev) => ({ ...prev, [stockEditId]: newLog }))
-      setStockEditId(null)
-    } catch {
-      load()
-    } finally {
-      setStockSaving(false)
-    }
-  }
-
-  const handleRemoveProduct = async () => {
-    if (stockEditId == null) return
-    setStockSaving(true)
-    try {
-      await grocy.deleteProduct(stockEditId)
-      setStockEditId(null)
-      await load()
-    } catch {
-      load()
-    } finally {
-      setStockSaving(false)
-    }
-  }
-
   const handleAddToShoppingList = async (id: number) => {
-    const product = items.find(s => s.product_id === id)!.product
+    const product = items.find((s) => s.product_id === id)!.product
     try {
       await grocy.addToShoppingList(id, getBuyAmountFromDesc(product.description, product.id))
       setShoppingList(await grocy.getShoppingList())
-    } catch { /* silent */ }
+    } catch {
+      /* silent */
+    }
+  }
+
+  const handleClearStock = async (id: number) => {
+    const prev = items.find((s) => s.product_id === id)
+    setItems((list) =>
+      list.map((s) => (s.product_id === id ? { ...s, amount: 0, value: 0 } : s))
+    )
+    try {
+      await grocy.setStockAmount(id, 0)
+      const newLog = await grocy.getStockLog(id)
+      setLogs((l) => ({ ...l, [id]: newLog }))
+    } catch {
+      if (prev) {
+        setItems((list) => list.map((s) => (s.product_id === id ? prev : s)))
+      }
+      load()
+    }
   }
 
   const pendingList = shoppingList.filter((i) => !i.done)
   const shoppingListProductIds = new Set(pendingList.map((i) => i.product_id))
-  const visible = items.filter(i =>
-    !query || i.product.name.toLowerCase().includes(query.toLowerCase())
-  )
 
-  if (loading) return <div className="flex justify-center pt-12"><Spinner /></div>
+  const families = sortFamiliesByConsumption(
+    groupDespensaFamilies(items).filter((f) => familyMatchesQuery(f, query)),
+    logs
+  )
+  const inStock = families.filter((f) => f.totalAmount > 0)
+  const outOfStock = families.filter((f) => f.totalAmount <= 0)
+
+  function renderFamilies(list: DespensaFamily[], opts?: { clearable?: boolean }) {
+    return (
+      <ul className="bg-nourish-surface border border-nourish-border rounded-xl overflow-hidden divide-y divide-nourish-border/60">
+        {list.map((family) => (
+          <li key={family.key}>
+            <FamilyBlock
+              family={family}
+              logs={logs}
+              shoppingListProductIds={shoppingListProductIds}
+              onAddToShoppingList={handleAddToShoppingList}
+              onClearStock={opts?.clearable ? handleClearStock : undefined}
+              daysUntilShop={daysUntilShop}
+              showNutrition={showNutrition}
+              clearable={opts?.clearable}
+            />
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  if (loading)
+    return (
+      <div className="flex justify-center pt-12">
+        <Spinner />
+      </div>
+    )
   if (error) {
     return (
       <div className="px-4 pt-12">
@@ -310,33 +420,20 @@ export function DespensaSection({ query = '' }: { query?: string }) {
         onListChange={() => grocy.getShoppingList().then(setShoppingList)}
       />
 
-      <StockAmountSheet
-        open={stockEditItem != null}
-        productName={stockEditItem?.product.name ?? ''}
-        amount={stockEditItem?.amount ?? 0}
-        saving={stockSaving}
-        onClose={() => setStockEditId(null)}
-        onSave={handleSaveStock}
-        onRemove={handleRemoveProduct}
-      />
+      <div className="space-y-4">
+        {inStock.length > 0 && (
+          <div>
+            <p className="px-1 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-nourish-text-dim">
+              Em stock
+            </p>
+            {renderFamilies(inStock, { clearable: true })}
+          </div>
+        )}
 
-      <div className="grid grid-cols-2 gap-3 items-stretch">
-        {visible.map(item => (
-          <DespensaCard
-            key={item.product_id}
-            item={item}
-            log={logs[item.product_id] ?? []}
-            onShoppingList={shoppingListProductIds.has(item.product_id)}
-            onConsume={handleConsume}
-            onAdd={handleAdd}
-            onAddToShoppingList={handleAddToShoppingList}
-            onAdjustStock={setStockEditId}
-            daysUntilShop={daysUntilShop}
-          />
-        ))}
+        {outOfStock.length > 0 && renderFamilies(outOfStock)}
       </div>
 
-      {visible.length === 0 && items.length > 0 && (
+      {families.length === 0 && items.length > 0 && (
         <p className="text-nourish-text-dim text-sm text-center pt-8">Sem resultados</p>
       )}
       {items.length === 0 && (

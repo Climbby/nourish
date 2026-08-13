@@ -283,3 +283,60 @@ export async function analyzeProduct(
 
   return parseJsonContent(content) as { calories: number | null; price: number | null }
 }
+
+/**
+ * Batch-suggest generic Despensa family names for receipt SKU lines.
+ * Returns a map of lineId → suggested Generico. On failure, returns {}.
+ */
+export async function suggestReceiptGenericos(
+  lines: { id: string; name: string }[],
+  knownGenericos: string[]
+): Promise<Record<string, string>> {
+  if (lines.length === 0) return {}
+
+  const knownText =
+    knownGenericos.length > 0
+      ? `\nFamílias já usadas na despensa (prefere estas quando fizer sentido):\n${knownGenericos.slice(0, 40).join(', ')}`
+      : ''
+
+  const listText = lines.map((l) => `- id=${l.id}: ${l.name}`).join('\n')
+
+  try {
+    const res = await fetch(AI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: TEXT_MODEL,
+        messages: [
+          {
+            role: 'system',
+            content: `És um assistente de despensa em Português (Portugal). Dado nomes de produtos de talão de supermercado (SKUs longos), sugere um nome genérico curto da família (ex: "Cogumelos Continente Laminados 250g" → "Cogumelos").
+
+Devolve APENAS JSON válido: um objecto { "<id>": "<genérico>", ... } com uma entrada por id.
+Sem explicações. Preferir nomes já usados quando forem uma boa correspondência.`,
+          },
+          {
+            role: 'user',
+            content: `Linhas do talão:\n${listText}${knownText}`,
+          },
+        ],
+        max_tokens: 512,
+        temperature: 0.2,
+      }),
+    })
+
+    if (!res.ok) return {}
+    const data = await res.json()
+    const content = data.choices?.[0]?.message?.content
+    if (!content) return {}
+    const raw = parseJsonContent(content) as Record<string, unknown>
+    const out: Record<string, string> = {}
+    for (const line of lines) {
+      const v = raw[line.id]
+      if (typeof v === 'string' && v.trim()) out[line.id] = v.trim()
+    }
+    return out
+  } catch {
+    return {}
+  }
+}

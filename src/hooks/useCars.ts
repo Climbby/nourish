@@ -16,6 +16,7 @@ export interface Car {
 }
 
 const STORAGE_KEY = 'nourish-cars'
+const ENABLED_KEY = 'nourish-cars-enabled'
 
 export function createCarId(): string {
   return `car-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -34,6 +35,27 @@ function loadLocal(): Car[] {
 
 function saveLocal(cars: Car[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(cars))
+}
+
+function loadEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(ENABLED_KEY)
+    if (raw === '1') return true
+    if (raw === '0') return false
+    // Existing installs with cars stay active
+    return loadLocal().length > 0
+  } catch {
+    return false
+  }
+}
+
+function persistEnabled(enabled: boolean) {
+  localStorage.setItem(ENABLED_KEY, enabled ? '1' : '0')
+}
+
+/** Sync check for places that don't use the hook (auto-link, receipts). */
+export function carsFeatureEnabled(): boolean {
+  return loadEnabled()
 }
 
 export async function fetchCars(): Promise<Car[]> {
@@ -64,6 +86,12 @@ export async function persistCars(cars: Car[]): Promise<void> {
 
 export function useCars() {
   const [cars, setCarsState] = useState<Car[]>(loadLocal)
+  const [enabled, setEnabledState] = useState(loadEnabled)
+
+  const setEnabled = useCallback((next: boolean) => {
+    persistEnabled(next)
+    setEnabledState(next)
+  }, [])
 
   const setCars = useCallback((next: Car[]) => {
     setCarsState(next)
@@ -74,9 +102,10 @@ export function useCars() {
     (car: Omit<Car, 'id'>) => {
       const next = [...cars, { ...car, id: createCarId() }]
       setCars(next)
+      setEnabled(true)
       return next[next.length - 1]
     },
-    [cars, setCars]
+    [cars, setCars, setEnabled]
   )
 
   const updateCar = useCallback(
@@ -98,5 +127,5 @@ export function useCars() {
     void fetchCars().then(setCarsState)
   }, [])
 
-  return { cars, setCars, addCar, updateCar, removeCar, refreshCars }
+  return { cars, setCars, addCar, updateCar, removeCar, refreshCars, enabled, setEnabled }
 }

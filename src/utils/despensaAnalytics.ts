@@ -1,6 +1,7 @@
 import type { StockLogEntry } from '../types/grocy'
 import type { VerifiedField } from './verification'
 import { parseVerifiedFields, upsertVerifiedSection } from './verification'
+import { formatMacrosSection, getMacrosFromDesc } from './productNutrition'
 
 export interface DespensaAnalytics {
   dailyAvg: number
@@ -27,21 +28,182 @@ export function getPriceFromDesc(description: string | null): number | null {
   return isNaN(val) || val <= 0 ? null : val
 }
 
+/** Last purchase store from receipt commit, e.g. Continente Bom Dia… */
+export function getStoreFromDesc(description: string | null): string | null {
+  if (!description) return null
+  const m = description.match(/\[Loja\]\s*\n?\s*([^\n[]+)/)
+  const label = m?.[1]?.trim()
+  return label || null
+}
+
+/** `kg` when price in description is per kilogram (weighed produce). */
+export function getPriceUnitFromDesc(description: string | null): 'kg' | 'un' {
+  if (!description) return 'un'
+  const m = description.match(/\[PrecoUnit\]\s*\n?\s*(kg|un)/i)
+  if (m?.[1]?.toLowerCase() === 'kg') return 'kg'
+  return 'un'
+}
+
+export const DESPENSA_CAT_SUGGESTIONS = [
+  'Cereais',
+  'Leite',
+  'Padaria',
+  'Bebidas',
+  'Frescos',
+  'Limpeza',
+  'Outros',
+] as const
+
+/** Manual pantry category from product description, e.g. Cereais. */
+export function getDespensaCatFromDesc(description: string | null): string | null {
+  if (!description) return null
+  const m = description.match(/\[DespensaCat\]\s*\n?\s*([^\n[]+)/)
+  const cat = m?.[1]?.trim()
+  return cat || null
+}
+
+/** Cooking / search alias, e.g. "Atum" for a long receipt name. */
+export function getNomeCurtoFromDesc(description: string | null): string | null {
+  if (!description) return null
+  const m = description.match(/\[NomeCurto\]\s*\n?\s*([^\n[]+)/)
+  const name = m?.[1]?.trim()
+  return name || null
+}
+
+/**
+ * Shared Despensa family label for variants (e.g. "Cogumelos").
+ * Distinct from NomeCurto (meals) — grouping only.
+ */
+export function getGenericoFromDesc(description: string | null): string | null {
+  if (!description) return null
+  const m = description.match(/\[Generico\]\s*\n?\s*([^\n[]+)/)
+  const name = m?.[1]?.trim()
+  return name || null
+}
+
+/** Grams per stock unit (1 lata, 1 ovo) — used to turn meal counts into grams. */
+export function getUnitGramsFromDesc(description: string | null): number | null {
+  if (!description) return null
+  const m = description.match(/\[UnitGrams\]\s*\n?\s*([\d.]+)/)
+  if (!m) return null
+  const val = parseFloat(m[1])
+  return isNaN(val) || val <= 0 ? null : val
+}
+
+/** Display name for cooking: nome curto if set, else product name. */
+export function cookingName(productName: string, description: string | null): string {
+  return getNomeCurtoFromDesc(description) || productName
+}
+
+/** Despensa list title: Generico if set, else product name. */
+export function despensaDisplayName(productName: string, description: string | null): string {
+  return getGenericoFromDesc(description) || productName
+}
+
+function normalizeFamilyKey(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+}
+
+/** Stable key for collapsing variants; singletons key by their own name. */
+export function familyKey(productName: string, description: string | null): string {
+  const g = getGenericoFromDesc(description)
+  return normalizeFamilyKey(g || productName)
+}
+
+/** Short brand for Despensa cards: "Continente Bom Dia …" → "Continente". */
+export function shortStoreBrand(label: string): string {
+  const lower = label.toLowerCase()
+  const brands: [RegExp, string][] = [
+    [/continente/, 'Continente'],
+    [/auchan|jumbo/, 'Auchan'],
+    [/intermarch/, 'Intermarché'],
+    [/pingo\s*doce/, 'Pingo Doce'],
+    [/lidl/, 'Lidl'],
+    [/minipre[cç]o|minipreco/, 'Minipreço'],
+    [/aldi/, 'Aldi'],
+  ]
+  for (const [re, name] of brands) {
+    if (re.test(lower)) return name
+  }
+  const first = label.split(/[\s,–—-]+/)[0]
+  return first || label
+}
+
 export function buildDespensaDescription(
   buyAmount: number | string,
   price?: number | string | null,
-  opts?: { verified?: Set<VerifiedField>; existingDescription?: string | null }
+  opts?: {
+    verified?: Set<VerifiedField>
+    existingDescription?: string | null
+    storeLabel?: string | null
+    priceUnit?: 'kg' | 'un' | null
+    despensaCat?: string | null
+    nomeCurto?: string | null
+    generico?: string | null
+    unitGrams?: number | string | null
+  }
 ): string {
   const parts = [`[BuyAmount]\n${buyAmount}`]
   if (price != null && price !== '') {
     const val = typeof price === 'string' ? parseFloat(price) : price
     if (!isNaN(val) && val > 0) parts.push(`[Preco]\n${val.toFixed(2)}`)
   }
+  const priceUnit =
+    opts?.priceUnit === 'kg' || opts?.priceUnit === 'un'
+      ? opts.priceUnit
+      : getPriceUnitFromDesc(opts?.existingDescription ?? null)
+  if (priceUnit === 'kg') parts.push(`[PrecoUnit]\nkg`)
+  const store =
+    (opts?.storeLabel && opts.storeLabel.trim()) ||
+    getStoreFromDesc(opts?.existingDescription ?? null)
+  if (store) parts.push(`[Loja]\n${store}`)
+  const cat =
+    opts?.despensaCat !== undefined
+      ? opts.despensaCat?.trim() || null
+      : getDespensaCatFromDesc(opts?.existingDescription ?? null)
+  if (cat) parts.push(`[DespensaCat]\n${cat}`)
+  const nomeCurto =
+    opts?.nomeCurto !== undefined
+      ? opts.nomeCurto?.trim() || null
+      : getNomeCurtoFromDesc(opts?.existingDescription ?? null)
+  if (nomeCurto) parts.push(`[NomeCurto]\n${nomeCurto}`)
+  const generico =
+    opts?.generico !== undefined
+      ? opts.generico?.trim() || null
+      : getGenericoFromDesc(opts?.existingDescription ?? null)
+  if (generico) parts.push(`[Generico]\n${generico}`)
+  const unitGramsRaw =
+    opts?.unitGrams !== undefined
+      ? opts.unitGrams
+      : getUnitGramsFromDesc(opts?.existingDescription ?? null)
+  if (unitGramsRaw != null && unitGramsRaw !== '') {
+    const grams =
+      typeof unitGramsRaw === 'string' ? parseFloat(unitGramsRaw) : unitGramsRaw
+    if (!isNaN(grams) && grams > 0) parts.push(`[UnitGrams]\n${grams}`)
+  }
+  // Per-100 g macros are edited elsewhere — carry them through so saving a
+  // product from the Despensa form never wipes them.
+  const macros = getMacrosFromDesc(opts?.existingDescription ?? null)
+  if (macros) parts.push(formatMacrosSection(macros))
   const core = parts.join('\n\n')
   const verified =
     opts?.verified ??
     (opts?.existingDescription ? parseVerifiedFields(opts.existingDescription) : new Set())
   return upsertVerifiedSection(core, verified)
+}
+
+/** Format catalog/stock price for Despensa; append /kg when stored as weight price. */
+export function formatDespensaPriceLabel(
+  price: number,
+  description: string | null
+): string {
+  const euro = `€${price.toFixed(2)}`
+  return getPriceUnitFromDesc(description) === 'kg' ? `${euro}/kg` : euro
 }
 
 /** Unit price from stock value, or catalog price in product description. */
@@ -101,4 +263,41 @@ export function computeDespensaAnalytics(
     daysRemaining < shopHorizon
 
   return { dailyAvg, daysRemaining, isLow, avgDaysBetweenPurchases }
+}
+
+/**
+ * Higher = consumed more often. Uses daily average when the log has enough
+ * history; otherwise total units consumed (still ranks habitual items above never-touched).
+ */
+export function consumptionScore(log: StockLogEntry[]): number {
+  const consumes = log.filter((e) => !e.undone && e.transaction_type === 'consume' && e.amount < 0)
+  if (consumes.length === 0) return 0
+
+  const sorted = [...consumes].sort(
+    (a, b) =>
+      new Date(a.row_created_timestamp).getTime() - new Date(b.row_created_timestamp).getTime()
+  )
+  const totalConsumed = sorted.reduce((sum, e) => sum + Math.abs(e.amount), 0)
+  if (consumes.length < 2) return totalConsumed
+
+  const spanDays =
+    (new Date(sorted[sorted.length - 1].row_created_timestamp).getTime() -
+      new Date(sorted[0].row_created_timestamp).getTime()) /
+    (1000 * 60 * 60 * 24)
+  if (spanDays < 0.1) return totalConsumed
+  return totalConsumed / spanDays
+}
+
+/** Most-consumed first within a Despensa section (Em stock or empty). */
+export function sortByConsumption<T extends { product_id: number; product: { name: string } }>(
+  list: T[],
+  logsByProduct: Record<number, StockLogEntry[]>
+): T[] {
+  return [...list].sort((a, b) => {
+    const diff =
+      consumptionScore(logsByProduct[b.product_id] ?? []) -
+      consumptionScore(logsByProduct[a.product_id] ?? [])
+    if (diff !== 0) return diff
+    return a.product.name.localeCompare(b.product.name, 'pt')
+  })
 }

@@ -6,15 +6,25 @@ interface Props {
   targets: NutritionTargets
   days: number
   label?: string
+  /** When false, hide kcal / macros / objectivos (silent defaults still used for scoring). */
+  showNutrition?: boolean
 }
 
-export function MacroSummaryBar({ totals, targets, days, label = 'Plano' }: Props) {
+export function MacroSummaryBar({
+  totals,
+  targets,
+  days,
+  label = 'Plano',
+  showNutrition = true,
+}: Props) {
   const expectedKcal = targets.caloriesPerDay * days
   const pct = expectedKcal > 0 ? Math.min(100, Math.round((totals.calories / expectedKcal) * 100)) : 0
   const spendLabel =
     totals.mealsWithPrice > 0
       ? `€${totals.spend.toFixed(2)}`
       : null
+
+  if (!showNutrition && !spendLabel) return null
 
   return (
     <div className="bg-nourish-surface border border-nourish-border rounded-lg p-3 space-y-2">
@@ -24,33 +34,44 @@ export function MacroSummaryBar({ totals, targets, days, label = 'Plano' }: Prop
           {spendLabel && (
             <span className="font-semibold text-nourish-primary">{spendLabel}</span>
           )}
-          <span className="text-nourish-text-dim">
-            {totals.calories.toLocaleString('pt-PT')} / {expectedKcal.toLocaleString('pt-PT')} kcal
-          </span>
+          {showNutrition && (
+            <span className="text-nourish-text-dim">
+              {totals.calories.toLocaleString('pt-PT')} / {expectedKcal.toLocaleString('pt-PT')} kcal
+            </span>
+          )}
         </div>
       </div>
-      <div className="h-1.5 bg-nourish-surface-high rounded-sm overflow-hidden">
-        <div
-          className="h-full bg-nourish-primary transition-all duration-300"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div className="flex gap-2 text-[10px] text-nourish-text-dim tabular-nums">
-        <span>{totals.protein}g P</span>
-        <span>·</span>
-        <span>{totals.carbs}g C</span>
-        <span>·</span>
-        <span>{totals.fat}g G</span>
-        {totals.mealsWithPrice > 0 && totals.mealsWithPrice < days && (
-          <>
+      {showNutrition && (
+        <>
+          <div className="h-1.5 bg-nourish-surface-high rounded-sm overflow-hidden">
+            <div
+              className="h-full bg-nourish-primary transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="flex gap-2 text-[10px] text-nourish-text-dim tabular-nums">
+            <span>{totals.protein}g P</span>
             <span>·</span>
-            <span>{totals.mealsWithPrice}/{days} com preço</span>
-          </>
-        )}
-        <span className="ml-auto">
-          Objectivo: {targets.proteinPerDay}g P · {targets.carbsPerDay}g C · {targets.fatPerDay}g G/dia
-        </span>
-      </div>
+            <span>{totals.carbs}g C</span>
+            <span>·</span>
+            <span>{totals.fat}g G</span>
+            {totals.mealsWithPrice > 0 && totals.mealsWithPrice < days && (
+              <>
+                <span>·</span>
+                <span>{totals.mealsWithPrice}/{days} com preço</span>
+              </>
+            )}
+            <span className="ml-auto">
+              Objectivo: {targets.proteinPerDay}g P · {targets.carbsPerDay}g C · {targets.fatPerDay}g G/dia
+            </span>
+          </div>
+        </>
+      )}
+      {!showNutrition && spendLabel && totals.mealsWithPrice > 0 && totals.mealsWithPrice < days && (
+        <p className="text-[10px] text-nourish-text-dim tabular-nums">
+          {totals.mealsWithPrice}/{days} com preço
+        </p>
+      )}
     </div>
   )
 }
@@ -58,11 +79,14 @@ export function MacroSummaryBar({ totals, targets, days, label = 'Plano' }: Prop
 export function MacroChips({
   nutrition,
   price,
+  showNutrition = true,
 }: {
   nutrition?: { protein: number; carbs: number; fat: number; calories: number } | null
   price?: number | null
+  showNutrition?: boolean
 }) {
-  if (!nutrition && (price === null || price === undefined)) return null
+  const showMacros = showNutrition && nutrition
+  if (!showMacros && (price === null || price === undefined)) return null
 
   return (
     <div className="flex flex-wrap gap-1 mt-1">
@@ -71,7 +95,7 @@ export function MacroChips({
           €{price.toFixed(2)}
         </span>
       )}
-      {nutrition && (
+      {showMacros && (
         <>
           <span className="px-1.5 py-0.5 bg-nourish-surface-high rounded text-[10px] text-nourish-text-dim tabular-nums">
             {nutrition.calories} kcal

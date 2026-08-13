@@ -3,8 +3,10 @@ import {
   type UserBodyProfile,
   type ActivityLevel,
   type BodyGoal,
+  type HealthCondition,
   type Sex,
   birthDateFromAge,
+  isHealthCondition,
 } from '../utils/nutritionRecommendations'
 import { useProfileScopedKey } from './useProfileScopedKey'
 
@@ -17,6 +19,8 @@ export const DEFAULT_USER_PROFILE: UserBodyProfile = {
   heightCm: 175,
   activity: 'moderate',
   goal: 'maintain',
+  conditions: [],
+  dislikes: '',
 }
 
 type StoredProfile = UserBodyProfile & { enabled?: boolean }
@@ -40,6 +44,8 @@ function migrate(raw: Record<string, unknown>): UserBodyProfile {
       raw.goal === 'lose' || raw.goal === 'maintain' || raw.goal === 'gain'
         ? raw.goal
         : DEFAULT_USER_PROFILE.goal,
+    conditions: Array.isArray(raw.conditions) ? raw.conditions.filter(isHealthCondition) : [],
+    dislikes: typeof raw.dislikes === 'string' ? raw.dislikes : '',
     birthDate,
   }
 }
@@ -119,4 +125,4 @@ export function useUserProfile() {
   return { profile, setProfile, updateField, configured, enabled, setEnabled }
 }
 
-export type { ActivityLevel, BodyGoal, Sex, UserBodyProfile }
+export type { ActivityLevel, BodyGoal, HealthCondition, Sex, UserBodyProfile }

@@ -1,35 +1,57 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
-import type { PriceHistoryPoint, Product, StockLogEntry } from '../types/grocy'
+import type { Product, StockLogEntry } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { PhotoField } from '../components/PhotoField'
-import { PriceHistoryChart } from '../components/PriceHistoryChart'
-import { NumericInput } from '../components/NumericInput'
-import { VerifiedBadge, VerifyCheckbox } from '../components/VerifiedBadge'
+import { ProductMacrosSection } from '../components/ProductMacrosSection'
+import {
+  getMacrosFromDesc,
+  upsertMacrosSection,
+  type ProductMacros,
+} from '../utils/productNutrition'
 import {
   buildDespensaDescription,
+  formatDespensaPriceLabel,
   getBuyAmountFromDesc,
-  getDespensaUnitPrice,
+  getGenericoFromDesc,
+  getNomeCurtoFromDesc,
   getPriceFromDesc,
-  purchaseTotalPrice,
+  getPriceUnitFromDesc,
+  getStoreFromDesc,
+  getUnitGramsFromDesc,
+  shortStoreBrand,
 } from '../utils/despensaAnalytics'
-import { isVerified, parseVerifiedFields, type VerifiedField } from '../utils/verification'
+import {
+  fetchStorePriceHistory,
+  formatUnitPrice,
+  type StorePriceItem,
+} from '../utils/storePrices'
+import { fetchVisitReceipts, type VisitReceiptLink } from '../utils/visitReceipts'
+import { listDespensaProductsForMerge, mergeProducts } from '../utils/mergeProducts'
+import { parseVerifiedFields } from '../utils/verification'
+
+const PRICES_SITE = 'https://supermercados-portugal.guessitgame.me/#'
+const HISTORY_LIMIT = 20
+const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
 
 function formatLogDate(ts: string): string {
-  const d = new Date(ts.replace(' ', 'T'))
+  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T'))
   return d.toLocaleDateString('pt-PT', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-function formatLogTime(ts: string): string {
-  const d = new Date(ts.replace(' ', 'T'))
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+function dayKey(ts: string): string {
+  return ts.slice(0, 10)
 }
 
 function BackIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-      <path fillRule="evenodd" d="M7.72 12.53a.75.75 0 0 1 0-1.06l7.5-7.5a.75.75 0 1 1 1.06 1.06L9.31 12l6.97 6.97a.75.75 0 1 1-1.06 1.06l-7.5-7.5Z" clipRule="evenodd" />
+      <path
+        fillRule="evenodd"
+        d="M7.72 12.53a.75.75 0 0 1 0-1.06l7.5-7.5a.75.75 0 1 1 1.06 1.06L9.31 12l6.97 6.97a.75.75 0 1 1-1.06 1.06l-7.5-7.5Z"
+        clipRule="evenodd"
+      />
     </svg>
   )
 }
@@ -37,14 +59,106 @@ function BackIcon() {
 function TrashIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-      <path fillRule="evenodd" d="M16.5 4.478v.227a48.816 48.816 0 0 1 3.878.512.75.75 0 1 1-.256 1.478l-.209-.035-1.005 13.07a3 3 0 0 1-2.991 2.77H8.084a3 3 0 0 1-2.991-2.77L4.087 6.66l-.209.035a.75.75 0 0 1-.256-1.478A48.567 48.567 0 0 1 7.5 4.705v-.227c0-1.564 1.213-2.9 2.816-2.951a52.662 52.662 0 0 1 3.369 0c1.603.051 2.815 1.387 2.815 2.951Zm-6.136-1.452a51.196 51.196 0 0 1 3.273 0C14.39 3.05 15 3.684 15 4.478v.113a49.488 49.488 0 0 0-6 0v-.113c0-.794.609-1.428 1.364-1.452Zm-.355 5.945a.75.75 0 1 0-1.5.058l.347 9a.75.75 0 1 0 1.499-.058l-.346-9Zm5.48.058a.75.75 0 1 0-1.498-.058l-.347 9a.75.75 0 0 0 1.499.058l.346-9Z" clipRule="evenodd" />
+      <path
+        fillRule="evenodd"
+        d="M16.5 4.478v.227a48.816 48.816 0 0 1 3.878.512.75.75 0 1 1-.256 1.478l-.209-.035-1.005 13.07a3 3 0 0 1-2.991 2.77H8.084a3 3 0 0 1-2.991-2.77L4.087 6.66l-.209.035a.75.75 0 0 1-.256-1.478A48.567 48.567 0 0 1 7.5 4.705v-.227c0-1.564 1.213-2.9 2.816-2.951a52.662 52.662 0 0 1 3.369 0c1.603.051 2.815 1.387 2.815 2.951Zm-6.136-1.452a51.196 51.196 0 0 1 3.273 0C14.39 3.05 15 3.684 15 4.478v.113a49.488 49.488 0 0 0-6 0v-.113c0-.794.609-1.428 1.364-1.452Zm-.355 5.945a.75.75 0 1 0-1.5.058l.347 9a.75.75 0 1 0 1.499-.058l-.346-9Zm5.48.058a.75.75 0 1 0-1.498-.058l-.347 9a.75.75 0 0 0 1.499.058l.346-9Z"
+        clipRule="evenodd"
+      />
     </svg>
   )
 }
 
-const HISTORY_LIMIT = 20
+function ReceiptIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      className="w-4 h-4"
+      aria-hidden
+    >
+      <path strokeLinecap="round" d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21 8 19.5 6 21V3Z" />
+      <path strokeLinecap="round" d="M9 8h6M9 12h6" />
+    </svg>
+  )
+}
 
-const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
+function ExternalLinkIcon({ className = 'w-3.5 h-3.5' }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      className={className}
+      aria-hidden
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5M15 3h6v6M10.5 13.5 21 3" />
+    </svg>
+  )
+}
+
+/** Latest store-price observation on/near a purchase day. */
+function storePriceForPurchase(
+  entry: StockLogEntry,
+  storePrices: StorePriceItem[]
+): StorePriceItem | null {
+  if (storePrices.length === 0) return null
+  const day = dayKey(entry.row_created_timestamp)
+  const sameDay = storePrices.filter((p) => dayKey(p.observed_at) === day)
+  if (sameDay.length > 0) {
+    return [...sameDay].sort((a, b) => b.observed_at.localeCompare(a.observed_at))[0]
+  }
+  const purchaseMs = new Date(entry.row_created_timestamp.replace(' ', 'T')).getTime()
+  let best: StorePriceItem | null = null
+  let bestDist = Infinity
+  for (const p of storePrices) {
+    const dist = Math.abs(new Date(p.observed_at).getTime() - purchaseMs)
+    if (dist < bestDist) {
+      bestDist = dist
+      best = p
+    }
+  }
+  // Only use near matches (within 3 days)
+  return bestDist <= 3 * 24 * 60 * 60 * 1000 ? best : null
+}
+
+/** Match visit receipt even when purchase day ≠ receipt purchased_date (timezone / lag). */
+function findReceiptForPurchase(
+  entry: StockLogEntry,
+  receipts: VisitReceiptLink[],
+  storePrice: StorePriceItem | null
+): VisitReceiptLink | null {
+  if (receipts.length === 0) return null
+  const days = new Set<string>()
+  const purchaseMs = new Date(entry.row_created_timestamp.replace(' ', 'T')).getTime()
+  days.add(dayKey(entry.row_created_timestamp))
+  days.add(dayKey(new Date(purchaseMs - 86400000).toISOString()))
+  days.add(dayKey(new Date(purchaseMs + 86400000).toISOString()))
+  if (storePrice) days.add(dayKey(storePrice.observed_at))
+
+  for (const r of receipts) {
+    const purchased = r.purchased_date?.slice(0, 10)
+    const visitDay = r.visit_entered_at?.slice(0, 10)
+    if ((purchased && days.has(purchased)) || (visitDay && days.has(visitDay))) return r
+  }
+  return null
+}
+
+function pricesSiteProductUrl(opts: {
+  name: string
+  productId: number
+  storeId?: string
+}): string {
+  const params = new URLSearchParams()
+  params.set('name', opts.name)
+  params.set('id', String(opts.productId))
+  if (opts.storeId) params.set('store', opts.storeId)
+  return `${PRICES_SITE}/product?${params.toString()}`
+}
 
 export function ProductDetail() {
   const { id } = useParams<{ id: string }>()
@@ -52,23 +166,24 @@ export function ProductDetail() {
   const numId = parseInt(id!, 10)
 
   const [product, setProduct] = useState<Product | null>(null)
-  const [amount, setAmount] = useState(0)
   const [log, setLog] = useState<StockLogEntry[]>([])
-  const [priceHistory, setPriceHistory] = useState<PriceHistoryPoint[]>([])
-  const [stockValueTotal, setStockValueTotal] = useState(0)
+  const [storePrices, setStorePrices] = useState<StorePriceItem[]>([])
+  const [receipts, setReceipts] = useState<VisitReceiptLink[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [photoFile, setPhotoFile] = useState<File | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
-  const [editAmount, setEditAmount] = useState(0)
-  const [editBuyAmount, setEditBuyAmount] = useState('1')
-  const [editUnitPrice, setEditUnitPrice] = useState('')
-  const [editCalories, setEditCalories] = useState('')
-  const [verifyPrice, setVerifyPrice] = useState(false)
-  const [verifyCalories, setVerifyCalories] = useState(false)
   const [stockSaving, setStockSaving] = useState(false)
-  const [metaSaving, setMetaSaving] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
+  const [generico, setGenerico] = useState('')
+  const [nomeCurto, setNomeCurto] = useState('')
+  const [unitGrams, setUnitGrams] = useState('')
+  const [metaSaving, setMetaSaving] = useState(false)
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [mergeTargets, setMergeTargets] = useState<Product[]>([])
+  const [mergeIntoId, setMergeIntoId] = useState<number | ''>('')
+  const [mergeBusy, setMergeBusy] = useState(false)
+  const [mergeMsg, setMergeMsg] = useState<string | null>(null)
+  const [macrosSaving, setMacrosSaving] = useState(false)
 
   function sortLog(entries: StockLogEntry[]): StockLogEntry[] {
     return [...entries].sort(
@@ -84,119 +199,120 @@ export function ProductDetail() {
       setLoading(false)
       return
     }
+    setLoading(true)
+    setError(null)
     Promise.all([
       grocy.getProduct(numId),
-      grocy.getProductStockAmount(numId),
       grocy.getStockLog(numId),
-      grocy.getPriceHistory(numId).catch(() => [] as PriceHistoryPoint[]),
+      fetchVisitReceipts(),
     ])
-      .then(([prod, stockSummary, logEntries, history]) => {
+      .then(async ([prod, logEntries, visitReceipts]) => {
+        const prices = await fetchStorePriceHistory({
+          product_id: numId,
+          product_name: prod.name,
+        })
         setProduct(prod)
-        setAmount(stockSummary.amount)
-        setStockValueTotal(stockSummary.value)
-        setEditBuyAmount(String(getBuyAmountFromDesc(prod.description, prod.id)))
-        const catalogPrice = getPriceFromDesc(prod.description)
-        setEditUnitPrice(catalogPrice != null ? catalogPrice.toFixed(2) : '')
-        setEditCalories(prod.calories != null && prod.calories > 0 ? String(prod.calories) : '')
-        const verified = parseVerifiedFields(prod.description)
-        setVerifyPrice(verified.has('preco'))
-        setVerifyCalories(verified.has('calorias'))
+        setGenerico(getGenericoFromDesc(prod.description) ?? '')
+        setNomeCurto(getNomeCurtoFromDesc(prod.description) ?? '')
+        const ug = getUnitGramsFromDesc(prod.description)
+        setUnitGrams(ug != null ? String(ug) : '')
         if (prod.picture_file_name) {
           setPhotoPreview(grocy.productPictureUrl(prod.picture_file_name))
         }
         setLog(sortLog(logEntries))
-        setPriceHistory(history)
+        setStorePrices(prices ?? [])
+        setReceipts(visitReceipts)
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
   }, [numId])
 
-  useEffect(() => {
-    setEditAmount(amount)
-  }, [amount])
-
-  async function reloadStockAndLog() {
-    const [stockSummary, newLog, history] = await Promise.all([
-      grocy.getProductStockAmount(numId),
-      grocy.getStockLog(numId),
-      grocy.getPriceHistory(numId).catch(() => [] as PriceHistoryPoint[]),
-    ])
-    setAmount(stockSummary.amount)
-    setStockValueTotal(stockSummary.value)
-    setLog(sortLog(newLog))
-    setPriceHistory(history)
+  async function reloadLog() {
+    setLog(sortLog(await grocy.getStockLog(numId)))
   }
 
-  async function handleConsume() {
-    if (amount <= 0) return
-    setAmount((a) => Math.max(0, a - 1))
+  async function handlePhotoChange(file: File | null, url: string | null) {
+    setPhotoPreview(url)
+    if (!file || !product) return
     try {
-      await grocy.consumeStock(numId, 1)
-      await reloadStockAndLog()
+      const picture_file_name = await grocy.uploadProductPicture(file, numId)
+      await grocy.updateProduct(numId, { picture_file_name })
+      setProduct({ ...product, picture_file_name })
     } catch {
-      await reloadStockAndLog()
+      /* keep preview */
     }
   }
 
-  async function handleAdd() {
-    const ba = getBuyAmountFromDesc(product?.description ?? null, numId)
-    const unitPrice = getDespensaUnitPrice(amount, stockValueTotal, product?.description ?? null)
-    const totalPrice = purchaseTotalPrice(unitPrice, ba)
-    setAmount((a) => a + ba)
-    try {
-      await grocy.addStock(numId, ba, totalPrice != null ? { price: totalPrice } : undefined)
-      await reloadStockAndLog()
-    } catch {
-      await reloadStockAndLog()
-    }
-  }
-
-  function buildVerifiedSet(): Set<VerifiedField> {
-    const v = new Set<VerifiedField>()
-    if (verifyPrice && editUnitPrice.trim() && parseFloat(editUnitPrice) > 0) v.add('preco')
-    if (verifyCalories && editCalories.trim() && parseFloat(editCalories) > 0) v.add('calorias')
-    return v
-  }
-
-  async function handleSaveMeta() {
+  async function handleSaveCookingMeta() {
     if (!product) return
     setMetaSaving(true)
     try {
-      const description = buildDespensaDescription(editBuyAmount || '1', editUnitPrice, {
-        verified: buildVerifiedSet(),
+      const buyAmount = getBuyAmountFromDesc(product.description, product.id)
+      const price = getPriceFromDesc(product.description)
+      const description = buildDespensaDescription(buyAmount, price, {
+        verified: parseVerifiedFields(product.description),
+        existingDescription: product.description,
+        generico: generico || null,
+        nomeCurto: nomeCurto || null,
+        unitGrams: unitGrams || null,
       })
-      const calories = editCalories.trim() ? parseFloat(editCalories) : null
-      const updates: Record<string, unknown> = {
-        description,
-        calories: calories != null && !isNaN(calories) ? calories : null,
-      }
-      if (photoFile) {
-        updates.picture_file_name = await grocy.uploadProductPicture(photoFile, numId)
-      }
-      await grocy.updateProduct(numId, updates)
-      setProduct({
-        ...product,
-        description,
-        calories: calories != null && !isNaN(calories) ? calories : null,
-        picture_file_name: (updates.picture_file_name as string | undefined) ?? product.picture_file_name,
-      })
-      setPhotoFile(null)
+      await grocy.updateProduct(numId, { description })
+      setProduct({ ...product, description })
     } catch {
-      /* keep form values */
+      /* keep local */
     } finally {
       setMetaSaving(false)
     }
   }
 
-  async function handleSaveStock() {
-    setStockSaving(true)
+  async function handleSaveMacros(next: ProductMacros | null) {
+    if (!product) return
+    setMacrosSaving(true)
     try {
-      await grocy.setStockAmount(numId, editAmount)
-      await reloadStockAndLog()
+      const description = upsertMacrosSection(product.description, next)
+      await grocy.updateProduct(numId, { description })
+      setProduct({ ...product, description })
     } catch {
-      await reloadStockAndLog()
+      /* keep local */
     } finally {
-      setStockSaving(false)
+      setMacrosSaving(false)
+    }
+  }
+
+  async function openMerge() {
+    setMergeMsg(null)
+    setMergeOpen(true)
+    setMergeIntoId('')
+    try {
+      setMergeTargets(await listDespensaProductsForMerge(numId))
+    } catch {
+      setMergeTargets([])
+    }
+  }
+
+  async function handleMerge() {
+    if (!mergeIntoId || typeof mergeIntoId !== 'number') return
+    setMergeBusy(true)
+    setMergeMsg(null)
+    try {
+      const result = await mergeProducts(mergeIntoId, numId)
+      const warn =
+        result.recipesWarned > 0
+          ? ` (${result.recipesWarned} receita(s) podem precisar de revisão)`
+          : ''
+      navigate(`/product/${result.canonicalId}`, {
+        replace: true,
+        state: {
+          feedback: {
+            kind: 'success',
+            message: `Fundido · stock ${result.stockTransferred}${warn}`,
+          },
+        },
+      })
+    } catch (e) {
+      setMergeMsg(e instanceof Error ? e.message : 'Falha ao fundir')
+    } finally {
+      setMergeBusy(false)
     }
   }
 
@@ -217,9 +333,9 @@ export function ProductDetail() {
     setLog((prev) => prev.filter((e) => e.id !== entry.id))
     try {
       await grocy.undoStockTransaction(entry.transaction_id)
-      await reloadStockAndLog()
+      await reloadLog()
     } catch {
-      await reloadStockAndLog()
+      await reloadLog()
     }
   }
 
@@ -260,193 +376,183 @@ export function ProductDetail() {
     )
   }
 
-  const buyAmount = getBuyAmountFromDesc(product.description, product.id)
-  const unitPrice = getDespensaUnitPrice(amount, stockValueTotal, product.description)
-  const priceVerified = isVerified(product.description, 'preco')
-  const caloriesVerified = isVerified(product.description, 'calorias')
+  const catalogPrice = getPriceFromDesc(product.description)
+  const storeFromDesc = getStoreFromDesc(product.description)
+
   const activeLog = log.filter((e) => !e.undone)
-  const consumes = activeLog.filter((e) => e.transaction_type === 'consume').slice(0, HISTORY_LIMIT)
   const purchases = activeLog.filter((e) => e.transaction_type === 'purchase').slice(0, HISTORY_LIMIT)
+
+  const latestByStore = (() => {
+    const latest = new Map<string, StorePriceItem>()
+    for (const row of [...storePrices].sort((a, b) => a.observed_at.localeCompare(b.observed_at))) {
+      latest.set(row.store_id, row)
+    }
+    return [...latest.values()].sort((a, b) => b.observed_at.localeCompare(a.observed_at))
+  })()
 
   return (
     <div
       className="min-h-screen bg-nourish-bg"
-      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 200px)' }}
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 32px)' }}
     >
       {header}
 
       <div className="px-4 pt-5 space-y-5">
-        <PhotoField
-          preview={photoPreview}
-          onChange={(file, url) => {
-            setPhotoFile(file)
-            setPhotoPreview(url)
-          }}
-          labelClass={labelClass}
+        <PhotoField preview={photoPreview} onChange={handlePhotoChange} labelClass={labelClass} />
+
+        <ProductMacrosSection
+          macros={getMacrosFromDesc(product.description)}
+          onSave={(next) => void handleSaveMacros(next)}
+          saving={macrosSaving}
         />
-        <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4">
-          <div className="flex items-center justify-around">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-nourish-primary tabular-nums">{amount}</p>
-              <p className="text-xs text-nourish-text-dim mt-0.5">em stock</p>
-            </div>
-            {(product.calories ?? 0) > 0 && (
-              <div className="text-center">
-                <p className="text-2xl font-bold text-nourish-text tabular-nums flex items-center justify-center gap-1">
-                  {product.calories}
-                  <VerifiedBadge verified={caloriesVerified} />
-                </p>
-                <p className="text-xs text-nourish-text-dim mt-0.5">kcal/un</p>
-              </div>
-            )}
-            <div className="text-center">
-              <p className="text-2xl font-bold text-nourish-text tabular-nums">+{buyAmount}</p>
-              <p className="text-xs text-nourish-text-dim mt-0.5">por compra</p>
-            </div>
-            {unitPrice !== null && (
-              <div className="text-center">
-                <p className="text-2xl font-bold text-nourish-primary tabular-nums flex items-center justify-center gap-1">
-                  €{unitPrice.toFixed(2)}
-                  <VerifiedBadge verified={priceVerified} />
-                </p>
-                <p className="text-xs text-nourish-text-dim mt-0.5">preço/un</p>
-              </div>
-            )}
-          </div>
-        </div>
 
         <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
-          <h3 className="font-semibold text-nourish-text text-sm">Compra habitual</h3>
-          <p className="text-xs text-nourish-text-dim">
-            Quantidade e preço por unidade usados no botão + e na lista da despensa. Marca como
-            verificado quando confirmares os valores (ex. no rótulo ou talão).
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs text-nourish-text-dim block mb-1">Quantidade</label>
-              <NumericInput
-                value={parseInt(editBuyAmount, 10) || 1}
-                onChange={(n) => setEditBuyAmount(String(Math.max(1, n)))}
-                integer
-                min={1}
-                className="w-full text-center font-semibold tabular-nums text-nourish-text bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-                aria-label="Quantidade por compra"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-nourish-text-dim block mb-1">Preço/un (€)</label>
-              <input
-                type="number"
-                value={editUnitPrice}
-                onChange={(e) => {
-                  setEditUnitPrice(e.target.value)
-                  setVerifyPrice(false)
-                }}
-                placeholder="—"
-                min="0"
-                step="0.01"
-                className="w-full text-center font-semibold tabular-nums text-nourish-text bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-                aria-label="Preço por unidade"
-              />
-              <div className="mt-1.5">
-                <VerifyCheckbox
-                  id="verify-price"
-                  checked={verifyPrice}
-                  onChange={setVerifyPrice}
-                  label="Preço verificado"
-                  disabled={!editUnitPrice.trim() || parseFloat(editUnitPrice) <= 0}
-                />
-              </div>
-            </div>
+          <div>
+            <label className={labelClass}>
+              Nome genérico <span className="text-nourish-border font-normal">(família)</span>
+            </label>
+            <input
+              type="text"
+              value={generico}
+              onChange={(e) => setGenerico(e.target.value)}
+              onBlur={() => void handleSaveCookingMeta()}
+              placeholder="ex: Cogumelos"
+              className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+            />
+            <p className="text-xs text-nourish-text-dim mt-1">
+              Agrupa variantes na Despensa (vários packs, um nome)
+            </p>
           </div>
           <div>
-            <label className="text-xs text-nourish-text-dim block mb-1">Calorias (por unidade)</label>
+            <label className={labelClass}>
+              Nome curto <span className="text-nourish-border font-normal">(cozinhar)</span>
+            </label>
+            <input
+              type="text"
+              value={nomeCurto}
+              onChange={(e) => setNomeCurto(e.target.value)}
+              onBlur={() => void handleSaveCookingMeta()}
+              placeholder="ex: Atum, Ovo…"
+              className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>
+              Gramas por unidade <span className="text-nourish-border font-normal">(opcional)</span>
+            </label>
             <input
               type="number"
-              value={editCalories}
-              onChange={(e) => {
-                setEditCalories(e.target.value)
-                setVerifyCalories(false)
-              }}
-              placeholder="—"
+              value={unitGrams}
+              onChange={(e) => setUnitGrams(e.target.value)}
+              onBlur={() => void handleSaveCookingMeta()}
+              placeholder="ex: 120 para lata, ~55 para ovo"
               min="0"
-              className="w-full text-center font-semibold tabular-nums text-nourish-text bg-nourish-surface-high border border-nourish-border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-              aria-label="Calorias por unidade"
+              step="1"
+              className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
             />
-            <div className="mt-1.5">
-              <VerifyCheckbox
-                id="verify-calories"
-                checked={verifyCalories}
-                onChange={setVerifyCalories}
-                label="Calorias verificadas"
-                disabled={!editCalories.trim() || parseFloat(editCalories) <= 0}
-              />
-            </div>
+            {metaSaving && (
+              <p className="text-xs text-nourish-text-dim mt-1">A guardar…</p>
+            )}
           </div>
           <button
             type="button"
-            disabled={metaSaving}
-            onClick={handleSaveMeta}
-            className="w-full py-2.5 rounded-xl font-semibold text-sm bg-nourish-surface-high text-nourish-text disabled:opacity-40 active:bg-nourish-surface-highest"
+            onClick={() =>
+              navigate(
+                `/add-product?generico=${encodeURIComponent(
+                  generico.trim() || getGenericoFromDesc(product.description) || product.name
+                )}`
+              )
+            }
+            className="w-full py-2.5 rounded-xl text-sm font-semibold border border-nourish-border text-nourish-text focus:outline-none focus:ring-2 focus:ring-nourish-primary"
           >
-            {metaSaving ? '…' : 'Guardar'}
+            Adicionar variante…
           </button>
-        </section>
-
-        <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
-          <h3 className="font-semibold text-nourish-text text-sm">Corrigir stock</h3>
-          <p className="text-xs text-nourish-text-dim">
-            Define a quantidade real em casa. Usa isto se o valor estiver errado (ex.: diz 8 mas tens 2).
-          </p>
-          <div className="flex items-center gap-2">
-            <NumericInput
-              value={editAmount}
-              onChange={setEditAmount}
-              integer
-              min={0}
-              className="flex-1 text-center text-xl font-bold text-nourish-primary tabular-nums bg-nourish-surface-high border border-nourish-border rounded-xl py-3 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-              aria-label="Quantidade em stock"
-            />
+          {!mergeOpen ? (
             <button
               type="button"
-              disabled={stockSaving || editAmount === amount}
-              onClick={handleSaveStock}
-              className="px-4 py-3 rounded-xl font-semibold text-sm bg-nourish-primary text-nourish-on-primary disabled:opacity-40 active:bg-nourish-primary-dim"
+              onClick={() => void openMerge()}
+              className="w-full py-2.5 rounded-xl text-sm font-semibold border border-nourish-border text-nourish-text focus:outline-none focus:ring-2 focus:ring-nourish-primary"
             >
-              {stockSaving ? '…' : 'Guardar'}
+              Fundir com outro produto…
             </button>
-          </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-nourish-text-dim leading-snug">
+                Este produto (duplicado) funde-se no canónico escolhido: stock, aliases e ingredientes
+                de receitas passam para lá; este fica inactivo.
+              </p>
+              <select
+                value={mergeIntoId === '' ? '' : String(mergeIntoId)}
+                onChange={(e) =>
+                  setMergeIntoId(e.target.value ? parseInt(e.target.value, 10) : '')
+                }
+                className="w-full px-3 py-2 bg-nourish-surface-high border border-nourish-border rounded-lg text-nourish-text text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+              >
+                <option value="">— Escolher canónico —</option>
+                {mergeTargets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                    {getGenericoFromDesc(p.description)
+                      ? ` · ${getGenericoFromDesc(p.description)}`
+                      : ''}
+                  </option>
+                ))}
+              </select>
+              {mergeMsg && <p className="text-xs text-red-400">{mergeMsg}</p>}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMergeOpen(false)}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-nourish-surface-high text-nourish-text"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={mergeBusy || mergeIntoId === ''}
+                  onClick={() => void handleMerge()}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-nourish-primary text-nourish-on-primary disabled:opacity-40"
+                >
+                  {mergeBusy ? 'A fundir…' : 'Fundir'}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
-        <PriceHistoryChart points={priceHistory} />
-
-        {consumes.length > 0 && (
-          <section>
-            <h3 className="font-semibold text-nourish-text mb-3">Historial de consumo</h3>
-            <div className="space-y-2">
-              {consumes.map((entry) => (
-                <div
-                  key={entry.id}
-                  className="flex items-center gap-2 bg-nourish-surface border border-nourish-border rounded-xl overflow-hidden"
-                >
-                  <div className="flex-1 px-3 py-2.5">
-                    <p className="text-sm text-nourish-text">{formatLogDate(entry.row_created_timestamp)}</p>
-                    <p className="text-xs text-nourish-text-dim">{formatLogTime(entry.row_created_timestamp)}</p>
-                  </div>
-                  <span className="text-sm font-semibold text-nourish-text-dim tabular-nums px-3">
-                    −{Math.abs(entry.amount)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleUndoEntry(entry)}
-                    className="p-3 pr-3 text-nourish-border hover:text-red-400 transition-colors focus:outline-none"
-                    aria-label="Anular registo"
-                  >
-                    <TrashIcon />
-                  </button>
-                </div>
-              ))}
+        {latestByStore.length > 0 && (
+          <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-semibold text-nourish-text text-sm">Preço por loja</h3>
+              <a
+                href={pricesSiteProductUrl({ name: product.name, productId: numId })}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-nourish-primary underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded"
+              >
+                Site de preços
+                <ExternalLinkIcon className="w-3 h-3" />
+              </a>
             </div>
+            <ul className="space-y-1.5">
+              {latestByStore.map((row) => (
+                <li
+                  key={row.store_id}
+                  className="flex items-center justify-between gap-2 text-sm px-1 py-1"
+                >
+                  <span className="text-nourish-text truncate min-w-0">
+                    {row.store_label}
+                    <span className="text-nourish-text-dim tabular-nums">
+                      {' '}
+                      · {formatLogDate(row.observed_at)}
+                    </span>
+                  </span>
+                  <span className="tabular-nums text-nourish-primary font-semibold shrink-0">
+                    {formatUnitPrice(row)}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 
@@ -454,40 +560,83 @@ export function ProductDetail() {
           <section>
             <h3 className="font-semibold text-nourish-text mb-3">Historial de compras</h3>
             <div className="space-y-2">
-              {purchases.map((entry) => (
-                <div
-                  key={entry.id}
-                  className="flex items-center gap-2 bg-nourish-surface border border-nourish-border rounded-xl overflow-hidden"
-                >
-                  <div className="flex-1 px-3 py-2.5">
-                    <p className="text-sm text-nourish-text">{formatLogDate(entry.row_created_timestamp)}</p>
-                    <p className="text-xs text-nourish-text-dim">{formatLogTime(entry.row_created_timestamp)}</p>
-                  </div>
-                  <div className="text-right px-3">
-                    <span className="text-sm font-semibold text-nourish-primary tabular-nums block">
-                      +{entry.amount}
-                    </span>
-                    {(entry.price ?? 0) > 0 && (
-                      <span className="text-xs text-nourish-text-dim tabular-nums">
-                        €{entry.price!.toFixed(2)}
+              {purchases.map((entry) => {
+                const matched = storePriceForPurchase(entry, storePrices)
+                const storeLabel = matched?.store_label ?? storeFromDesc ?? null
+                const storeBrand = storeLabel ? shortStoreBrand(storeLabel) : null
+                const unitLabel = matched
+                  ? formatUnitPrice(matched)
+                  : catalogPrice != null && getPriceUnitFromDesc(product.description) === 'kg'
+                    ? formatDespensaPriceLabel(catalogPrice, product.description)
+                    : catalogPrice != null
+                      ? `€${catalogPrice.toFixed(2)}`
+                      : null
+                const paid = (entry.price ?? 0) > 0 ? entry.price! : null
+                const receipt = findReceiptForPurchase(entry, receipts, matched)
+
+                return (
+                  <div
+                    key={entry.id}
+                    className="flex items-center gap-1 bg-nourish-surface border border-nourish-border rounded-xl overflow-hidden"
+                  >
+                    {receipt ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          navigate(`/receipt?visit=${encodeURIComponent(receipt.visit_entered_at)}`)
+                        }
+                        className="p-3 text-nourish-primary focus:outline-none focus:ring-2 focus:ring-inset focus:ring-nourish-primary shrink-0"
+                        aria-label="Ver talão / visita associada"
+                        title="Talão / visita associada"
+                      >
+                        <ReceiptIcon />
+                      </button>
+                    ) : (
+                      <span
+                        className="p-3 text-nourish-border shrink-0"
+                        title="Sem talão associado a esta compra"
+                        aria-hidden
+                      >
+                        <ReceiptIcon />
                       </span>
                     )}
+                    <div className="flex-1 min-w-0 py-2.5 pr-2">
+                      <p className="text-sm text-nourish-text">
+                        {formatLogDate(entry.row_created_timestamp)}
+                      </p>
+                      {(storeBrand || unitLabel) && (
+                        <p className="text-xs text-nourish-text-dim truncate mt-0.5">
+                          {storeBrand}
+                          {storeBrand && unitLabel && ' · '}
+                          {unitLabel && (
+                            <span className="text-nourish-primary font-semibold tabular-nums">
+                              {unitLabel}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                    {paid != null && (
+                      <span className="text-sm font-semibold text-nourish-primary tabular-nums shrink-0 px-1">
+                        €{paid.toFixed(2)}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleUndoEntry(entry)}
+                      className="p-3 pr-3 text-nourish-border hover:text-red-400 transition-colors focus:outline-none"
+                      aria-label="Anular registo"
+                    >
+                      <TrashIcon />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleUndoEntry(entry)}
-                    className="p-3 pr-3 text-nourish-border hover:text-red-400 transition-colors focus:outline-none"
-                    aria-label="Anular registo"
-                  >
-                    <TrashIcon />
-                  </button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </section>
         )}
 
-        {activeLog.length === 0 && (
+        {purchases.length === 0 && latestByStore.length === 0 && (
           <p className="text-nourish-text-dim text-sm text-center py-4">Sem historial ainda</p>
         )}
 
@@ -527,29 +676,6 @@ export function ProductDetail() {
             </div>
           )}
         </section>
-      </div>
-
-      <div
-        className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface border-t border-nourish-border p-4"
-        style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
-      >
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={handleConsume}
-            disabled={amount <= 0}
-            className="flex-1 py-3.5 rounded-xl font-semibold text-sm bg-nourish-surface-high text-nourish-text disabled:opacity-30 active:bg-nourish-surface-highest transition-colors focus:outline-none"
-          >
-            Consumir
-          </button>
-          <button
-            type="button"
-            onClick={handleAdd}
-            className="flex-1 py-3.5 rounded-xl font-semibold text-sm bg-nourish-primary text-nourish-on-primary active:bg-nourish-primary-dim transition-colors focus:outline-none"
-          >
-            Comprar
-          </button>
-        </div>
       </div>
     </div>
   )

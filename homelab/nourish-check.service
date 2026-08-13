@@ -8,6 +8,7 @@ WorkingDirectory=/opt/nourish
 ExecStart=/usr/bin/node /opt/nourish/check-server.mjs
 Restart=on-failure
 Environment=NODE_ENV=production
+EnvironmentFile=-/etc/nourish/env
 
 [Install]
 WantedBy=multi-user.target

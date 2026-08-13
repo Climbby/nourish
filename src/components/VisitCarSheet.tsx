@@ -119,12 +119,11 @@ export function VisitCarSheet({ visit, cars, supermarketName, currentLink, onClo
             <div className="rounded-xl border border-nourish-border bg-nourish-bg p-4 text-center space-y-2">
               <p className="text-sm text-nourish-text-dim">Ainda não tens viaturas registadas.</p>
               <Link
-                to="/profile"
-                state={{ tab: 'viaturas' }}
+                to="/profile?tab=objectivos"
                 onClick={onClose}
                 className="inline-block text-sm font-semibold text-nourish-primary"
               >
-                Adicionar em Perfil → Viaturas
+                Adicionar em Perfil → Objectivos
               </Link>
             </div>
           ) : (

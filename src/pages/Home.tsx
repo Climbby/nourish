@@ -3,15 +3,19 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { Recipe } from '../types/grocy'
 import { MealCard } from '../components/MealCard'
+import { MealListRow } from '../components/MealListRow'
+import { Checkbox } from '../components/Checkbox'
 import { ConnectionError } from '../components/ConnectionError'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
+import { HistoryButton } from '../components/HistoryButton'
 import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
 import { useFavourites } from '../hooks/useFavourites'
 import { useMealAccessOrder } from '../hooks/useMealAccessOrder'
-import { todayIsoDate, slotHasMeal, usePlannedMeals } from '../hooks/usePlannedMeals'
+import { todayIsoDate, slotHasMeal, slotPrato, usePlannedMeals } from '../hooks/usePlannedMeals'
 import { parseDescription } from '../utils/parseDescription'
 import {
+  MEAL_ORIGINS,
   resolveMealOrigin,
   type MealOrigin,
 } from '../utils/mealOrigin'
@@ -19,10 +23,19 @@ import {
   mealMatchesVerificationFilters,
   type VerificationFilterKey,
 } from '../utils/mealVerificationFilter'
-import { MEAL_SORT_OPTIONS, sortRecipes } from '../utils/mealSort'
+import {
+  MEAL_SORT_OPTIONS,
+  FORA_MEAL_SORT_OPTIONS,
+  DEFAULT_MEAL_SORT,
+  DEFAULT_FORA_MEAL_SORT,
+  sortRecipes,
+  type MealSortMode,
+} from '../utils/mealSort'
+import { asCoords, fetchHomeCoords, type HomeCoords } from '../utils/homeCoords'
 import { currentMealSlot, logMealConsumption } from '../utils/logMealConsumption'
 import { SLOT_LABEL } from '../utils/weekPlanSlots'
 import type { NavigationFeedback, NavigationFeedbackState } from '../utils/navigationFeedback'
+import { rememberNavPath } from '../utils/navMemory'
 import { DespensaSection } from './Despensa'
 
 type Filter = 'completa' | 'ligeira' | 'despensa'
@@ -35,8 +48,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 ]
 
 const ORIGIN_FILTERS: { key: OriginFilter; label: string }[] = [
-  { key: 'supermercado', label: 'Casa' },
-  { key: 'restaurante', label: 'Fora' },
+  ...MEAL_ORIGINS,
   { key: 'all', label: 'Todas' },
 ]
 
@@ -55,15 +67,6 @@ function SearchIcon() {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
       <circle cx="11" cy="11" r="8" />
       <path strokeLinecap="round" d="m21 21-4.35-4.35" />
-    </svg>
-  )
-}
-
-function ClockIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
-      <circle cx="12" cy="12" r="9" />
-      <path strokeLinecap="round" d="M12 7v5l3 2" />
     </svg>
   )
 }
@@ -153,8 +156,40 @@ export function Home() {
   const [verificationFilters, setVerificationFilters] = useState<Set<VerificationFilterKey>>(new Set())
   const [favouritesOnly, setFavouritesOnly] = useState(false)
   const [feedback, setFeedback] = useState<NavigationFeedback | null>(null)
+  const [homeCoords, setHomeCoords] = useState<HomeCoords | null>(null)
   const filterRef = useRef<HTMLDivElement>(null)
   const sortRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let mounted = true
+    fetchHomeCoords().then((c) => {
+      if (mounted) setHomeCoords(c)
+    })
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    rememberNavPath('meals', `/meals${location.search}`)
+  }, [location.search])
+
+  const sortOptions =
+    originFilter === 'restaurante' ? FORA_MEAL_SORT_OPTIONS : MEAL_SORT_OPTIONS
+  const effectiveSort: MealSortMode = useMemo(() => {
+    if (originFilter === 'restaurante') {
+      if (sortOptions.some((o) => o.key === prefs.mealSort)) return prefs.mealSort
+      return DEFAULT_FORA_MEAL_SORT
+    }
+    if (prefs.mealSort === 'distance') return DEFAULT_MEAL_SORT
+    return prefs.mealSort
+  }, [originFilter, prefs.mealSort, sortOptions])
+
+  useEffect(() => {
+    if (originFilter === 'restaurante' && prefs.mealSort === DEFAULT_MEAL_SORT) {
+      updatePref('mealSort', DEFAULT_FORA_MEAL_SORT)
+    }
+  }, [originFilter, prefs.mealSort, updatePref])
 
   useEffect(() => {
     if (!showVerificationFilters) return
@@ -229,10 +264,11 @@ export function Home() {
   }, [location.pathname, location.search, location.state, navigate])
 
   const plannedSlotKey = currentMealSlot()
-  const plannedSlot = getSlot(0, plannedSlotKey)
+  const plannedSlot = getSlot(todayIsoDate(), plannedSlotKey)
   const plannedRecipe = useMemo(() => {
     if (!slotHasMeal(plannedSlot)) return null
-    return recipes.find((r) => r.id === plannedSlot.recipeId) ?? null
+    const pratoId = slotPrato(plannedSlot)
+    return recipes.find((r) => r.id === pratoId) ?? null
   }, [plannedSlot, recipes])
 
   function handleRecipeLogged(recipeId: number, description: string) {
@@ -301,8 +337,20 @@ export function Home() {
       if (!mealMatchesVerificationFilters(parsed, verificationFilters)) return false
       return activeFilter === 'completa' || activeFilter === 'ligeira'
     })
-    return sortRecipes(list, parsedById, prefs.mealSort, mealAccessOrder)
-  }, [recipes, query, favouritesOnly, favourites, parsedById, activeFilter, originFilter, verificationFilters, prefs.mealSort, mealAccessOrder])
+    return sortRecipes(list, parsedById, effectiveSort, mealAccessOrder, asCoords(homeCoords))
+  }, [
+    recipes,
+    query,
+    favouritesOnly,
+    favourites,
+    parsedById,
+    activeFilter,
+    originFilter,
+    verificationFilters,
+    effectiveSort,
+    mealAccessOrder,
+    homeCoords,
+  ])
 
   return (
     <div className="min-h-screen bg-nourish-bg">
@@ -314,18 +362,10 @@ export function Home() {
           <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold text-nourish-text leading-none">Nourish</h1>
           </div>
-          {!isDespensa && (
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <button
-                type="button"
-                onClick={() => navigate('/history')}
-                className="p-2.5 rounded-lg bg-nourish-surface-high border border-nourish-border text-nourish-text-dim active:bg-nourish-border/20 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-                aria-label="Historial"
-              >
-                <ClockIcon />
-              </button>
-            </div>
-          )}
+          <HistoryButton
+            to={isDespensa ? '/history?tab=supermarket' : '/history'}
+            label={isDespensa ? 'Historial de supermercado' : 'Historial'}
+          />
         </div>
 
         {feedback && (
@@ -398,7 +438,7 @@ export function Home() {
                     <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
                       Ordenar
                     </p>
-                    {MEAL_SORT_OPTIONS.map(({ key, label }) => (
+                    {sortOptions.map(({ key, label }) => (
                       <button
                         key={key}
                         type="button"
@@ -407,7 +447,7 @@ export function Home() {
                           setShowSortMenu(false)
                         }}
                         className={`w-full text-left px-2 py-2 rounded-lg text-sm transition-colors focus:outline-none ${
-                          prefs.mealSort === key
+                          effectiveSort === key
                             ? 'bg-nourish-primary/15 text-nourish-primary font-semibold'
                             : 'text-nourish-text active:bg-nourish-surface-high'
                         }`}
@@ -440,12 +480,11 @@ export function Home() {
                     <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
                       Filtros
                     </p>
-                    <label className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high">
-                      <input
-                        type="checkbox"
+                    <label className="flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high">
+                      <Checkbox
                         checked={favouritesOnly}
-                        onChange={() => setFavouritesOnly((v) => !v)}
-                        className="rounded border-nourish-border"
+                        onChange={setFavouritesOnly}
+                        label="Favoritos"
                       />
                       <HeartIcon filled={favouritesOnly} />
                       Favoritos
@@ -456,13 +495,12 @@ export function Home() {
                     {VERIFICATION_FILTERS.map(({ key, label }) => (
                       <label
                         key={key}
-                        className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high"
+                        className="flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high"
                       >
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={verificationFilters.has(key)}
                           onChange={() => toggleVerificationFilter(key)}
-                          className="rounded border-nourish-border"
+                          label={label}
                         />
                         {label}
                       </label>
@@ -587,16 +625,32 @@ export function Home() {
         )}
 
         {!isDespensa && !loading && filtered.length > 0 && (
-          <div className="grid grid-cols-2 gap-3">
-            {filtered.map((r) => (
-              <MealCard
-                key={r.id}
-                recipe={r}
-                showPortions={prefs.showMealPortions}
-                onLogged={handleRecipeLogged}
-              />
-            ))}
-          </div>
+          prefs.mealListView === 'list' ? (
+            <ul className="bg-nourish-surface border border-nourish-border rounded-xl overflow-hidden divide-y divide-nourish-border/60">
+              {filtered.map((r) => (
+                <li key={r.id}>
+                  <MealListRow
+                    recipe={r}
+                    onClick={() => navigate(`/meal/${r.id}`)}
+                    onLogged={handleRecipeLogged}
+                    homeCoords={asCoords(homeCoords)}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {filtered.map((r) => (
+                <MealCard
+                  key={r.id}
+                  recipe={r}
+                  showPortions={prefs.showMealPortions}
+                  onLogged={handleRecipeLogged}
+                  homeCoords={asCoords(homeCoords)}
+                />
+              ))}
+            </div>
+          )
         )}
       </main>
 

@@ -1,8 +1,9 @@
 import type { Recipe } from '../types/grocy'
 import { mealAccessRank } from './mealAccess'
 import type { ParsedRecipe } from './parseDescription'
+import { distanceFromHome, type Coords } from './locality'
 
-export type MealSortMode = 'recent' | 'oldest' | 'price-desc' | 'price-asc' | 'splay'
+export type MealSortMode = 'recent' | 'oldest' | 'price-desc' | 'price-asc' | 'splay' | 'distance'
 
 export const DEFAULT_MEAL_SORT: MealSortMode = 'splay'
 
@@ -13,6 +14,14 @@ export const MEAL_SORT_OPTIONS: { key: MealSortMode; label: string }[] = [
   { key: 'price-desc', label: 'Mais caras' },
   { key: 'price-asc', label: 'Mais baratas' },
 ]
+
+/** Shown when filtering Fora meals. */
+export const FORA_MEAL_SORT_OPTIONS: { key: MealSortMode; label: string }[] = [
+  { key: 'distance', label: 'Mais perto' },
+  ...MEAL_SORT_OPTIONS,
+]
+
+export const DEFAULT_FORA_MEAL_SORT: MealSortMode = 'distance'
 
 function compareNullablePrice(a: number | null | undefined, b: number | null | undefined): number {
   const aMissing = a == null || a <= 0
@@ -32,12 +41,28 @@ function compareNullablePriceDesc(a: number | null | undefined, b: number | null
   return b - a
 }
 
+function compareDistance(
+  a: ParsedRecipe | undefined,
+  b: ParsedRecipe | undefined,
+  home: Coords | null | undefined
+): number {
+  const da = distanceFromHome(home, a?.locationCoords ?? null)
+  const db = distanceFromHome(home, b?.locationCoords ?? null)
+  const aMissing = da == null
+  const bMissing = db == null
+  if (aMissing && bMissing) return 0
+  if (aMissing) return 1
+  if (bMissing) return -1
+  return da - db
+}
+
 export function compareRecipesForSort(
   a: Recipe,
   b: Recipe,
   parsedById: Map<number, ParsedRecipe>,
   mode: MealSortMode,
-  accessOrder: number[] = []
+  accessOrder: number[] = [],
+  homeCoords?: Coords | null
 ): number {
   let cmp = 0
   switch (mode) {
@@ -61,6 +86,9 @@ export function compareRecipesForSort(
     case 'price-asc':
       cmp = compareNullablePrice(parsedById.get(a.id)?.price, parsedById.get(b.id)?.price)
       break
+    case 'distance':
+      cmp = compareDistance(parsedById.get(a.id), parsedById.get(b.id), homeCoords)
+      break
   }
   if (cmp !== 0) return cmp
   return a.name.localeCompare(b.name, 'pt')
@@ -70,7 +98,10 @@ export function sortRecipes(
   recipes: Recipe[],
   parsedById: Map<number, ParsedRecipe>,
   mode: MealSortMode,
-  accessOrder: number[] = []
+  accessOrder: number[] = [],
+  homeCoords?: Coords | null
 ): Recipe[] {
-  return [...recipes].sort((a, b) => compareRecipesForSort(a, b, parsedById, mode, accessOrder))
+  return [...recipes].sort((a, b) =>
+    compareRecipesForSort(a, b, parsedById, mode, accessOrder, homeCoords)
+  )
 }

@@ -1,4 +1,4 @@
-import { fetchCars, type Car } from '../hooks/useCars'
+import { fetchCars, carsFeatureEnabled, type Car } from '../hooks/useCars'
 import { inferDefaultCarId } from './defaultCar'
 import { fetchTripDistance } from './tripDistance'
 import type { SupermarketVisit } from './supermarketVisits'
@@ -13,6 +13,7 @@ export async function autoLinkCarToVisit(
     fuelPricePerL?: number | null
   } = {}
 ): Promise<VisitCarLink | null> {
+  if (!carsFeatureEnabled()) return null
   const visitCars = options.visitCars ?? (await fetchVisitCars())
   if (visitCars.some((l) => l.visit_entered_at === visitEnteredAt)) return null
 
@@ -48,6 +49,7 @@ export async function autoLinkUnlinkedVisitCars(
   existingLinks: VisitCarLink[],
   fuelPriceForCar?: (car: Car) => number | null
 ): Promise<VisitCarLink[]> {
+  if (!carsFeatureEnabled()) return []
   const carId = inferDefaultCarId(cars, existingLinks)
   if (!carId) return []
 

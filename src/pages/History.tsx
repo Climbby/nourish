@@ -7,21 +7,23 @@ import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
 import { VisitCarSheet } from '../components/VisitCarSheet'
 import { VisitDateTime } from '../components/VisitDateTime'
+import { VisitReceiptSheet } from '../components/VisitReceiptSheet'
 import { useCars } from '../hooks/useCars'
 import { useFuelPrices } from '../hooks/useFuelPrices'
 import { useHouseholdProfiles } from '../hooks/useHouseholdProfiles'
 import { OwnershipControls } from '../components/OwnershipControls'
 import { autoLinkUnlinkedVisitCars } from '../utils/autoLinkCar'
 import {
-  encodeMealLogNote,
-  isMealLogUnattributed,
+  canClaimMealLog,
+  claimMealLogNote,
   isMealLogVisibleToProfile,
-  parseMealLogNote,
+  mealLogOwnerLabel,
 } from '../utils/mealLogAttribution'
 import {
   formatVisitDuration,
   formatVisitMonthYear,
   visitMonthYearKey,
+  visitNeedsManualClose,
   visitStatusLabel,
 } from '../utils/supermarketVisits'
 import {
@@ -29,6 +31,13 @@ import {
   receiptMapByVisit,
   type VisitReceiptLink,
 } from '../utils/visitReceipts'
+import {
+  applyVisitOverrides,
+  estimateVisitLeftAt,
+  fetchVisitOverrides,
+  upsertVisitOverride,
+  type VisitOverride,
+} from '../utils/visitOverrides'
 import {
   supermarketLabelForVisit,
 } from '../utils/visitSupermarketLabel'
@@ -39,11 +48,12 @@ import {
   type VisitCarLink,
 } from '../utils/visitCars'
 import {
+  canClaimVisit,
+  claimVisitAttribution,
   fetchVisitAttributions,
-  isVisitUnattributed,
   isVisitVisibleToProfile,
-  upsertVisitAttribution,
   visitAttributionMap,
+  visitOwnerLabel,
   type VisitAttribution,
 } from '../utils/visitAttributions'
 import { carDisplayName } from '../utils/carDisplayName'
@@ -191,10 +201,15 @@ export function History() {
   const [visits, setVisits] = useState<SupermarketVisit[] | null>(null)
   const [visitsError, setVisitsError] = useState(false)
   const [visitReceipts, setVisitReceipts] = useState<VisitReceiptLink[]>([])
+  const [visitOverrides, setVisitOverrides] = useState<VisitOverride[]>([])
   const [visitCars, setVisitCars] = useState<VisitCarLink[]>([])
   const [visitAttrs, setVisitAttrs] = useState<VisitAttribution[]>([])
   const [trackedSupermarkets, setTrackedSupermarkets] = useState<TrackedSupermarket[]>([])
   const [carSheetVisit, setCarSheetVisit] = useState<SupermarketVisit | null>(null)
+  const [receiptSheet, setReceiptSheet] = useState<{
+    visit: SupermarketVisit
+    receipt: VisitReceiptLink
+  } | null>(null)
   const { cars, refreshCars, enabled: carsEnabled } = useCars()
   const { profiles, activeId, activeProfile } = useHouseholdProfiles()
   const activeCars = carsEnabled ? cars : []
@@ -235,7 +250,8 @@ export function History() {
       fetchVisitCars(),
       fetchSupermarkets(),
       fetchVisitAttributions(),
-    ]).then(([list, receipts, carLinks, supermarkets, attributions]) => {
+      fetchVisitOverrides(),
+    ]).then(([list, receipts, carLinks, supermarkets, attributions, overrides]) => {
         if (!mounted) return
         if (list === null) setVisitsError(true)
         else setVisits(list)
@@ -243,6 +259,7 @@ export function History() {
         setVisitCars(carLinks)
         setTrackedSupermarkets(supermarkets?.tracked ?? [])
         setVisitAttrs(attributions)
+        setVisitOverrides(overrides)
       })
     return () => { mounted = false }
   }, [tab])
@@ -269,8 +286,9 @@ export function History() {
 
   const visibleVisits = useMemo(() => {
     if (!visits) return []
-    return visits.filter((v) => isVisitVisibleToProfile(v.entered_at, activeId, attrByVisit))
-  }, [visits, activeId, attrByVisit])
+    const withOverrides = applyVisitOverrides(visits, visitOverrides)
+    return withOverrides.filter((v) => isVisitVisibleToProfile(v.entered_at, activeId, attrByVisit))
+  }, [visits, activeId, attrByVisit, visitOverrides])
 
   const visibleEntries = useMemo(
     () => entries.filter((e) => isMealLogVisibleToProfile(e.note, activeId)),
@@ -285,37 +303,36 @@ export function History() {
 
   async function claimVisit(visitEnteredAt: string) {
     if (!activeId) return
-    const next = await upsertVisitAttribution({
-      visit_entered_at: visitEnteredAt,
-      owner_profile_id: activeId,
-      share_with_family: false,
-    })
-    setVisitAttrs(next)
-  }
-
-  async function toggleVisitShare(visitEnteredAt: string) {
-    const current = attrByVisit.get(visitEnteredAt)
-    if (!current || !activeId || current.owner_profile_id !== activeId) return
-    const next = await upsertVisitAttribution({
-      ...current,
-      share_with_family: !current.share_with_family,
-    })
+    const next = await claimVisitAttribution(visitEnteredAt, activeId)
     setVisitAttrs(next)
   }
 
   async function claimMeal(entry: MealPlanEntry) {
     if (!activeId) return
-    const note = encodeMealLogNote({ owner: activeId, share: false })
+    // Keep slot + any existing owners; second claim upgrades to Ambos.
+    const note = claimMealLogNote(entry.note, activeId)
     await grocy.updateMealPlanEntry(entry.id, { note })
     setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, note } : e)))
   }
 
-  async function toggleMealShare(entry: MealPlanEntry) {
-    const attr = parseMealLogNote(entry.note)
-    if (!attr || !activeId || attr.owner !== activeId) return
-    const note = encodeMealLogNote({ owner: attr.owner, share: !attr.share })
-    await grocy.updateMealPlanEntry(entry.id, { note })
-    setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, note } : e)))
+  async function closeGhostVisit(visit: SupermarketVisit) {
+    const next = await upsertVisitOverride({
+      visit_entered_at: visit.entered_at,
+      action: 'closed',
+      left_at: estimateVisitLeftAt(visit.entered_at),
+      updated_at: new Date().toISOString(),
+    })
+    setVisitOverrides(next)
+  }
+
+  async function dismissGhostVisit(visit: SupermarketVisit) {
+    const next = await upsertVisitOverride({
+      visit_entered_at: visit.entered_at,
+      action: 'dismissed',
+      left_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    setVisitOverrides(next)
   }
 
   // Group by date
@@ -382,11 +399,9 @@ export function History() {
         {tab === 'supermarket' && visits && visibleVisits.length === 0 && (
           <div className="text-center py-16">
             <div className="text-5xl mb-3">🛒</div>
-            <p className="font-medium text-nourish-text-dim">Sem visitas para ti</p>
+            <p className="font-medium text-nourish-text-dim">Sem visitas</p>
             <p className="text-sm text-nourish-border mt-1 max-w-xs mx-auto leading-snug">
-              {visits.length === 0
-                ? 'Ao entrares e saíres da zona do super no Home Assistant, as idas aparecem aqui.'
-                : 'As idas de outros perfis só aparecem se forem partilhadas com a família.'}
+              Ao entrares e saíres da zona do super no Home Assistant, as idas aparecem aqui.
             </p>
           </div>
         )}
@@ -416,9 +431,6 @@ export function History() {
                       const supermarketName = supermarketLabelForVisit(visit, trackedSupermarkets)
                       const fuelCost = visitTripCostEur(carLink, visit, car)
                       const totalCost = formatVisitTotalCost(receipt, fuelCost)
-                      const attr = attrByVisit.get(visit.entered_at)
-                      const unattributed = isVisitUnattributed(visit.entered_at, attrByVisit)
-
                       return (
                       <div
                         key={visit.entered_at}
@@ -436,13 +448,28 @@ export function History() {
                               </p>
                             )}
                             <OwnershipControls
-                              ownerLabel={profileName(attr?.owner_profile_id)}
-                              unattributed={unattributed}
-                              shared={Boolean(attr?.share_with_family)}
-                              canToggleShare={Boolean(attr && activeId && attr.owner_profile_id === activeId)}
+                              ownerLabel={visitOwnerLabel(visit.entered_at, attrByVisit, profileName)}
+                              showClaim={canClaimVisit(visit.entered_at, activeId, attrByVisit)}
                               onClaim={() => void claimVisit(visit.entered_at)}
-                              onToggleShare={() => void toggleVisitShare(visit.entered_at)}
                             />
+                            {visitNeedsManualClose(visit) && (
+                              <div className="flex flex-wrap gap-2 mt-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => void closeGhostVisit(visit)}
+                                  className="text-[11px] font-semibold text-nourish-primary focus:outline-none"
+                                >
+                                  Fechar ida
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void dismissGhostVisit(visit)}
+                                  className="text-[11px] font-medium text-nourish-text-dim focus:outline-none"
+                                >
+                                  Isto não foi uma compra
+                                </button>
+                              </div>
+                            )}
                           </div>
                           <div className="flex flex-col items-end shrink-0 gap-1">
                             {totalCost && (
@@ -482,16 +509,20 @@ export function History() {
                               )}
                               <button
                                 type="button"
-                                onClick={() =>
+                                onClick={() => {
+                                  if (receipt) {
+                                    setReceiptSheet({ visit, receipt })
+                                    return
+                                  }
                                   navigate(`/receipt?visit=${encodeURIComponent(visit.entered_at)}`)
-                                }
-                                title={receipt ? 'Substituir talão' : 'Adicionar talão'}
+                                }}
+                                title={receipt ? 'Ver talão' : 'Adicionar talão'}
                                 className={`p-1.5 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
                                   receipt
                                     ? 'border-nourish-primary/40 bg-nourish-primary/10 text-nourish-primary'
                                     : 'border-nourish-border bg-nourish-surface-high text-nourish-text-dim'
                                 }`}
-                                aria-label={receipt ? 'Talão associado' : 'Adicionar talão'}
+                                aria-label={receipt ? 'Ver talão associado' : 'Adicionar talão'}
                               >
                                 <ReceiptIcon active={!!receipt} />
                               </button>
@@ -525,8 +556,6 @@ export function History() {
                   {groupByRecipe(grouped[day]).map((group) => {
                     const { entry, count, allIds } = group
                     const recipe = recipes[entry.recipe_id]
-                    const mealAttr = parseMealLogNote(entry.note)
-                    const mealUnattributed = isMealLogUnattributed(entry.note)
                     return (
                       <div
                         key={entry.id}
@@ -577,12 +606,9 @@ export function History() {
                               )}
                             </button>
                             <OwnershipControls
-                              ownerLabel={profileName(mealAttr?.owner)}
-                              unattributed={mealUnattributed}
-                              shared={Boolean(mealAttr?.share)}
-                              canToggleShare={Boolean(mealAttr && activeId && mealAttr.owner === activeId)}
+                              ownerLabel={mealLogOwnerLabel(entry.note, profileName)}
+                              showClaim={canClaimMealLog(entry.note, activeId)}
                               onClaim={() => void claimMeal(entry)}
-                              onToggleShare={() => void toggleMealShare(entry)}
                             />
                           </div>
                         </div>
@@ -629,6 +655,19 @@ export function History() {
               if (link) next.push(link)
               return next
             })
+          }}
+        />
+      )}
+
+      {receiptSheet && (
+        <VisitReceiptSheet
+          receipt={receiptSheet.receipt}
+          supermarketName={supermarketLabelForVisit(receiptSheet.visit, trackedSupermarkets)}
+          onClose={() => setReceiptSheet(null)}
+          onReplace={() => {
+            const entered = receiptSheet.visit.entered_at
+            setReceiptSheet(null)
+            navigate(`/receipt?visit=${encodeURIComponent(entered)}`)
           }}
         />
       )}

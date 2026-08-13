@@ -30,9 +30,10 @@ flowchart LR
 | `homelab_nourish_metrics.yaml` | REST sensors (shop interval, fuel prices); auto-sync `input_number.nourish_days_until_shop` |
 | `homelab_proxmox.yaml` | Ping sensors for CT105/114/117/120 |
 | `nourish_wifi_presence.yaml` | Home Wi‑Fi binary sensor (`francisco_em_wifi_de_casa`) |
-| `nourish_high_accuracy_gps.yaml` | Force high-accuracy GPS when away; turn off on home Wi‑Fi / person home |
 | `nourish_smart_shopping.yaml` | Supermarket zone automations + rest_commands |
 | `nourish_supermarket_discovery.yaml` | Unknown supermarket detection |
+
+`nourish_high_accuracy_gps.yaml` was removed. High-accuracy GPS is owned by the Companion app (zone + trigger range). Deploy deletes the old package from HA if it is still present.
 
 ## Deploy
 
@@ -79,11 +80,30 @@ Actions: ntfy presence → `POST /event leave_home` → n8n despensa check.
 
 **Arrive home** (`francisco_chega_a_casa`) triggers on any of:
 
-- Person state `home`
-- Zone enter `zone.home`
-- Wi‑Fi reconnect to home SSIDs
+- Person state `home` (debounced)
+- Wi‑Fi reconnect to home SSIDs (with roam suppression)
 
 Action: ntfy presence only (no shopping alert).
+
+## Zones + Companion high accuracy
+
+Live HA GPS zones (`.storage/zone`):
+
+| Zone | Radius | Approx. distance |
+|------|--------|------------------|
+| `zone.home` | ~136 m | — |
+| `zone.auchan` | ~135 m | ~2.3 km from home |
+
+Nourish `zone-coords.json` / `supermarkets.json` on CT117 also list other Condeixa stores. Creating them as HA zones is automatic when CT117 has `HA_URL` + `HA_TOKEN` (see `docs/homelab-supermarket-zones.md`). Then select those zones in Companion high-accuracy.
+
+Companion app → Background location → High accuracy:
+
+1. Enable high accuracy mode
+2. **Only when entering zone** → select **Home** and **Auchan**
+3. **Trigger range** → **400–800 m** (keep under ~1000 m so expanded rings do not overlap)
+4. Do **not** run HA `command_high_accuracy_mode` force_on/force_off automations
+
+At home, high accuracy should stay off. It turns on in the approach ring, then off again inside the zone. Geofence leave of `zone.home` is usually fast enough for a future garage-close “I can still see it” trigger; Wi‑Fi leave remains the fast path for Nourish leave-home.
 
 ## Optional: full Proxmox VE integration
 

@@ -82,6 +82,8 @@ for legacy in (
     "nourish-smart-shopping.yaml",
     "nourish-supermarket-metrics.yaml",
     "nourish_supermarket_metrics.yaml",
+    # Companion app owns high-accuracy now (zone + trigger range); do not force_on/off.
+    "nourish_high_accuracy_gps.yaml",
     # Redundant duplicate _2 entity if a UI helper also exists — package is canonical.
     # "nourish_wifi_presence.yaml" — do NOT delete; automations depend on it.
 ):
@@ -244,7 +246,7 @@ fi
 echo ""
 echo "Deployed packages:"
 echo "  homelab_health, homelab_alerts, homelab_nourish_metrics, homelab_proxmox"
-echo "  nourish_smart_shopping, nourish_wifi_presence, nourish_high_accuracy_gps, nourish_supermarket_discovery"
+echo "  nourish_smart_shopping, nourish_wifi_presence, nourish_supermarket_discovery"
 echo ""
 echo "Next: import homelab/n8n/nourish-sync-shop-interval-import.json into n8n (CT114)."
 echo "Restart guessit-bot on CT120 after deploying bot health endpoint (:8090/health)."

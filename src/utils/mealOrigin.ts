@@ -1,8 +1,8 @@
 export type MealOrigin = 'supermercado' | 'restaurante'
 
 export const MEAL_ORIGINS: { key: MealOrigin; label: string }[] = [
-  { key: 'supermercado', label: 'Casa' },
-  { key: 'restaurante', label: 'Fora' },
+  { key: 'supermercado', label: 'Cozinha' },
+  { key: 'restaurante', label: 'Restaurante' },
 ]
 
 export function isMealOrigin(value: string | null | undefined): value is MealOrigin {

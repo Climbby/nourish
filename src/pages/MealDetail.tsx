@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { Product, QuantityUnit, Recipe, RecipeIngredient } from '../types/grocy'
@@ -6,9 +6,11 @@ import { Spinner } from '../components/Spinner'
 import { parseDescription, parseSteps } from '../utils/parseDescription'
 import { isRestaurantMeal, mealOriginLabel, resolveMealOrigin } from '../utils/mealOrigin'
 import { VerifiedBadge } from '../components/VerifiedBadge'
-import { addPortions } from '../utils/buildDescription'
 import { useFavourites } from '../hooks/useFavourites'
-import { logMealConsumption } from '../utils/logMealConsumption'
+import { useShowNutrition } from '../hooks/useShowNutrition'
+import { getLastNavPath } from '../utils/navMemory'
+import { deriveRecipeNutrition, isNutritionComplete } from '../utils/productNutrition'
+import { makeProductMacroLookup } from '../utils/recipeNutrition'
 
 function PencilIcon() {
   return (
@@ -50,29 +52,28 @@ function HeartIcon({ filled }: { filled: boolean }) {
   )
 }
 
-const PREP_QUICK = [1, 2, 4] as const
-
 export function MealDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { isFavourite, toggle } = useFavourites()
+  const showNutrition = useShowNutrition()
   const [recipe, setRecipe] = useState<Recipe | null>(null)
   const [ingredients, setIngredients] = useState<RecipeIngredient[]>([])
   const [products, setProducts] = useState<Record<number, Product>>({})
   const [units, setUnits] = useState<Record<number, QuantityUnit>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [logging, setLogging] = useState(false)
-  const [logged, setLogged] = useState(false)
-  const [logError, setLogError] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [showPrepareSheet, setShowPrepareSheet] = useState(false)
-  const [prepCount, setPrepCount] = useState('1')
-  const [prepSaving, setPrepSaving] = useState(false)
-  const [confirmLogZero, setConfirmLogZero] = useState(false)
   const [kitchenMode, setKitchenMode] = useState(false)
   const [kitchenStep, setKitchenStep] = useState(0)
+
+  // Built here rather than below the early returns, so the hook order stays fixed.
+  const macroLookup = useMemo(
+    () => makeProductMacroLookup(Object.values(products)),
+    [products]
+  )
 
   useEffect(() => {
     const numId = id ? parseInt(id, 10) : NaN
@@ -88,70 +89,26 @@ export function MealDetail() {
         if (!mounted) return
         setRecipe(r)
         setIngredients(ingrs)
-        if (ingrs.length > 0) {
-          const [prods, qus] = await Promise.all([grocy.getProducts(), grocy.getQuantityUnits()])
-          if (!mounted) return
-          setProducts(Object.fromEntries(prods.map((p) => [p.id, p])))
-          setUnits(Object.fromEntries(qus.map((u) => [u.id, u])))
-        }
+        // Products are needed even without Grocy recipe ingredients, because
+        // nutrition is derived from the macros stored on them.
+        const [prods, qus] = await Promise.all([grocy.getProducts(), grocy.getQuantityUnits()])
+        if (!mounted) return
+        setProducts(Object.fromEntries(prods.map((p) => [p.id, p])))
+        setUnits(Object.fromEntries(qus.map((u) => [u.id, u])))
       })
       .catch((e: Error) => { if (mounted) setError(e.message) })
       .finally(() => { if (mounted) setLoading(false) })
     return () => { mounted = false }
   }, [id])
 
-  async function handleLog(recipeId: number) {
-    if (!recipe) return
-    setConfirmLogZero(false)
-    setLogging(true)
-    setLogError(null)
-    try {
-      const { description } = await logMealConsumption(recipeId, recipe.description ?? '')
-      setRecipe({ ...recipe, description })
-      setLogged(true)
-      setTimeout(() => setLogged(false), 2500)
-    } catch (e) {
-      setLogError(e instanceof Error ? e.message : 'Erro ao registar')
-    } finally {
-      setLogging(false)
-    }
-  }
-
-  function requestLog(recipeId: number) {
-    if (!recipe) return
-    const portions = parseDescription(recipe.description ?? '').portions
-    if (portions !== null && portions <= 0) {
-      setConfirmLogZero(true)
-      return
-    }
-    handleLog(recipeId)
-  }
-
-  async function handlePrepare(amount?: number) {
-    const n = amount ?? parseInt(prepCount, 10)
-    if (!recipe || isNaN(n) || n <= 0) return
-    setPrepSaving(true)
-    setLogError(null)
-    try {
-      const newDesc = addPortions(recipe.description ?? '', n)
-      await grocy.updateRecipe(recipe.id, { description: newDesc })
-      setRecipe({ ...recipe, description: newDesc })
-      setShowPrepareSheet(false)
-      setPrepCount('1')
-    } catch (e) {
-      setLogError(e instanceof Error ? e.message : 'Erro ao preparar')
-    } finally {
-      setPrepSaving(false)
-    }
-  }
-
   async function handleDelete(recipeId: number) {
     setDeleting(true)
+    setDeleteError(null)
     try {
       await grocy.deleteRecipe(recipeId)
-      navigate('/meals')
+      navigate(getLastNavPath('meals'))
     } catch (e) {
-      setLogError(e instanceof Error ? e.message : 'Erro ao apagar')
+      setDeleteError(e instanceof Error ? e.message : 'Erro ao apagar')
       setConfirmDelete(false)
     } finally {
       setDeleting(false)
@@ -161,7 +118,7 @@ export function MealDetail() {
   const header = (title: string, recipeId?: number) => (
     <header className="flex items-center gap-3 px-4 pt-12 pb-4 border-b border-nourish-border">
       <button
-        onClick={() => navigate('/meals')}
+        onClick={() => navigate(getLastNavPath('meals'))}
         className="p-2 -ml-2 text-nourish-text-dim rounded-lg focus:outline-none focus:ring-2 focus:ring-nourish-primary"
       >
         <BackIcon />
@@ -216,19 +173,31 @@ export function MealDetail() {
   const nutricaoOk = parsed.verified.includes('nutricao')
   const precoOk = parsed.verified.includes('preco')
   const stepLines = restaurant ? [] : parseSteps(steps)
-  const tracksPortions = parsed.portions !== null && !restaurant
 
-  const nutritionItems = nutrition
+  // Prefer nutrition computed from ingredient quantities × product macros.
+  // Fall back to the hand-entered [Nutricao] block only while that is incomplete.
+  const derived = restaurant
+    ? null
+    : deriveRecipeNutrition(parsed.ingredientItems, macroLookup, parsed.portions)
+
+  const derivedOk = derived !== null && isNutritionComplete(derived)
+  const shownNutrition = derivedOk ? derived : nutrition
+
+  const nutritionItems = shownNutrition
     ? [
-        { label: 'KCAL', value: nutrition.calories },
-        { label: 'PROT', value: `${nutrition.protein}g` },
-        { label: 'HC', value: `${nutrition.carbs}g` },
-        { label: 'GORD', value: `${nutrition.fat}g` },
+        { label: 'KCAL', value: shownNutrition.calories },
+        { label: 'PROT', value: `${shownNutrition.protein}g` },
+        { label: 'HC', value: `${shownNutrition.carbs}g` },
+        { label: 'GORD', value: `${shownNutrition.fat}g` },
+        ...(derivedOk ? [{ label: 'FIBRA', value: `${derived.fibre}g` }] : []),
       ]
     : []
 
   return (
-    <div className="min-h-screen bg-nourish-bg" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 180px)' }}>
+    <div
+      className="min-h-screen bg-nourish-bg"
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)' }}
+    >
       {header(recipe.name, recipe.id)}
 
       {recipe.picture_file_name && (
@@ -241,7 +210,7 @@ export function MealDetail() {
       )}
 
       <div className="px-4 pt-5 space-y-6">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] px-2 py-0.5 rounded bg-nourish-surface-high text-nourish-text-dim font-semibold uppercase tracking-wider">
             {mealOriginLabel(origin)}
           </span>
@@ -250,29 +219,58 @@ export function MealDetail() {
               {parsed.category}
             </span>
           )}
+          {restaurant && parsed.location && (
+            <span className="text-[10px] px-2 py-0.5 rounded bg-nourish-surface-high text-nourish-text font-medium">
+              {parsed.location}
+            </span>
+          )}
+          {!restaurant && parsed.timeMinutes !== null && (
+            <span className="text-[10px] px-2 py-0.5 rounded bg-nourish-surface-high text-nourish-text-dim font-medium tabular-nums">
+              {parsed.timeMinutes} min
+            </span>
+          )}
         </div>
 
-        {(nutrition || price !== null) && (
+        {((showNutrition && shownNutrition) || price !== null) && (
           <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
-            {nutrition && (
+            {showNutrition && shownNutrition && (
               <div>
-                {nutricaoOk && (
-                  <div className="flex items-center justify-end mb-2">
-                    <VerifiedBadge verified />
-                  </div>
-                )}
-                <div className="grid grid-cols-4 gap-2 text-center">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-nourish-text-dim">
+                    {derivedOk ? 'Calculada dos ingredientes' : 'Estimada'}
+                  </span>
+                  {nutricaoOk && !derivedOk && <VerifiedBadge verified />}
+                </div>
+                <div
+                  className={`grid gap-2 text-center ${
+                    nutritionItems.length === 5 ? 'grid-cols-5' : 'grid-cols-4'
+                  }`}
+                >
                   {nutritionItems.map(({ label, value }) => (
                     <div key={label} className="flex flex-col items-center gap-0.5">
                       <span className="text-nourish-primary font-bold text-sm tabular-nums">{value}</span>
-                      <span className="text-nourish-text-dim text-xs tracking-wider">{label}</span>
+                      <span className="text-nourish-text-dim text-[10px] tracking-wider">{label}</span>
                     </div>
                   ))}
                 </div>
+                {derived && !derivedOk && (derived.missingGrams.length > 0 || derived.missingMacros.length > 0) && (
+                  <p className="text-[11px] text-nourish-text-dim leading-relaxed mt-3 pt-3 border-t border-nourish-border">
+                    {derived.missingGrams.length > 0 && (
+                      <>Sem quantidade: {derived.missingGrams.join(', ')}. </>
+                    )}
+                    {derived.missingMacros.length > 0 && (
+                      <>Sem nutrição no produto: {derived.missingMacros.join(', ')}.</>
+                    )}
+                  </p>
+                )}
               </div>
             )}
             {price !== null && (
-              <div className={`flex items-center justify-between ${nutrition ? 'border-t border-nourish-border pt-3' : ''}`}>
+              <div
+                className={`flex items-center justify-between ${
+                  showNutrition && shownNutrition ? 'border-t border-nourish-border pt-3' : ''
+                }`}
+              >
                 <span className="text-nourish-text-dim text-sm">{precoOk ? 'Custo' : 'Custo estimado'}</span>
                 <span className="text-nourish-primary font-semibold inline-flex items-center gap-1.5">
                   €{price.toFixed(2)}
@@ -314,6 +312,11 @@ export function MealDetail() {
                 <li key={i} className="flex items-center gap-2 text-sm">
                   <span className="w-1.5 h-1.5 rounded-full bg-nourish-primary flex-shrink-0" />
                   <span className="text-nourish-text">{item.name}</span>
+                  {item.grams !== null && (
+                    <span className="text-nourish-text-dim text-xs tabular-nums">
+                      {item.grams} g
+                    </span>
+                  )}
                   {item.price !== null && (
                     <span className="ml-auto text-nourish-text-dim text-xs tabular-nums">
                       €{item.price.toFixed(2)}
@@ -350,6 +353,21 @@ export function MealDetail() {
               ))}
             </ol>
           </section>
+        )}
+
+        {!restaurant && parsed.notes && (
+          <section>
+            <h3 className="font-semibold text-nourish-text mb-3">Notas</h3>
+            <div className="rounded-xl border border-nourish-border bg-nourish-surface p-4">
+              <p className="text-sm text-nourish-text-dim leading-relaxed whitespace-pre-line">
+                {parsed.notes}
+              </p>
+            </div>
+          </section>
+        )}
+
+        {deleteError && (
+          <p className="text-red-400 text-xs text-center">{deleteError}</p>
         )}
       </div>
 
@@ -404,72 +422,11 @@ export function MealDetail() {
         </div>
       )}
 
-      {showPrepareSheet && (
-        <div className="fixed inset-0 z-50 bg-black/60" onClick={() => !prepSaving && setShowPrepareSheet(false)}>
-          <div
-            className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface rounded-t-2xl"
-            style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-4 space-y-4">
-              <div className="text-center">
-                <p className="font-semibold text-nourish-text">Preparar refeição</p>
-                <p className="text-xs text-nourish-text-dim mt-1 leading-snug">
-                  Quantas porções guardaste no frigorífico?
-                </p>
-              </div>
-              <div className="flex gap-2">
-                {PREP_QUICK.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    disabled={prepSaving}
-                    onClick={() => handlePrepare(n)}
-                    className="flex-1 py-3 rounded-xl bg-nourish-surface-high border border-nourish-border text-nourish-text font-semibold text-sm active:bg-nourish-primary active:text-nourish-on-primary active:border-nourish-primary disabled:opacity-50 focus:outline-none transition-colors"
-                  >
-                    +{n}
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  value={prepCount}
-                  onChange={(e) => setPrepCount(e.target.value)}
-                  min="1"
-                  disabled={prepSaving}
-                  className="flex-1 px-3 py-2.5 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text text-sm text-center focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-                />
-                <button
-                  type="button"
-                  disabled={prepSaving}
-                  onClick={() => handlePrepare()}
-                  className="px-5 py-2.5 rounded-xl bg-nourish-primary text-nourish-on-primary text-sm font-semibold disabled:opacity-50 focus:outline-none"
-                >
-                  {prepSaving ? '…' : 'OK'}
-                </button>
-              </div>
-              <button
-                type="button"
-                disabled={prepSaving}
-                onClick={() => setShowPrepareSheet(false)}
-                className="w-full py-2 text-nourish-text-dim text-sm focus:outline-none"
-              >
-                Cancelar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div
-        className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface border-t border-nourish-border p-4"
-        style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
-      >
-        {logError && (
-          <p className="text-red-400 text-xs text-center mb-2">{logError}</p>
-        )}
-        {confirmDelete ? (
+      {confirmDelete && (
+        <div
+          className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-sm bg-nourish-surface border-t border-nourish-border p-4"
+          style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
+        >
           <div className="flex gap-2">
             <button
               onClick={() => setConfirmDelete(false)}
@@ -486,59 +443,8 @@ export function MealDetail() {
               {deleting ? 'A apagar...' : 'Apagar refeição'}
             </button>
           </div>
-        ) : confirmLogZero ? (
-          <div className="space-y-2">
-            <p className="text-xs text-nourish-text-dim text-center leading-snug">
-              Sem porções prontas no frigorífico. Registar na mesma?
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmLogZero(false)}
-                className="flex-1 py-3.5 rounded-xl border border-nourish-border text-nourish-text-dim font-semibold text-sm focus:outline-none"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => handleLog(recipe.id)}
-                disabled={logging}
-                className="flex-1 py-3.5 rounded-xl bg-nourish-primary text-nourish-on-primary font-semibold text-sm disabled:opacity-50 focus:outline-none"
-              >
-                Sim, comi hoje
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {tracksPortions && (
-              <div className="flex items-center justify-between text-sm px-1">
-                <span className="text-nourish-text-dim">Porções no frigorífico</span>
-                <span className={`font-semibold ${parsed.portions! > 0 ? 'text-nourish-primary' : 'text-nourish-border'}`}>
-                  {parsed.portions! > 0 ? parsed.portions : 'Nenhuma'}
-                </span>
-              </div>
-            )}
-            <button
-              onClick={() => requestLog(recipe.id)}
-              disabled={logging || logged}
-              className="w-full bg-nourish-primary text-nourish-on-primary font-semibold py-3.5 rounded-xl active:opacity-90 transition-opacity disabled:opacity-70 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-2 focus:ring-offset-nourish-surface"
-            >
-              {logged ? 'Registado ✓' : logging ? 'A registar...' : 'Registar refeição'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowPrepareSheet(true)}
-              className="w-full py-2.5 rounded-xl border border-nourish-border text-nourish-text-dim text-sm font-semibold focus:outline-none"
-            >
-              Preparar refeição
-            </button>
-            <p className="text-[10px] text-nourish-text-dim text-center leading-snug px-2">
-              Registar = comeste hoje · Preparar = guardaste porções no frigorífico
-            </p>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }

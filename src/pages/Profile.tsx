@@ -4,9 +4,11 @@ import { rememberNavPath } from '../utils/navMemory'
 import { grocy } from '../api/grocy'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 import { BottomNav } from '../components/BottomNav'
+import { BottomSheet } from '../components/BottomSheet'
 import { ConnectionError } from '../components/ConnectionError'
 import { CarModelInput } from '../components/CarModelInput'
 import { HelpInfo } from '../components/HelpInfo'
+import { IosToggle } from '../components/IosToggle'
 import { MealSpendSheet } from '../components/MealSpendSheet'
 import { VisitFuelTripsSheet } from '../components/VisitFuelTripsSheet'
 import { VisitShoppingTripsSheet } from '../components/VisitShoppingTripsSheet'
@@ -43,6 +45,9 @@ import {
 import {
   ACTIVITY_LABELS,
   GOAL_LABELS,
+  HEALTH_CONDITIONS,
+  HEALTH_CONDITION_LABELS,
+  dietaryFlags,
   profileAge,
   profileSummary,
   recommendedDailyTargets,
@@ -138,36 +143,6 @@ function FuelMissingReport({
         : status === 'error'
           ? 'Falhou — tentar de novo'
           : label ?? `Reportar: ${fuelLabel} em falta`}
-    </button>
-  )
-}
-
-function IosToggle({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean
-  onChange: (next: boolean) => void
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={`relative w-[42px] h-[26px] flex-shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-2 focus:ring-offset-nourish-surface ${
-        checked ? 'bg-nourish-primary' : 'bg-nourish-border'
-      }`}
-    >
-      <span
-        aria-hidden
-        className={`absolute top-[2px] left-[2px] w-[22px] h-[22px] rounded-full bg-white shadow transition-transform duration-200 ease-out ${
-          checked ? 'translate-x-[16px]' : 'translate-x-0'
-        }`}
-      />
     </button>
   )
 }
@@ -304,6 +279,7 @@ export function Profile() {
   } = useUserProfile()
   const { prefs, updatePref } = useDisplayPrefs()
   const { activeProfile, activeId } = useHouseholdProfiles()
+  const [profilePickerOpen, setProfilePickerOpen] = useState(false)
   const { cars, addCar, updateCar, removeCar, refreshCars, enabled: carsEnabled, setEnabled: setCarsEnabled } =
     useCars()
   const { prices: fuelPrices, refresh: refreshFuel } = useFuelPrices()
@@ -556,7 +532,30 @@ export function Profile() {
           paddingTop: 'max(3rem, calc(env(safe-area-inset-top, 0px) + 0.75rem))',
         }}
       >
-        <h1 className="text-2xl font-bold text-nourish-text">Perfil</h1>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold text-nourish-text">Perfil</h1>
+          <button
+            type="button"
+            onClick={() => setProfilePickerOpen(true)}
+            className="flex-shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-2 focus:ring-offset-nourish-bg"
+            aria-label={
+              activeProfile
+                ? `Trocar perfil (activo: ${activeProfile.name})`
+                : 'Escolher perfil'
+            }
+            title={activeProfile?.name ?? 'Escolher perfil'}
+          >
+            <span
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold text-nourish-bg border-2 border-nourish-border"
+              style={{
+                backgroundColor: activeProfile?.color ?? '#6b7280',
+              }}
+              aria-hidden
+            >
+              {activeProfile?.name.trim().charAt(0).toUpperCase() || '?'}
+            </span>
+          </button>
+        </div>
         <div
           className="flex gap-2 mt-4 overflow-x-auto pb-0.5"
           style={{ scrollbarWidth: 'none' }}
@@ -582,6 +581,37 @@ export function Profile() {
           ))}
         </div>
       </header>
+
+      <BottomSheet
+        open={profilePickerOpen}
+        onClose={() => setProfilePickerOpen(false)}
+        ariaLabel="Trocar perfil"
+      >
+        <div className="px-4 pb-2">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h2 className="text-base font-bold text-nourish-text">Trocar perfil</h2>
+            <button
+              type="button"
+              onClick={() => setProfilePickerOpen(false)}
+              className="p-1.5 -mr-1 text-nourish-text-dim focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded-lg"
+              aria-label="Fechar"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="w-5 h-5"
+                aria-hidden
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <ProfilePicker embedded onPicked={() => setProfilePickerOpen(false)} />
+        </div>
+      </BottomSheet>
 
       <main className="p-4 space-y-5" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
         {tab === 'resumo' && (
@@ -881,6 +911,63 @@ export function Profile() {
                           ))}
                         </select>
                       </label>
+
+                      <fieldset className="col-span-2">
+                        <legend className="text-xs text-nourish-text-dim mb-1.5">
+                          Condições de saúde
+                        </legend>
+                        <div className="flex flex-wrap gap-2">
+                          {HEALTH_CONDITIONS.map((c) => {
+                            const active = profile.conditions.includes(c)
+                            return (
+                              <button
+                                key={c}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() =>
+                                  updateBodyField(
+                                    'conditions',
+                                    active
+                                      ? profile.conditions.filter((x) => x !== c)
+                                      : [...profile.conditions, c]
+                                  )
+                                }
+                                className={`px-3 py-2 rounded-xl text-xs font-medium border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                                  active
+                                    ? 'bg-nourish-primary text-nourish-on-primary border-nourish-primary'
+                                    : 'bg-nourish-surface text-nourish-text-dim border-nourish-border'
+                                }`}
+                              >
+                                {HEALTH_CONDITION_LABELS[c]}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </fieldset>
+
+                      <label className="text-xs text-nourish-text-dim col-span-2">
+                        Alergias e o que não come
+                        <textarea
+                          className={`${inputClass} mt-1 resize-none`}
+                          rows={2}
+                          value={profile.dislikes}
+                          onChange={(e) => updateBodyField('dislikes', e.target.value)}
+                          placeholder="Ex: marisco, coentros, lactose..."
+                        />
+                      </label>
+
+                      {dietaryFlags(profile).length > 0 && (
+                        <ul className="col-span-2 space-y-2">
+                          {dietaryFlags(profile).map((flag, i) => (
+                            <li
+                              key={i}
+                              className="text-xs text-nourish-text-dim leading-relaxed rounded-xl border border-nourish-border bg-nourish-surface-high px-3 py-2"
+                            >
+                              {flag}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1277,22 +1364,6 @@ export function Profile() {
 
         {!loading && !error && tab === 'definicoes' && (
           <>
-            <section className="space-y-3">
-              <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
-                Quem está a usar
-              </h2>
-              <p className="text-xs text-nourish-text-dim leading-snug px-0.5">
-                Perfil activo:{' '}
-                <span className="font-semibold text-nourish-text">
-                  {activeProfile?.name ?? '—'}
-                </span>
-                . Idas ao super e “comi isto” ficam teus por defeito; podes partilhar com a família.
-              </p>
-              <div className="rounded-2xl border border-nourish-border bg-nourish-surface p-3">
-                <ProfilePicker embedded />
-              </div>
-            </section>
-
             <section className="space-y-3">
               <h2 className="text-xs font-semibold text-nourish-primary uppercase tracking-wider">
                 Aparência

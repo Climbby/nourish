@@ -4,3 +4,5 @@ dist/
 .env.local
 .env.*.local
 .playwright-mcp/
+prices-site/node_modules/
+prices-site/dist/

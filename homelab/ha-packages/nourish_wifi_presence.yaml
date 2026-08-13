@@ -2,7 +2,7 @@
 # Requires: Companion app → Manage Sensors → Wi-Fi connection → ON
 # Verify sensor name under Settings → Devices → Mobile App → your phone.
 # Entity id must stay binary_sensor.francisco_em_wifi_de_casa (used by presence
-# automations in automations.yaml and francisco_fora_de_casa in GPS package).
+# automations in automations.yaml).
 #
 # Phone entity is usually sensor.telemovel_francisco_wi_fi_connection after enable;
 # also accept the older/renamed sensor.francisco_wi_fi_connection.

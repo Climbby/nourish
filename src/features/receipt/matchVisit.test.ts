@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { SupermarketVisit } from '../../api/homelabMetrics'
-import { localReceiptToUtcMs, matchVisitForReceipt, storeToZone } from './matchVisit'
+import {
+  localReceiptToUtcMs,
+  matchVisitForReceipt,
+  storeToZone,
+  zoneMatchesStore,
+} from './matchVisit'
 
 const visit = (over: Partial<SupermarketVisit> = {}): SupermarketVisit => ({
   entered_at: '2026-06-23T09:31:05.000Z',
@@ -13,7 +18,6 @@ const visit = (over: Partial<SupermarketVisit> = {}): SupermarketVisit => ({
 
 describe('localReceiptToUtcMs', () => {
   it('treats receipt wall time as Lisbon (UTC+1 in June)', () => {
-    // 10:39 local in summer (WEST) → 09:39 UTC
     expect(localReceiptToUtcMs('2026-06-23T10:39')).toBe(Date.UTC(2026, 5, 23, 9, 39, 0))
   })
 
@@ -23,20 +27,33 @@ describe('localReceiptToUtcMs', () => {
   })
 })
 
-describe('storeToZone', () => {
-  it('maps known stores', () => {
+describe('storeToZone / zoneMatchesStore', () => {
+  it('maps known stores to zone prefixes', () => {
     expect(storeToZone('auchan')).toBe('zone.auchan')
     expect(storeToZone('continente')).toBe('zone.continente')
     expect(storeToZone('other')).toBeNull()
+  })
+
+  it('matches real HA zone ids by brand substring', () => {
+    expect(zoneMatchesStore('zone.continente_bom_dia_condeixa_a_nova', 'continente')).toBe(true)
+    expect(zoneMatchesStore('zone.auchan_condeixa_a_nova', 'auchan')).toBe(true)
+    expect(zoneMatchesStore('zone.auchan', 'continente')).toBe(false)
   })
 })
 
 describe('matchVisitForReceipt', () => {
   it('matches the visit whose window contains the receipt time', () => {
-    // receipt 10:39 local = 09:39 UTC, inside 09:31–09:46
     expect(matchVisitForReceipt('2026-06-23T10:39', 'auchan', [visit()])).toMatchObject({
       entered_at: '2026-06-23T09:31:05.000Z',
     })
+  })
+
+  it('matches continente brand zones beyond zone.continente', () => {
+    expect(
+      matchVisitForReceipt('2026-06-23T10:39', 'continente', [
+        visit({ zone: 'zone.continente_bom_dia_condeixa_a_nova' }),
+      ])
+    ).not.toBeNull()
   })
 
   it('excludes a visit in a different zone than the store', () => {

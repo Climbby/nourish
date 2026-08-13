@@ -1,14 +1,21 @@
+/** True for raw fetch failures and our friendly Portuguese network messages. */
+function messageLooksLikeNetworkFailure(msg: string): boolean {
+  const m = msg.toLowerCase()
+  return (
+    m.includes('failed to fetch') ||
+    m.includes('networkerror') ||
+    m.includes('load failed') ||
+    m.includes('network request failed') ||
+    m.includes('não foi possível ligar ao servidor') ||
+    m.includes('sem ligação à internet')
+  )
+}
+
 /** True when fetch failed before getting an HTTP response (offline, DNS, SW, etc.). */
 export function isNetworkFetchError(error: unknown): boolean {
+  if (typeof error === 'string') return messageLooksLikeNetworkFailure(error)
   if (!(error instanceof Error)) return false
-  const msg = error.message.toLowerCase()
-  return (
-    error.name === 'TypeError' ||
-    msg.includes('failed to fetch') ||
-    msg.includes('networkerror') ||
-    msg.includes('load failed') ||
-    msg.includes('network request failed')
-  )
+  return error.name === 'TypeError' || messageLooksLikeNetworkFailure(error.message)
 }
 
 export function friendlyNetworkError(error: unknown): string {

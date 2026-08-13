@@ -1,8 +1,15 @@
 import { DEFAULT_TARGETS, type NutritionTargets } from '../hooks/useNutritionTargets'
-import type { MealSlot, PlannedSlot } from '../hooks/usePlannedMeals'
+import {
+  slotHasMeal,
+  slotRecipeIds,
+  todayIsoDate,
+  type MealSlot,
+  type PlannedSlot,
+} from '../hooks/usePlannedMeals'
 import type { Recipe } from '../types/grocy'
 import { resolveMealOrigin, type MealOrigin } from './mealOrigin'
 import { parseDescription, type Nutrition } from './parseDescription'
+import { addDays, diffDays, MAX_FUTURE_DAYS, PAST_WINDOW_DAYS } from './planDates'
 import {
   medianRecipePrice,
   scoreRecipe,
@@ -20,30 +27,63 @@ export const SLOT_LABEL: Record<MealSlot, string> = {
 
 const PT_WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 
-/** Main meal ≈ half of daily targets when planning two Completa meals/day */
+/** Main meal ≈ half of daily targets when planning two meals/day */
 const MEAL_SHARE = 0.5
 
-export function weekdayLabel(dayOffset: number, date = new Date()): string {
-  const d = new Date(date)
-  d.setHours(12, 0, 0, 0)
-  d.setDate(d.getDate() + dayOffset)
-  const name = PT_WEEKDAYS[d.getDay()]
-  return dayOffset === 0 ? `${name} (Hoje)` : name
+export function weekdayLabel(date: string, today = todayIsoDate()): string {
+  const [y, m, d] = date.split('-').map(Number)
+  const name = PT_WEEKDAYS[new Date(y, m - 1, d, 12).getDay()]
+  const offset = diffDays(today, date)
+  if (offset === 0) return `${name} (Hoje)`
+  if (offset === 1) return `${name} (Amanhã)`
+  if (offset === -1) return `${name} (Ontem)`
+  return name
 }
 
-/** Days 0..N visible: day 0 always; day k+1 if day k has any decided slot. */
-export function visibleDayCount(slots: PlannedSlot[], maxDays = 7): number {
+/**
+ * How many days forward the plan is open for.
+ *
+ * Today is always open; day k+1 unlocks once day k has anything at all, so the
+ * week reveals itself as it gets filled rather than dumping 7 empty days.
+ */
+export function futureDayCount(
+  slots: PlannedSlot[],
+  today = todayIsoDate(),
+  maxDays = MAX_FUTURE_DAYS
+): number {
   let visible = 1
   for (let day = 0; day < maxDays - 1; day++) {
-    const hasAny = slots.some((s) => s.dayOffset === day)
-    if (!hasAny) break
+    const date = addDays(today, day)
+    if (!slots.some((s) => s.date === date)) break
     visible = day + 2
   }
   return Math.min(maxDays, visible)
 }
 
-function completaRecipes(recipes: Recipe[]): Recipe[] {
-  return recipes.filter((r) => parseDescription(r.description ?? '').category === 'Completa')
+/**
+ * Every date the plan renders, newest first: the open future on top, then
+ * today, then the days already gone underneath.
+ *
+ * Past days only appear when they hold something. Seven empty rows below today
+ * would say nothing, so the record grows on its own as meals get eaten.
+ */
+export function planDates(
+  slots: PlannedSlot[],
+  today = todayIsoDate(),
+  maxFuture = MAX_FUTURE_DAYS,
+  pastWindow = PAST_WINDOW_DAYS
+): string[] {
+  const future: string[] = []
+  const count = futureDayCount(slots, today, maxFuture)
+  for (let day = count - 1; day >= 0; day--) future.push(addDays(today, day))
+
+  const past: string[] = []
+  for (let day = 1; day <= pastWindow; day++) {
+    const date = addDays(today, -day)
+    if (slots.some((s) => s.date === date)) past.push(date)
+  }
+
+  return [...future, ...past]
 }
 
 function relativeGap(key: keyof Nutrition, running: Nutrition, expected: Nutrition): number {
@@ -78,29 +118,26 @@ function nutritionScore(
   return score
 }
 
+/** Every recipe across every part of the given slots, in plan order. */
+export function slotRecipes(
+  slots: PlannedSlot[],
+  recipeById: Map<number, Recipe>
+): Recipe[] {
+  const out: Recipe[] = []
+  for (const slot of slots) {
+    for (const id of slotRecipeIds(slot)) {
+      const recipe = recipeById.get(id)
+      if (recipe) out.push(recipe)
+    }
+  }
+  return out
+}
+
 function runningFromSlots(
   decided: PlannedSlot[],
   recipeById: Map<number, Recipe>
 ): WeekPlanTotals {
-  const totals = emptyWeekTotals()
-  for (const s of decided) {
-    if (s.recipeId == null) continue
-    const recipe = recipeById.get(s.recipeId)
-    if (!recipe) continue
-    const { nutrition, price } = parseDescription(recipe.description ?? '')
-    if (nutrition) {
-      totals.calories += nutrition.calories
-      totals.protein += nutrition.protein
-      totals.carbs += nutrition.carbs
-      totals.fat += nutrition.fat
-      totals.daysWithNutrition++
-    }
-    if (price !== null) {
-      totals.spend += price
-      totals.mealsWithPrice++
-    }
-  }
-  return totals
+  return sumRecipesNutrition(slotRecipes(decided, recipeById))
 }
 
 export function sumRecipesNutrition(recipes: Recipe[]): WeekPlanTotals {
@@ -122,22 +159,68 @@ export function sumRecipesNutrition(recipes: Recipe[]): WeekPlanTotals {
   return totals
 }
 
-export function daySpend(dayOffset: number, slots: PlannedSlot[], recipeById: Map<number, Recipe>): number {
+function round1(value: number): number {
+  return Math.round(value * 10) / 10
+}
+
+/**
+ * What a card shows for a slot: the whole meal, not just the prato.
+ *
+ * Rounded because summing four parts otherwise surfaces float noise like
+ * 870.0000000001 kcal on the card.
+ */
+export function slotTotals(recipes: Recipe[]): {
+  nutrition: Nutrition | null
+  price: number | null
+} {
+  const totals = sumRecipesNutrition(recipes)
+  return {
+    nutrition:
+      totals.daysWithNutrition > 0
+        ? {
+            calories: Math.round(totals.calories),
+            protein: round1(totals.protein),
+            carbs: round1(totals.carbs),
+            fat: round1(totals.fat),
+          }
+        : null,
+    price: totals.mealsWithPrice > 0 ? totals.spend : null,
+  }
+}
+
+/** Spend for a calendar day, across every part of both slots. */
+export function daySpend(
+  date: string,
+  slots: PlannedSlot[],
+  recipeById: Map<number, Recipe>
+): number {
+  const onDay = slots.filter((s) => s.date === date)
   let spend = 0
-  for (const s of slots) {
-    if (s.dayOffset !== dayOffset || s.recipeId == null) continue
-    const recipe = recipeById.get(s.recipeId)
-    if (!recipe) continue
+  for (const recipe of slotRecipes(onDay, recipeById)) {
     const { price } = parseDescription(recipe.description ?? '')
     if (price !== null) spend += price
   }
   return spend
 }
 
+/** Days the summary bar averages over: today onward, with a prato decided. */
+export function plannedDayCount(slots: PlannedSlot[], today = todayIsoDate()): number {
+  const dates = new Set(
+    slots.filter((s) => s.date >= today && slotHasMeal(s)).map((s) => s.date)
+  )
+  return dates.size
+}
+
+function completaRecipes(recipes: Recipe[]): Recipe[] {
+  return recipes.filter((r) => parseDescription(r.description ?? '').category === 'Completa')
+}
+
 /**
- * Build suggestions for every unlocked undecided slot, in order.
- * Decided meals feed running nutrition; denials exclude specific recipes per slot.
- * Each slot uses originByKey (default Casa / supermercado).
+ * Build a prato suggestion for every undecided slot from today forward.
+ *
+ * Only the prato is suggested — sopa, sobremesa and bebida are filled by habit
+ * and manual choice, not scored. Past days never get suggestions: they are a
+ * record of what was eaten, not something left to decide.
  */
 export function buildSlotSuggestions(
   ctx: SuggestionContext,
@@ -146,7 +229,8 @@ export function buildSlotSuggestions(
   deniedByKey: Record<string, number[]>,
   preference: SuggestionPreference,
   originByKey: Record<string, MealOrigin> = {},
-  maxDays = 7
+  today = todayIsoDate(),
+  maxDays = MAX_FUTURE_DAYS
 ): Map<string, number> {
   const pool = completaRecipes(ctx.recipes)
   const recipeById = new Map(pool.map((r) => [r.id, r]))
@@ -160,47 +244,51 @@ export function buildSlotSuggestions(
   }
 
   const priceAnchor = preference === 'cheap' ? medianRecipePrice(pool) : null
-  const decidedIds = new Set(
-    decided.map((s) => s.recipeId).filter((id): id is number => id != null)
-  )
-  const suggestions = new Map<string, number>()
-  const visible = visibleDayCount(decided, maxDays)
 
-  const ordered: { dayOffset: number; slot: MealSlot }[] = []
+  // Only the upcoming plan competes for recipes. Excluding the past week too
+  // would exhaust a small library; repetition there is already penalised by
+  // scoreRecipe via the Grocy meal_plan.
+  const upcoming = decided.filter((s) => s.date >= today)
+  const decidedIds = new Set(upcoming.flatMap(slotRecipeIds))
+
+  const suggestions = new Map<string, number>()
+  const visible = futureDayCount(decided, today, maxDays)
+
+  const ordered: { date: string; slot: MealSlot }[] = []
   for (let day = 0; day < visible; day++) {
-    for (const slot of MEAL_SLOTS) ordered.push({ dayOffset: day, slot })
+    const date = addDays(today, day)
+    for (const slot of MEAL_SLOTS) ordered.push({ date, slot })
   }
 
-  for (const { dayOffset, slot } of ordered) {
-    const key = `${dayOffset}:${slot}`
-    const existing = decided.find((s) => s.dayOffset === dayOffset && s.slot === slot)
-    if (existing) continue
+  const isBefore = (
+    a: { date: string; slot: MealSlot },
+    b: { date: string; slot: MealSlot }
+  ) => a.date < b.date || (a.date === b.date && a.slot === 'almoco' && b.slot === 'jantar')
+
+  for (const target of ordered) {
+    const { date, slot } = target
+    const key = `${date}:${slot}`
+    if (upcoming.some((s) => s.date === date && s.slot === slot)) continue
 
     const slotOrigin = originByKey[key] ?? 'supermercado'
 
-    const prior = decided.filter(
-      (s) =>
-        s.dayOffset < dayOffset ||
-        (s.dayOffset === dayOffset && s.slot === 'almoco' && slot === 'jantar')
-    )
+    const prior = upcoming.filter((s) => isBefore(s, target))
     const priorFromSuggestions: PlannedSlot[] = []
     for (const [sk, recipeId] of suggestions) {
-      const [dStr, sl] = sk.split(':')
-      const d = Number(dStr)
-      const slSlot = sl as MealSlot
-      if (d < dayOffset || (d === dayOffset && slSlot === 'almoco' && slot === 'jantar')) {
+      const idx = sk.lastIndexOf(':')
+      const suggested = { date: sk.slice(0, idx), slot: sk.slice(idx + 1) as MealSlot }
+      if (isBefore(suggested, target)) {
         priorFromSuggestions.push({
-          dayOffset: d,
-          slot: slSlot,
-          recipeId,
+          date: suggested.date,
+          slot: suggested.slot,
+          parts: [{ role: 'prato', recipeId }],
           source: 'accepted',
         })
       }
     }
 
     const running = runningFromSlots([...prior, ...priorFromSuggestions], recipeById)
-    const mealsBefore = prior.length + priorFromSuggestions.length
-    const mealIndex = mealsBefore + 1
+    const mealIndex = prior.length + priorFromSuggestions.length + 1
     const cumulativeExpected: Nutrition = {
       calories: dailyTargets.calories * MEAL_SHARE * mealIndex,
       protein: dailyTargets.protein * MEAL_SHARE * mealIndex,

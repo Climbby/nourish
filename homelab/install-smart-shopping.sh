@@ -17,11 +17,27 @@ GROCY_API_KEY=$(grep '^GROCY_API_KEY=' "$ROOT/.env" | cut -d= -f2-)
 GROCY_HOST=$(grep '^GROCY_HOST=' "$ROOT/.env" | cut -d= -f2- || echo '192.168.1.61:9192')
 [ -z "${GROCY_HOST:-}" ] && GROCY_HOST='192.168.1.61:9192'
 
+# Optional: long-lived HA token so "Acompanhar" creates GPS zones + enter/leave automations.
+# Prefer shell env; fall back to nourish/.env keys HA_URL / HA_TOKEN / LIFEOS_HA_*.
+HA_URL="${HA_URL:-}"
+HA_TOKEN="${HA_TOKEN:-}"
+if [ -z "$HA_URL" ]; then
+  HA_URL="$(grep -E '^(HA_URL|LIFEOS_HA_URL)=' "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+fi
+if [ -z "$HA_TOKEN" ]; then
+  HA_TOKEN="$(grep -E '^(HA_TOKEN|LIFEOS_HA_TOKEN)=' "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+fi
+HA_URL="${HA_URL:-http://192.168.1.61:8123}"
+
 ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- tee /etc/nourish/env > /dev/null" <<EOF
 GROCY_HOST=$GROCY_HOST
 GROCY_API_KEY=$GROCY_API_KEY
 DESPENSA_GROUP_ID=6
 DAYS_UNTIL_SHOP=4
+HA_URL=$HA_URL
+HA_TOKEN=$HA_TOKEN
+HA_DEVICE_TRACKER=device_tracker.telemovel_francisco
+HA_PERSON_ENTITY=person.francisco_fernandes
 EOF
 
 ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- chmod 600 /etc/nourish/env"
@@ -50,6 +66,7 @@ tar czf - -C "$ROOT/homelab" \
   zone-coords.mjs \
   supermarkets.mjs \
   ha-supermarket-zone.mjs \
+  ha-ws-lite.mjs \
   zone-coords.example.json \
   nourish-check.service 2>/dev/null | \
   ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- tar xzf - -C /opt/nourish" 2>/dev/null || true
@@ -62,6 +79,7 @@ ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- bash -c '
   cp /opt/nourish/zone-coords.mjs /opt/nourish/zone-coords.mjs
   cp /opt/nourish/supermarkets.mjs /opt/nourish/supermarkets.mjs
   cp /opt/nourish/ha-supermarket-zone.mjs /opt/nourish/ha-supermarket-zone.mjs
+  cp /opt/nourish/ha-ws-lite.mjs /opt/nourish/ha-ws-lite.mjs
   mkdir -p /opt/nourish/data
   if [ ! -f /opt/nourish/data/zone-coords.json ]; then
     cp /opt/nourish/zone-coords.example.json /opt/nourish/data/zone-coords.json
@@ -70,5 +88,14 @@ ssh -i "$SSH_KEY" "$PVE_HOST" "pct exec $CT_NOURISH -- bash -c '
   systemctl enable nourish-check
   systemctl restart nourish-check
 '"
+
+if [ -n "${HA_TOKEN:-}" ]; then
+  echo "Waiting for API, then ensuring HA zones for tracked stores..."
+  sleep 2
+  curl -sf -X POST "http://192.168.1.27:8787/supermarkets/ensure-ha-zones" | head -c 2000 || \
+    echo "WARN: ensure-ha-zones failed — check HA_TOKEN and that rest_command.nourish_event_supermarket_zone exists"
+else
+  echo "WARN: HA_TOKEN not set — tracked stores will NOT get HA GPS zones until you add HA_TOKEN to .env and re-run."
+fi
 
 echo "Done. n8n workflow should call http://192.168.1.27:8787/check — add HA package (docs/homelab-smart-shopping.md)."

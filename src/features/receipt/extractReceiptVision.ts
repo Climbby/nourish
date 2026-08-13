@@ -11,14 +11,21 @@ export interface VisionReceipt {
   lines: ReceiptLine[]
 }
 
-const SYSTEM_PROMPT = `És um leitor de talões de supermercado português. Recebes a foto de um talão (possivelmente com texto fino/desbotado e ligeiramente inclinado). Extrai APENAS as linhas de produtos comprados.
+const SYSTEM_PROMPT = `És um leitor de talões de supermercado português (Continente, Auchan, etc.). Recebes a foto de um talão (texto fino, desbotado ou inclinado). Extrai APENAS as linhas de produtos comprados.
 
 Ignora: cabeçalho, NIF, morada, IVA/impostos, subtotais e totais, troco, QR code, ATCUD, cartão/pontos de fidelização e rodapé.
 
-Para cada produto devolve: nome (como impresso, sem códigos internos), quantidade, preço unitário e preço total da linha (EUR, ponto decimal). Para linhas a peso (kg) usa o peso como quantidade. Devolve também a loja, a data E HORA da compra (campo "Data Emissão", formato "YYYY-MM-DD HH:MM") e o total do talão.
+Regras de leitura (muito importantes):
+- Em Continente/Auchan, pesos e volumes acabam muitas vezes em G, KG, L, ML (ex.: "185G", "1L", "4X125G"). Se o último dígito parecer um "6" mas o contexto for peso/volume, prefere "G"/"KG"/"L"/"ML" — NÃO inventes dígitos extra (ex.: "185G" ≠ "1856").
+- Linhas a peso no Continente aparecem como "0.480 * 2.25" (ou com vírgula): o primeiro número é o peso em kg (qty), o segundo é o preço por kg (unitPrice), e o total da linha é peso × €/kg (lineTotal). NÃO uses o peso como se fosse uma quantidade de unidades sem preço/kg.
+- Para produtos embalados (qty inteira 1, 2, …), unitPrice é o preço de uma unidade e lineTotal = qty × unitPrice.
+- Nome: como impresso, sem códigos internos de loja.
+
+Devolve também a loja, a data E HORA da compra (campo "Data Emissão", formato "YYYY-MM-DD HH:MM") e o total do talão.
 
 Devolve APENAS JSON válido, sem texto à volta:
 { "store": "auchan|continente|other|null", "purchasedAt": "YYYY-MM-DD HH:MM|null", "total": number|null, "lines": [ { "name": string, "qty": number, "unitPrice": number, "lineTotal": number } ] }`
+
 
 const MAX_EDGE = 2000
 
@@ -76,9 +83,20 @@ export function normalizeVisionReceipt(raw: unknown): VisionReceipt {
     if (!name || lineTotal === null || lineTotal <= 0) continue
 
     const qtyParsed = parseNum(l.qty)
-    const qty = qtyParsed && qtyParsed > 0 ? qtyParsed : 1
+    let qty = qtyParsed && qtyParsed > 0 ? qtyParsed : 1
     const unitParsed = parseNum(l.unitPrice)
-    const unitPrice = unitParsed && unitParsed > 0 ? unitParsed : lineTotal / qty
+    let unitPrice = unitParsed && unitParsed > 0 ? unitParsed : lineTotal / qty
+
+    // Weight lines misread as "unitPrice = lineTotal" (e.g. 0.480 kg × 2.25 → total 1.08
+    // but model sets unitPrice=1.08). Recover €/kg from total/qty.
+    if (qty > 0 && qty < 1 && Math.abs(unitPrice - lineTotal) < 0.02) {
+      unitPrice = lineTotal / qty
+    }
+    // If qty×unit ≈ total within 3 cents, trust that; else prefer deriving unit from total.
+    const product = qty * unitPrice
+    if (qty > 0 && Math.abs(product - lineTotal) > 0.05 && Math.abs(product - lineTotal) > lineTotal * 0.08) {
+      unitPrice = lineTotal / qty
+    }
 
     const key = `${name.toLowerCase()}|${lineTotal.toFixed(2)}`
     if (seen.has(key)) continue

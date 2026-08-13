@@ -48,6 +48,7 @@ export interface StockLogEntry {
   transaction_id: string
   undone?: number
   row_created_timestamp: string
+  note?: string | null
 }
 
 export interface PriceHistoryPoint {

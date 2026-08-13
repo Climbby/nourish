@@ -23,6 +23,10 @@ Leave home also `POST /event` with `leave_home` (for Perfil metrics).
 | GET | `/metrics` | Visits per week/month, median days between shops |
 | GET | `/supermarket-visits?days=90` | Visit history (enter/leave times, duration) |
 | GET | `/trip-distance?zone=zone.auchan` | Round-trip km home ↔ supermarket (OSRM, or zone-coordinate fallback) |
+| GET | `/home-coords` | Home zone lat/lon (Fora distance sort) |
+| POST | `/store-prices` | Append product price observations from receipts |
+| GET | `/store-prices` | Latest prices (+ store summary); query `q`, `store_id` |
+| GET | `/store-prices/history` | Price history for a product (`product_id` or `product_name`) |
 | POST | `/sync-zone-coords` | Pull zone lat/lon from HA (needs `HA_URL` + `HA_TOKEN` on server) |
 | POST | `/event` | `supermarket_enter` (optional `zone`), `supermarket_leave`, or `leave_home` |
 | POST | `/at-supermarket` | JSON shopping list summary |

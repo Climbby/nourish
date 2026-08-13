@@ -36,8 +36,8 @@ export function MealOriginField({ value, onChange, labelClass = '' }: Props) {
       </div>
       <p className="text-xs text-nourish-text-dim mt-1.5">
         {value === 'restaurante'
-          ? 'Refeição fora — sem ingredientes nem passos de preparação.'
-          : 'Cozinhas em casa com ingredientes do supermercado.'}
+          ? 'Refeição em restaurante — sem ingredientes nem passos de preparação.'
+          : 'Cozinha em casa com ingredientes do supermercado.'}
         {' '}Sugerido pela presença no Home Assistant; podes alterar.
       </p>
     </div>

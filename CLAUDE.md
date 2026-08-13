@@ -13,6 +13,7 @@ npm run dev       # Start Vite dev server with HMR (proxies /api → Grocy)
 npm run build     # Type-check (tsc) then bundle to dist/
 npm run preview   # Serve the production build locally
 npm test          # Run Vitest unit tests
+node --test homelab/*.test.mjs   # Homelab scripts — plain node:test, excluded from Vitest
 ```
 
 Copy `.env.example` to `.env` and fill in `GROCY_API_KEY`, `GROCY_HOST`, and Grocy entity IDs before running `npm run dev`.
@@ -71,8 +72,8 @@ Grocy's `Recipe.description` field stores structured data the schema doesn't nat
 
 ```
 [Ingredientes]
-Atum|1.50
-Esparguete|0.80
+Atum|1.50|80
+Esparguete|0.80|250
 
 [Passos]
 step 1
@@ -91,11 +92,55 @@ Completa
 
 [Porcoes]
 3
+
+[Tempo]
+25
+
+[Notas]
+Menos sal da próxima.
 ```
 
 `parseDescription` / `buildDescription` handle encode/decode. Portions are decremented on meal log (with rollback on failure) and incremented via "Preparar refeição".
 
-Pantry products store buy amount in `Product.description` as `[BuyAmount]\n6`.
+`buildDescription` takes a single `BuildDescriptionInput` options object — not positional args.
+
+**Ingredient lines** are `Nome`, `Nome|preco`, or `Nome|preco|gramas` (price may be blank: `Nome||gramas`). The 3-field form is only read when both trailing fields are numeric, so names containing a literal `|` still parse the legacy way.
+
+**`[Tempo]`** is cook time in minutes — an estimate to be replaced by the real measured time. **`[Notas]`** is free text that accumulates as a recipe gets repeated.
+
+### Product nutrition
+
+Pantry products store buy amount in `Product.description` as `[BuyAmount]\n6`, optional cooking alias and per-unit weight, plus per-100 g macros:
+
+```
+[BuyAmount]
+1
+
+[NomeCurto]
+Atum
+
+[Generico]
+Cogumelos
+
+[UnitGrams]
+120
+
+[Nutricao100]
+calories:350
+protein:12
+carbs:70
+fat:1.5
+fibre:3
+source:rotulo
+```
+
+`[NomeCurto]` is the cooking/search name used when picking ingredients (e.g. `Atum` for a long receipt name). `[Generico]` is the Despensa family label that groups variants (e.g. several mushroom SKUs under `Cogumelos`) — distinct from NomeCurto. `[UnitGrams]` is grams per stock unit so meal forms can enter counts (`2` latas) and resolve grams + € from Despensa price/`BuyAmount`. Legacy `[DespensaCat]` may still exist in old descriptions but is no longer shown or written from the UI.
+
+`source` is `rotulo` (packaging label), `insa` (Tabela da Composição de Alimentos, INSA), or `manual` — descending order of trust. See `src/utils/productNutrition.ts`.
+
+Recipe nutrition is **derived** from ingredient grams × product macros (`deriveRecipeNutrition` + `makeProductMacroLookup`), falling back to the hand-entered `[Nutricao]` block only while the derivation is incomplete. Name matching is exact (accent/case-insensitive) on product name **and** `NomeCurto` — a fuzzy match would silently produce plausible but wrong numbers.
+
+Nutrition labels can be read from a photo (camera or gallery) via `src/features/nutrition/extractNutritionLabel.ts`, which guards against the model reading the kJ figure or the per-portion column.
 
 ## Automations
 
@@ -106,4 +151,6 @@ Configured in `.claude/` — do not recreate these:
 
 ## Deployment Target
 
-Production: static `dist/` served by Nginx inside a Proxmox LXC, exposed externally via Cloudflare tunnel (CT105). The Grocy API key and host are injected into nginx via environment variables — intentional for a single-user personal app.
+Production: static `dist/` served by Nginx from `/var/www/html` on **CT117 (`nourish`, 192.168.1.27)**, exposed externally via the Cloudflare tunnel running in CT105. SSH as root with `~/.ssh/pve_ed25519`; the Proxmox host is `pve` (192.168.1.3).
+
+The Grocy API key, Grocy host, and OpenRouter key are injected into `nginx.conf` via `envsubst` at deploy time — intentional for a single-user personal app. All three must be present in `.env` or the rendered config will silently blank them.

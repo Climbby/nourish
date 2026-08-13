@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { grocyConfig } from '../config/grocy'
 import { PhotoField } from '../components/PhotoField'
@@ -25,16 +25,22 @@ function BackIcon() {
 
 export function AddProduct() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const prefillGenerico = searchParams.get('generico')?.trim() || ''
+
   const [name, setName] = useState('')
-  const [calories, setCalories] = useState('')
+  const [nomeCurto, setNomeCurto] = useState(prefillGenerico)
+  const [generico, setGenerico] = useState(prefillGenerico)
   const [buyAmount, setBuyAmount] = useState('1')
   const [unitPrice, setUnitPrice] = useState('')
+  const [unitGrams, setUnitGrams] = useState('')
   const [verifyPrice, setVerifyPrice] = useState(false)
-  const [verifyCalories, setVerifyCalories] = useState(false)
   const [photoFile, setPhotoFile] = useState<File | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const isVariant = Boolean(prefillGenerico)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -50,7 +56,7 @@ export function AddProduct() {
         qu_id_stock: DEFAULT_QU_ID,
         qu_id_consume: DEFAULT_QU_ID,
         qu_id_price: DEFAULT_QU_ID,
-        calories: calories ? parseFloat(calories) : null,
+        calories: null,
         active: 1,
         quick_consume_amount: 1,
         default_best_before_days: 0,
@@ -58,9 +64,11 @@ export function AddProduct() {
           verified: (() => {
             const v = new Set<VerifiedField>()
             if (verifyPrice && unitPrice.trim() && parseFloat(unitPrice) > 0) v.add('preco')
-            if (verifyCalories && calories.trim() && parseFloat(calories) > 0) v.add('calorias')
             return v
           })(),
+          nomeCurto: nomeCurto || generico || null,
+          generico: generico || null,
+          unitGrams: unitGrams || null,
         }),
       })
 
@@ -74,7 +82,7 @@ export function AddProduct() {
         state: {
           feedback: {
             kind: 'success',
-            message: 'Produto guardado com sucesso.',
+            message: isVariant ? 'Variante guardada.' : 'Produto guardado com sucesso.',
           },
         } satisfies NavigationFeedbackState,
       })
@@ -91,50 +99,60 @@ export function AddProduct() {
         <button onClick={() => navigate(-1)} className="text-nourish-text-dim">
           <BackIcon />
         </button>
-        <h1 className="text-lg font-bold text-nourish-text">Novo produto</h1>
+        <h1 className="text-lg font-bold text-nourish-text">
+          {isVariant ? 'Nova variante' : 'Novo produto'}
+        </h1>
       </header>
 
       <form onSubmit={handleSubmit} className="px-4 py-5 space-y-5" style={{ paddingBottom: '100px' }}>
         <PhotoField
           preview={photoPreview}
-          onChange={(f, p) => { setPhotoFile(f); setPhotoPreview(p) }}
+          onChange={(f, p) => {
+            setPhotoFile(f)
+            setPhotoPreview(p)
+          }}
           labelClass={labelClass}
         />
 
         <div>
-          <label className={labelClass}>Nome *</label>
+          <label className={labelClass}>Nome da variante *</label>
           <input
             type="text"
             value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="ex: Leite, Manteiga…"
+            onChange={(e) => setName(e.target.value)}
+            placeholder="ex: Cogumelos laminados Continente 250g"
             required
             className={inputClass}
           />
         </div>
 
         <div>
-          <label className={labelClass}>Calorias (por unidade)</label>
+          <label className={labelClass}>
+            Nome genérico <span className="text-nourish-border font-normal">(família)</span>
+          </label>
           <input
-            type="number"
-            value={calories}
-            onChange={e => {
-              setCalories(e.target.value)
-              setVerifyCalories(false)
-            }}
-            placeholder="ex: 52"
-            min="0"
+            type="text"
+            value={generico}
+            onChange={(e) => setGenerico(e.target.value)}
+            placeholder="ex: Cogumelos"
             className={inputClass}
           />
-          <div className="mt-1.5">
-            <VerifyCheckbox
-              id="add-verify-calories"
-              checked={verifyCalories}
-              onChange={setVerifyCalories}
-              label="Calorias verificadas"
-              disabled={!calories.trim() || parseFloat(calories) <= 0}
-            />
-          </div>
+          <p className="text-xs text-nourish-text-dim mt-1">
+            Agrupa variantes na Despensa (vários packs, um nome)
+          </p>
+        </div>
+
+        <div>
+          <label className={labelClass}>
+            Nome curto <span className="text-nourish-border font-normal">(cozinhar)</span>
+          </label>
+          <input
+            type="text"
+            value={nomeCurto}
+            onChange={(e) => setNomeCurto(e.target.value)}
+            placeholder="ex: Cogumelos"
+            className={inputClass}
+          />
         </div>
 
         <div>
@@ -142,7 +160,7 @@ export function AddProduct() {
           <input
             type="number"
             value={unitPrice}
-            onChange={e => {
+            onChange={(e) => {
               setUnitPrice(e.target.value)
               setVerifyPrice(false)
             }}
@@ -167,25 +185,35 @@ export function AddProduct() {
           <input
             type="number"
             value={buyAmount}
-            onChange={e => setBuyAmount(e.target.value)}
+            onChange={(e) => setBuyAmount(e.target.value)}
             min="1"
             className={inputClass}
           />
-          <p className="text-xs text-nourish-text-dim mt-1">
-            Ex: 6 para água (pack de 6 garrafas), 1 para tudo o resto
-          </p>
         </div>
 
-        {error && (
-          <p className="text-red-400 text-sm">{error}</p>
-        )}
+        <div>
+          <label className={labelClass}>
+            Gramas por unidade <span className="text-nourish-border font-normal">(opcional)</span>
+          </label>
+          <input
+            type="number"
+            value={unitGrams}
+            onChange={(e) => setUnitGrams(e.target.value)}
+            placeholder="ex: 120"
+            min="0"
+            step="1"
+            className={inputClass}
+          />
+        </div>
+
+        {error && <p className="text-red-400 text-sm">{error}</p>}
 
         <button
           type="submit"
           disabled={saving || !name.trim()}
           className="w-full py-3.5 rounded-xl font-semibold text-nourish-on-primary bg-nourish-primary disabled:opacity-40 active:bg-nourish-primary-dim transition-colors"
         >
-          {saving ? 'A guardar…' : 'Adicionar produto'}
+          {saving ? 'A guardar…' : isVariant ? 'Adicionar variante' : 'Adicionar produto'}
         </button>
       </form>
     </div>

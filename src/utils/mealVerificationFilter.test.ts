@@ -11,9 +11,12 @@ function parsed(overrides: Partial<ParsedRecipe> = {}): ParsedRecipe {
     price: null,
     category: 'Completa',
     portions: null,
+    timeMinutes: null,
+    notes: null,
     verified: [],
     origin: null,
     location: null,
+    locationCoords: null,
     ...overrides,
   }
 }

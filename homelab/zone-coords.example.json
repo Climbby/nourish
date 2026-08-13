@@ -3,14 +3,21 @@
   "default_supermarket_zone": "zone.auchan",
   "zones": {
     "zone.home": {
-      "latitude": 41.0,
-      "longitude": -8.0,
+      "latitude": 40.10571494028028,
+      "longitude": -8.465373498722451,
+      "radius": 136,
       "name": "Casa"
     },
     "zone.auchan": {
-      "latitude": 41.0,
-      "longitude": -8.0,
+      "latitude": 40.1066750386598,
+      "longitude": -8.492614030838014,
+      "radius": 135,
       "name": "Auchan"
     }
+  },
+  "_notes": {
+    "distance_home_auchan_m": 2319,
+    "companion_trigger_range": "Use 400–800 m. At 1000 m the expanded rings almost touch; above ~1100 m they overlap and multi-zone high-accuracy can misbehave.",
+    "high_accuracy": "Owned by the Companion app (zone + trigger range). Do not force_on/force_off from HA — nourish_high_accuracy_gps.yaml was removed."
   }
 }

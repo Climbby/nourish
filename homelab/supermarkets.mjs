@@ -6,7 +6,12 @@
 import fs from 'fs'
 import path from 'path'
 import { loadZoneCoords, saveZoneCoords } from './zone-coords.mjs'
-import { setupHaSupermarketZone, fireSupermarketEvent, DEFAULT_ZONE_RADIUS_M } from './ha-supermarket-zone.mjs'
+import {
+  setupHaSupermarketZone,
+  fireSupermarketEvent,
+  ensureHaZonesForTracked,
+  DEFAULT_ZONE_RADIUS_M,
+} from './ha-supermarket-zone.mjs'
 
 const DATA_DIR = process.env.NOURISH_DATA_DIR || '/opt/nourish/data'
 const FILE = process.env.NOURISH_SUPERMARKETS_FILE || path.join(DATA_DIR, 'supermarkets.json')
@@ -90,7 +95,7 @@ export function shouldPromptForPlace(place, tracked, blocklist) {
 }
 
 /**
- * @param {{ place: string, latitude?: number, longitude?: number, zone_id?: string, radius?: number, create_ha_zone?: boolean }} input
+ * @param {{ place: string, latitude?: number, longitude?: number, zone_id?: string, radius?: number, create_ha_zone?: boolean, register_visit?: boolean }} input
  */
 export async function trackSupermarket(input) {
   const data = loadSupermarkets()
@@ -101,49 +106,94 @@ export async function trackSupermarket(input) {
   const lon = Number(input.longitude)
   const radius = Number(input.radius) > 0 ? Number(input.radius) : DEFAULT_ZONE_RADIUS_M
 
-  if (placeMatchesTracked(placeKey, data.tracked)) {
-    return { ok: true, already: true, data }
-  }
+  const already = placeMatchesTracked(placeKey, data.tracked)
+  let entry = data.tracked.find(
+    (t) => t.place_key === placeKey || placeKey.includes(t.place_key) || t.place_key.includes(placeKey)
+  )
 
-  data.blocklist = data.blocklist.filter((b) => b.place_key !== placeKey)
-
-  const entry = {
-    id: placeKey,
-    name,
-    place_key: placeKey,
-    zone_id: zoneId,
-    added_at: new Date().toISOString(),
-    radius,
-    ...(Number.isFinite(lat) && Number.isFinite(lon) ? { latitude: lat, longitude: lon } : {}),
+  if (!already) {
+    data.blocklist = data.blocklist.filter((b) => b.place_key !== placeKey)
+    entry = {
+      id: placeKey,
+      name,
+      place_key: placeKey,
+      zone_id: zoneId,
+      added_at: new Date().toISOString(),
+      radius,
+      ...(Number.isFinite(lat) && Number.isFinite(lon) ? { latitude: lat, longitude: lon } : {}),
+    }
+    data.tracked.push(entry)
+    saveSupermarkets(data)
+  } else if (entry && Number.isFinite(lat) && Number.isFinite(lon)) {
+    // Refresh coords/radius if the client sent a better fix while re-tracking.
+    entry.latitude = lat
+    entry.longitude = lon
+    entry.radius = radius
+    entry.zone_id = entry.zone_id || zoneId
+    saveSupermarkets(data)
   }
-  data.tracked.push(entry)
-  saveSupermarkets(data)
 
   if (Number.isFinite(lat) && Number.isFinite(lon)) {
     const zones = loadZoneCoords()
-    zones.zones[zoneId] = { latitude: lat, longitude: lon, name }
+    const zid = entry?.zone_id || zoneId
+    zones.zones[zid] = { latitude: lat, longitude: lon, name: entry?.name || name }
     saveZoneCoords(zones)
   }
 
   let haSetup = null
   const haUrl = process.env.HA_URL
   const haToken = process.env.HA_TOKEN
-  if (input.create_ha_zone !== false && haUrl && haToken && Number.isFinite(lat) && Number.isFinite(lon)) {
+  const useLat = Number.isFinite(lat) ? lat : Number(entry?.latitude)
+  const useLon = Number.isFinite(lon) ? lon : Number(entry?.longitude)
+  if (input.create_ha_zone !== false && haUrl && haToken && Number.isFinite(useLat) && Number.isFinite(useLon)) {
     try {
       haSetup = await setupHaSupermarketZone(haUrl, haToken, {
-        name,
-        placeKey,
-        latitude: lat,
-        longitude: lon,
-        radius,
+        name: entry?.name || name,
+        placeKey: entry?.place_key || placeKey,
+        latitude: useLat,
+        longitude: useLon,
+        radius: Number(entry?.radius) > 0 ? Number(entry.radius) : radius,
       })
-      await fireSupermarketEvent(zoneId, 'supermarket_enter')
+      if (haSetup?.zone_id && entry && entry.zone_id !== haSetup.zone_id) {
+        entry.zone_id = haSetup.zone_id
+        saveSupermarkets(data)
+      }
+      // Only open a visit when the client confirms the user is at the store now
+      // (Estou aqui + Acompanhar). Remote "Acompanhar" must not invent an ida.
+      if (input.register_visit) {
+        await fireSupermarketEvent(haSetup.zone_id || zoneId, 'supermarket_enter')
+      }
     } catch (e) {
       haSetup = { error: e.message }
     }
+  } else if (input.create_ha_zone !== false && (!haUrl || !haToken)) {
+    haSetup = { error: 'HA_URL and HA_TOKEN not set on nourish server — zone not created in HA' }
   }
 
-  return { ok: true, entry, data, ha_setup: haSetup }
+  return { ok: true, already, entry, data, ha_setup: haSetup }
+}
+
+/** Push all tracked stores with coords into HA (zones + enter/leave). */
+export async function syncTrackedSupermarketsToHa() {
+  const haUrl = process.env.HA_URL
+  const haToken = process.env.HA_TOKEN
+  if (!haUrl || !haToken) {
+    return { ok: false, error: 'HA_URL and HA_TOKEN required' }
+  }
+  const data = loadSupermarkets()
+  const results = await ensureHaZonesForTracked(haUrl, haToken, data.tracked)
+  // Keep zone_id in sync with what HA actually created.
+  let changed = false
+  for (const r of results) {
+    if (!r.ok || !r.zone_id) continue
+    const t = data.tracked.find((x) => x.place_key === r.place_key)
+    if (t && t.zone_id !== r.zone_id) {
+      t.zone_id = r.zone_id
+      changed = true
+    }
+  }
+  if (changed) saveSupermarkets(data)
+  return { ok: true, results }
 }
 
 export function blockSupermarket(place) {

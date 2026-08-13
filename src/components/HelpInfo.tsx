@@ -1,4 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+
+const ANIM_MS = 250
 
 export interface HelpInfoSection {
   title: string
@@ -48,7 +51,22 @@ export function HelpInfo({
   className = '',
 }: HelpInfoProps) {
   const [open, setOpen] = useState(false)
+  const [mounted, setMounted] = useState(false)
+  const [visible, setVisible] = useState(false)
   const titleId = useId()
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true)
+      const id = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setVisible(true))
+      })
+      return () => cancelAnimationFrame(id)
+    }
+    setVisible(false)
+    const t = window.setTimeout(() => setMounted(false), ANIM_MS)
+    return () => window.clearTimeout(t)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -65,59 +83,69 @@ export function HelpInfo({
         type="button"
         onClick={() => setOpen(true)}
         aria-label={label}
-        className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-nourish-text-dim border border-nourish-border bg-nourish-surface active:bg-nourish-surface-high focus:outline-none focus:ring-2 focus:ring-nourish-primary ${className}`}
+        className={`inline-flex items-center justify-center p-1 text-nourish-text-dim active:opacity-70 focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded-md ${className}`}
       >
         <InfoIcon />
       </button>
 
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/60"
-            aria-label="Fechar"
-            onClick={() => setOpen(false)}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            className="relative w-full max-w-sm bg-nourish-surface rounded-t-2xl max-h-[min(85vh,640px)] flex flex-col border-t border-nourish-border"
-            style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
-          >
-            <div className="flex items-start justify-between gap-3 p-4 border-b border-nourish-border/60 shrink-0">
-              <div className="min-w-0">
-                <p id={titleId} className="text-sm font-semibold text-nourish-text">
-                  {title}
-                </p>
-                {subtitle && (
-                  <p className="text-xs text-nourish-text-dim mt-0.5">{subtitle}</p>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="p-1.5 -mr-1 text-nourish-text-dim focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded-lg"
-                aria-label="Fechar"
-              >
-                <CloseIcon />
-              </button>
-            </div>
-
-            <div className="overflow-y-auto p-4 space-y-4 flex-1 min-h-0">
-              {sections?.map((section) => (
-                <div key={section.title}>
-                  <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-1">
-                    {section.title}
+      {mounted &&
+        createPortal(
+          <div className="fixed inset-0 z-[60] flex items-end justify-center">
+            <button
+              type="button"
+              className={`absolute inset-0 bg-black/60 transition-opacity ease-out ${
+                visible ? 'opacity-100' : 'opacity-0'
+              }`}
+              style={{ transitionDuration: `${ANIM_MS}ms` }}
+              aria-label="Fechar"
+              onClick={() => setOpen(false)}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              className={`relative w-full max-w-sm bg-nourish-surface rounded-t-2xl max-h-[min(85vh,640px)] flex flex-col border-t border-nourish-border transition-transform ease-out ${
+                visible ? 'translate-y-0' : 'translate-y-full'
+              }`}
+              style={{
+                paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)',
+                transitionDuration: `${ANIM_MS}ms`,
+              }}
+            >
+              <div className="flex items-start justify-between gap-3 p-4 border-b border-nourish-border/60 shrink-0">
+                <div className="min-w-0">
+                  <p id={titleId} className="text-sm font-semibold text-nourish-text">
+                    {title}
                   </p>
-                  <p className="text-sm text-nourish-text leading-relaxed">{section.body}</p>
+                  {subtitle && (
+                    <p className="text-xs text-nourish-text-dim mt-0.5">{subtitle}</p>
+                  )}
                 </div>
-              ))}
-              {children}
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="p-1.5 -mr-1 text-nourish-text-dim focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded-lg"
+                  aria-label="Fechar"
+                >
+                  <CloseIcon />
+                </button>
+              </div>
+
+              <div className="overflow-y-auto p-4 space-y-4 flex-1 min-h-0">
+                {sections?.map((section) => (
+                  <div key={section.title}>
+                    <p className="text-xs font-semibold text-nourish-primary uppercase tracking-wider mb-1">
+                      {section.title}
+                    </p>
+                    <p className="text-sm text-nourish-text leading-relaxed">{section.body}</p>
+                  </div>
+                ))}
+                {children}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </>
   )
 }

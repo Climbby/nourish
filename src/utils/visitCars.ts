@@ -1,6 +1,6 @@
 import type { FuelType } from './fuelPrices'
 import { getActiveProfileId } from './householdProfiles'
-import { fetchVisitAttributions, upsertVisitAttribution } from './visitAttributions'
+import { claimVisitAttribution } from './visitAttributions'
 
 export interface VisitCarLink {
   visit_entered_at: string
@@ -61,13 +61,8 @@ export async function linkCarToVisit(link: VisitCarLink): Promise<void> {
 async function autoClaimVisitIfNeeded(visitEnteredAt: string): Promise<void> {
   const owner = getActiveProfileId()
   if (!owner) return
-  const attrs = await fetchVisitAttributions()
-  if (attrs.some((a) => a.visit_entered_at === visitEnteredAt)) return
-  await upsertVisitAttribution({
-    visit_entered_at: visitEnteredAt,
-    owner_profile_id: owner,
-    share_with_family: false,
-  })
+  // First phone claims alone; second phone co-claims → Ambos.
+  await claimVisitAttribution(visitEnteredAt, owner)
 }
 
 export async function unlinkCarFromVisit(visitEnteredAt: string): Promise<void> {

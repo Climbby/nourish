@@ -4,11 +4,25 @@ import type { VisionReceipt } from './extractReceiptVision'
 const TZ = 'Europe/Lisbon'
 const DEFAULT_TOLERANCE_MS = 15 * 60 * 1000
 
-/** Map a detected store to its HA zone id (extend as stores are tracked). */
-export function storeToZone(store: VisionReceipt['store']): string | null {
-  if (store === 'auchan') return 'zone.auchan'
-  if (store === 'continente') return 'zone.continente'
+/** Brand token used to match HA zone ids like zone.continente_bom_dia_…. */
+export function storeBrandToken(store: VisionReceipt['store']): string | null {
+  if (store === 'auchan') return 'auchan'
+  if (store === 'continente') return 'continente'
   return null
+}
+
+/** @deprecated Prefer zoneMatchesStore — kept for tests / callers expecting a prefix. */
+export function storeToZone(store: VisionReceipt['store']): string | null {
+  const brand = storeBrandToken(store)
+  return brand ? `zone.${brand}` : null
+}
+
+/** True when visit zone belongs to the detected store brand (substring match). */
+export function zoneMatchesStore(zone: string | undefined, store: VisionReceipt['store']): boolean {
+  const brand = storeBrandToken(store)
+  if (!brand) return true
+  if (!zone) return true
+  return zone.toLowerCase().includes(brand)
 }
 
 /** Offset (local − UTC) in ms for a given instant in `tz`. */
@@ -45,8 +59,8 @@ export function localReceiptToUtcMs(local: string | null, tz = TZ): number | nul
 
 /**
  * Find the supermarket visit whose enter→leave window contains the receipt
- * timestamp (± tolerance). When the store maps to a known zone, visits in a
- * different zone are excluded. Ties broken by proximity to the visit centre.
+ * timestamp (± tolerance). When the store maps to a known brand, visits in a
+ * different brand zone are excluded. Ties broken by proximity to the visit centre.
  */
 export function matchVisitForReceipt(
   receiptLocal: string | null,
@@ -57,7 +71,6 @@ export function matchVisitForReceipt(
   const receiptMs = localReceiptToUtcMs(receiptLocal)
   if (receiptMs == null) return null
 
-  const expectedZone = storeToZone(store)
   let best: SupermarketVisit | null = null
   let bestDist = Infinity
 
@@ -65,7 +78,7 @@ export function matchVisitForReceipt(
     const enter = Date.parse(v.entered_at)
     if (!Number.isFinite(enter)) continue
     const leave = v.left_at ? Date.parse(v.left_at) : enter
-    if (expectedZone && v.zone && v.zone !== expectedZone) continue
+    if (!zoneMatchesStore(v.zone, store)) continue
     if (receiptMs < enter - toleranceMs || receiptMs > leave + toleranceMs) continue
 
     const dist = Math.abs(receiptMs - (enter + leave) / 2)

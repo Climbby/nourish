@@ -392,10 +392,17 @@ const server = http.createServer(async (req, res) => {
       if (!row.visit_entered_at || !row.owner_profile_id) {
         return send(400, { error: 'visit_entered_at and owner_profile_id required' })
       }
+      const owners = Array.isArray(row.owner_profile_ids)
+        ? [...new Set(row.owner_profile_ids.map((x) => String(x).trim()).filter(Boolean))]
+        : [String(row.owner_profile_id)]
+      if (owners.length === 0) {
+        return send(400, { error: 'at least one owner required' })
+      }
       const item = {
         visit_entered_at: String(row.visit_entered_at),
-        owner_profile_id: String(row.owner_profile_id),
-        share_with_family: Boolean(row.share_with_family),
+        owner_profile_id: owners[0],
+        owner_profile_ids: owners,
+        share_with_family: true,
       }
       const attributions = upsertJsonListItem(
         'visit-attributions.json',
@@ -466,6 +473,30 @@ const server = http.createServer(async (req, res) => {
         (r) => r.visit_entered_at === receipt.visit_entered_at
       )
       return send(200, { ok: true, receipts })
+    }
+
+    if (req.method === 'GET' && req.url === '/visit-overrides') {
+      return send(200, { overrides: loadJsonList('visit-overrides.json', 'overrides') })
+    }
+
+    if (req.method === 'POST' && req.url === '/visit-overrides') {
+      const body = await readBody(req)
+      const override = JSON.parse(body || '{}')
+      if (!override.visit_entered_at || !['closed', 'dismissed'].includes(override.action)) {
+        return send(400, { error: 'visit_entered_at and action (closed|dismissed) required' })
+      }
+      const overrides = upsertJsonListItem(
+        'visit-overrides.json',
+        'overrides',
+        {
+          visit_entered_at: override.visit_entered_at,
+          action: override.action,
+          left_at: override.left_at ?? null,
+          updated_at: override.updated_at || new Date().toISOString(),
+        },
+        (o) => o.visit_entered_at === override.visit_entered_at
+      )
+      return send(200, { ok: true, overrides })
     }
 
     if (req.method === 'GET' && req.url === '/fuel-prices') {

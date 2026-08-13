@@ -1,6 +1,16 @@
 import type { ReceiptStore } from '../features/receipt/types'
 import { getActiveProfileId } from './householdProfiles'
-import { fetchVisitAttributions, upsertVisitAttribution } from './visitAttributions'
+import { claimVisitAttribution } from './visitAttributions'
+
+/** One line from a committed receipt, for later viewing. */
+export interface VisitReceiptLine {
+  name: string
+  qty: number
+  unit_price: number
+  line_total: number
+  product_id: number | null
+  product_name?: string | null
+}
 
 export interface VisitReceiptLink {
   visit_entered_at: string
@@ -9,6 +19,31 @@ export interface VisitReceiptLink {
   total_eur: number
   store?: ReceiptStore
   linked_at: string
+  /** Product lines saved at commit time (optional for legacy links). */
+  lines?: VisitReceiptLine[]
+}
+
+const LOCAL_KEY = 'nourish-visit-receipts'
+
+function loadLocalVisitReceipts(): VisitReceiptLink[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function saveLocalVisitReceipts(list: VisitReceiptLink[]) {
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(list))
+}
+
+function saveLocalVisitReceipt(link: VisitReceiptLink) {
+  const list = loadLocalVisitReceipts().filter((r) => r.visit_entered_at !== link.visit_entered_at)
+  list.push(link)
+  saveLocalVisitReceipts(list)
 }
 
 export async function fetchVisitReceipts(): Promise<VisitReceiptLink[]> {
@@ -37,36 +72,8 @@ export async function linkReceiptToVisit(link: VisitReceiptLink): Promise<void> 
   }
   const owner = getActiveProfileId()
   if (!owner) return
-  const attrs = await fetchVisitAttributions()
-  if (attrs.some((a) => a.visit_entered_at === link.visit_entered_at)) return
-  await upsertVisitAttribution({
-    visit_entered_at: link.visit_entered_at,
-    owner_profile_id: owner,
-    share_with_family: false,
-  })
-}
-
-const LOCAL_KEY = 'nourish-visit-receipts'
-
-function loadLocalVisitReceipts(): VisitReceiptLink[] {
-  try {
-    const raw = localStorage.getItem(LOCAL_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function saveLocalVisitReceipts(list: VisitReceiptLink[]) {
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(list))
-}
-
-function saveLocalVisitReceipt(link: VisitReceiptLink) {
-  const list = loadLocalVisitReceipts().filter((r) => r.visit_entered_at !== link.visit_entered_at)
-  list.push(link)
-  saveLocalVisitReceipts(list)
+  // First claim alone; second profile linking a receipt co-claims → Ambos.
+  await claimVisitAttribution(link.visit_entered_at, owner)
 }
 
 export function receiptMapByVisit(receipts: VisitReceiptLink[]): Map<string, VisitReceiptLink> {

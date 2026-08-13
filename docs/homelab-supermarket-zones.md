@@ -1,76 +1,51 @@
-# Supermarket zone auto-discovery (Home Assistant)
+# Supermarket zone auto-discovery (Home Assistant + Nourish)
 
 ## Goal
 
-When you visit a supermarket that is not yet tracked, HA sends a phone notification asking whether to save or ignore that place. Saved names go to an allowlist; ignored names go to a denylist.
+When you visit a supermarket that is not yet tracked, HA (or the Nourish app) asks whether to save it. On **Acompanhar / track**, Nourish:
 
-## Limitations
+1. Saves the store in `supermarkets.json` + `zone-coords.json`
+2. Creates a GPS zone in Home Assistant (~130 m)
+3. Creates enter/leave automations (device_tracker state → zone friendly name)
+4. Fires shopping-list webhook on enter
 
-Home Assistant **cannot create GPS zones automatically** from a notification tap. Zones must still be drawn manually in **Settings → Areas & zones → Zones**, or created via the REST API / `zone.create` service with lat/lon/radius.
+## Requirements on CT117
 
-This package therefore:
+`/etc/nourish/env` must include:
 
-1. Detects likely supermarket visits from **geocoded location** text (Continente, Auchan, Lidl, …).
-2. Compares against comma-separated **allow** / **deny** lists in `input_text` helpers.
-3. Sends a **mobile notification** with **Guardar** / **Ignorar** actions.
-4. On **Guardar**, appends a slug to the allowlist and reminds you to create the zone on the map.
+```bash
+HA_URL=http://192.168.1.61:8123
+HA_TOKEN=…   # long-lived access token from HA admin profile
+HA_DEVICE_TRACKER=device_tracker.telemovel_francisco
+```
+
+Zones are created via the HA **websocket** `zone/create` API (core has no `zone.create` service). CT117 uses a small dependency-free WebSocket client (`ha-ws-lite.mjs`) on Node 18.
+
+Deploy / refresh:
+
+```bash
+# from nourish repo — picks HA_TOKEN from env or .env
+HA_TOKEN=… ./homelab/install-smart-shopping.sh
+
+# backfill zones for stores already tracked
+curl -X POST http://192.168.1.27:8787/supermarkets/ensure-ha-zones
+```
+
+On server start, Nourish also runs `ensure-ha-zones` once (disable with `NOURISH_ENSURE_HA_ZONES_ON_START=0`).
+
+## Companion high accuracy
+
+After new zones appear in HA, open the Companion app → Background location → High accuracy → **only when entering zone** and select the new stores (plus Home). Trigger range 400–800 m.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `homelab/ha-packages/nourish_supermarket_discovery.yaml` | HA package (helpers + automations) |
-| `homelab/ha-packages/nourish_smart_shopping.yaml` | Existing enter/leave zone automations for known zones |
+| `homelab/ha-supermarket-zone.mjs` | HA zone + automation API helper |
+| `homelab/supermarkets.mjs` | track / block + `syncTrackedSupermarketsToHa` |
+| `homelab/ha-packages/nourish_supermarket_discovery.yaml` | HA prompt after ~3 min at unknown store |
+| `homelab/ha-packages/nourish_smart_shopping.yaml` | rest_commands + legacy Auchan enter/leave |
 
-## Setup
+## Why state triggers (not `platform: zone`)
 
-1. Deploy the package (same flow as smart shopping):
-
-   ```bash
-   HA_TOKEN=… ./homelab/deploy-ha-smart-shopping.sh
-   ```
-
-   Copy `nourish_supermarket_discovery.yaml` into HA packages if not already included by your deploy script.
-
-2. Adjust entity IDs in the YAML:
-
-   - `sensor.francisco_fernandes_geocoded_location` — your person's geocoded sensor
-   - `person.francisco_fernandes` — your person entity
-   - `notify.mobile_app_francisco` — your mobile app notify service
-
-3. Reload automations / restart HA.
-
-4. When notified, create a zone in the HA map centred on your current location, then wire enter/leave automations like `zone.auchan` in `nourish_smart_shopping.yaml`.
-
-## Allow / deny lists
-
-| Helper | Example |
-|--------|---------|
-| `input_text.nourish_supermarket_allowlist` | `auchan,continente_gandra` |
-| `input_text.nourish_supermarket_denylist` | `Continente Gas Station` |
-| `input_text.nourish_supermarket_pending` | Internal — last detected place |
-
-## Future: API zone creation
-
-To fully automate zone creation you would need a script that calls:
-
-```yaml
-action: zone.create
-data:
-  name: "Continente Gandra"
-  latitude: "{{ state_attr('device_tracker.francisco_fernandes', 'latitude') }}"
-  longitude: "{{ state_attr('device_tracker.francisco_fernandes', 'longitude') }}"
-  radius: 120
-  icon: mdi:cart
-```
-
-Then duplicate the enter/leave `rest_command` actions from `nourish_smart_shopping.yaml` for the new zone entity. This is not shipped yet because radius and naming need manual tuning per store.
-
-## Nourish app integration
-
-Visit receipts and supermarket history are stored separately:
-
-- Visits: HA zone enter/leave → `POST /nourish/event` on CT117
-- Receipts: Historial → **Adicionar talão** → `/receipt?visit=…` → `POST /nourish/visit-receipts`
-
-See `docs/homelab-supermarket.md` for the existing Auchan zone flow.
+The Companion GPS `device_tracker` often has no lat/lon attributes, so `platform: zone` never fires. The tracker **state** does flip to the zone friendly name (e.g. `Auchan`, `Continente Bom Dia Condeixa-a-Nova`), which is what the auto-created automations use.

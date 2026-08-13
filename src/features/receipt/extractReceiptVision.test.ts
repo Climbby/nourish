@@ -71,4 +71,14 @@ describe('normalizeVisionReceipt', () => {
     expect(normalizeVisionReceipt(null).lines).toEqual([])
     expect(normalizeVisionReceipt({ lines: 'nope' }).lines).toEqual([])
   })
+
+  it('recovers €/kg when model sets unitPrice equal to lineTotal on weight lines', () => {
+    const r = normalizeVisionReceipt({
+      store: 'continente',
+      lines: [{ name: 'MACA FUJI', qty: 0.48, unitPrice: 1.08, lineTotal: 1.08 }],
+    })
+    expect(r.lines[0].qty).toBeCloseTo(0.48)
+    expect(r.lines[0].unitPrice).toBeCloseTo(2.25)
+    expect(r.lines[0].lineTotal).toBeCloseTo(1.08)
+  })
 })

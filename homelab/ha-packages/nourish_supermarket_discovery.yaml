@@ -103,13 +103,8 @@ automation:
         event_data:
           action: NOURISH_TRACK_SUPER
     action:
-      - action: zone.create
-        data:
-          name: "{{ states('input_text.nourish_supermarket_pending') }}"
-          latitude: "{{ state_attr('device_tracker.francisco_fernandes', 'latitude') | float(0) }}"
-          longitude: "{{ state_attr('device_tracker.francisco_fernandes', 'longitude') | float(0) }}"
-          radius: 130
-          icon: mdi:cart
+      # Zone + enter/leave automations are created by Nourish (HA websocket zone/create).
+      # Core HA has no zone.create service — do not call it here.
       - action: rest_command.nourish_supermarket_respond_track
         response_variable: nourish_track
       - action: input_text.set_value
@@ -121,9 +116,11 @@ automation:
         data:
           message: >
             {% if nourish_track is defined and nourish_track.ha_setup is defined and nourish_track.ha_setup.automations is defined %}
-            Super guardado — zona de ~130 m criada no HA e visitas passam a ser registadas automaticamente.
+            Super guardado — zona HA (~130 m) e entradas/saídas criadas automaticamente.
+            {% elif nourish_track is defined and nourish_track.ha_setup is defined and nourish_track.ha_setup.error is defined %}
+            Super guardado no Nourish, mas a zona HA falhou: {{ nourish_track.ha_setup.error }}.
             {% else %}
-            Super guardado no Nourish. Zona HA criada; para entradas/saídas automáticas, define HA_URL e HA_TOKEN no servidor Nourish.
+            Super guardado no Nourish. Se a zona HA não aparecer, confirma HA_TOKEN no servidor Nourish.
             {% endif %}
 
   - id: nourish_supermarket_block_action

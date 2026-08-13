@@ -25,9 +25,12 @@ function parsed(price: number | null): ParsedRecipe {
     price,
     category: null,
     portions: null,
+    timeMinutes: null,
+    notes: null,
     verified: [],
     origin: null,
     location: null,
+    locationCoords: null,
   }
 }
 

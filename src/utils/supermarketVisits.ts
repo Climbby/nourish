@@ -25,8 +25,9 @@ export const ENTER_DEBOUNCE_MS = 2 * 60 * 1000
 /** Ignore leave events this soon after enter (GPS zone edge bounce). */
 export const LEAVE_BOUNCE_MS = 15 * 1000
 
-/** Merge consecutive visits when the gap between them is smaller than this. */
-export const VISIT_MERGE_GAP_MS = 2 * 60 * 1000
+/** Merge consecutive same-store visits when the gap between them is smaller than this.
+ * GPS often splits one trip into 2–3 blocks a few minutes apart. */
+export const VISIT_MERGE_GAP_MS = 15 * 60 * 1000
 
 /** Shorter completed visits are treated as drive-bys (GPS clipped the zone). */
 export const MIN_VISIT_DURATION_MINUTES = 3
@@ -49,17 +50,31 @@ function finalizeOpenVisit(visit: SupermarketVisit, nowMs: number): SupermarketV
   return { ...visit, ongoing: false }
 }
 
+/** End of a visit in ms — left_at, or enter + duration, or enter if still open. */
+function visitEndMs(visit: SupermarketVisit): number | null {
+  if (visit.left_at) {
+    const ms = parseMs(visit.left_at)
+    return Number.isFinite(ms) ? ms : null
+  }
+  const enteredMs = parseMs(visit.entered_at)
+  if (!Number.isFinite(enteredMs)) return null
+  if (visit.duration_minutes != null && !visit.ongoing) {
+    return enteredMs + visit.duration_minutes * 60000
+  }
+  return enteredMs
+}
+
+function sameSupermarketZone(a: SupermarketVisit, b: SupermarketVisit): boolean {
+  if (a.zone && b.zone) return a.zone === b.zone
+  return true
+}
+
 function shouldConsolidateVisits(a: SupermarketVisit, b: SupermarketVisit): boolean {
-  const aEndMs = a.left_at ? parseMs(a.left_at) : parseMs(a.entered_at)
+  if (!sameSupermarketZone(a, b)) return false
+  const aEndMs = visitEndMs(a)
   const bStartMs = parseMs(b.entered_at)
-  if (!Number.isFinite(aEndMs) || !Number.isFinite(bStartMs)) return false
-  const gap = bStartMs - aEndMs
-  if (gap > VISIT_MERGE_GAP_MS) return false
-  // Bounce stub (0–1 min) immediately before the real visit
-  if ((a.duration_minutes ?? 0) <= 1) return true
-  // Duplicate-enter artifact: second stub at the same moment
-  if (gap <= 0 && (b.duration_minutes ?? 0) <= 1) return true
-  return false
+  if (aEndMs == null || !Number.isFinite(bStartMs)) return false
+  return bStartMs - aEndMs <= VISIT_MERGE_GAP_MS
 }
 
 function consolidateVisits(a: SupermarketVisit, b: SupermarketVisit): SupermarketVisit {
@@ -139,7 +154,11 @@ export function buildSupermarketVisits(
         if (ev.zone && !openEnter.zone) openEnter.zone = ev.zone
         continue
       }
-      if (openEnter) closeOpen(ev.t)
+      if (openEnter) {
+        // Re-enter after a long gap: don't invent a multi-hour left_at
+        if (ev.t - openEnter.t > ONGOING_MAX_MS) closeOpen(null)
+        else closeOpen(ev.t)
+      }
       openEnter = ev
     } else if (openEnter) {
       if (ev.t - openEnter.t < LEAVE_BOUNCE_MS) continue
@@ -198,6 +217,8 @@ export function realSupermarketVisits(visits: SupermarketVisit[]): SupermarketVi
 export function formatVisitDuration(minutes: number | null, ongoing: boolean): string {
   if (ongoing) return 'Ainda no super'
   if (minutes == null) return '—'
+  const maxMinutes = ONGOING_MAX_MS / 60000
+  if (minutes > maxMinutes) return '—'
   if (minutes < 1) return '< 1 min'
   if (minutes < 60) return `${minutes} min`
   const h = Math.floor(minutes / 60)
@@ -206,9 +227,7 @@ export function formatVisitDuration(minutes: number | null, ongoing: boolean): s
 }
 
 export function visitHasExit(visit: SupermarketVisit): boolean {
-  if (visit.left_at) return true
-  if (visit.duration_minutes != null && visit.duration_minutes >= 0) return true
-  return false
+  return visitExitTime(visit) != null
 }
 
 export function visitExitTime(visit: SupermarketVisit): string | null {
@@ -216,15 +235,25 @@ export function visitExitTime(visit: SupermarketVisit): string | null {
   if (visit.duration_minutes == null || visit.ongoing) return null
   const enteredMs = parseMs(visit.entered_at)
   if (!Number.isFinite(enteredMs)) return null
+  const maxMinutes = ONGOING_MAX_MS / 60000
+  if (visit.duration_minutes > maxMinutes) return null
   return new Date(enteredMs + visit.duration_minutes * 60000).toISOString()
 }
 
-export function visitStatusLabel(visit: SupermarketVisit, nowMs: number = Date.now()): string | null {
-  if (visitExitTime(visit)) return null
+export function visitStatusLabel(visit: SupermarketVisit, _nowMs: number = Date.now()): string | null {
   if (visit.ongoing) return 'Ainda no super'
-  const enteredMs = parseMs(visit.entered_at)
-  if (Number.isFinite(enteredMs) && nowMs - enteredMs > ONGOING_MAX_MS) return null
+  if (visitExitTime(visit)) return null
   return 'Saída não registada'
+}
+
+/** Visit is open / missing exit and older than ONGOING_MAX — show close/dismiss actions. */
+export function visitNeedsManualClose(visit: SupermarketVisit, nowMs: number = Date.now()): boolean {
+  if (visitExitTime(visit)) return false
+  if (visit.ongoing) {
+    const enteredMs = parseMs(visit.entered_at)
+    return Number.isFinite(enteredMs) && nowMs - enteredMs > ONGOING_MAX_MS
+  }
+  return true
 }
 
 export function formatVisitMonthYear(iso: string): string {
