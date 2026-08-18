@@ -183,8 +183,8 @@ export interface HydratedIngredientLink {
 
 /**
  * Re-link a saved ingredient line to a Despensa product by SKU / NomeCurto / Generico.
- * Infers qty from grams ÷ UnitGrams when possible. Prefers stock, then the only
- * complete variant, then the family favorite.
+ * Infers qty from grams ÷ UnitGrams when possible. Prefers the starred
+ * favorite, then the only in-stock SKU, then the only complete variant.
  */
 export function hydrateIngredientFromProducts(
   name: string,

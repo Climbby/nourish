@@ -121,7 +121,7 @@ export function AddMeal() {
   const [textSuggestions, setTextSuggestions] = useState<Record<number, string[]>>({})
   const [focusedRow, setFocusedRow] = useState<number | null>(null)
   const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const { favorites } = useGenericoFavorites()
+  const { favorites, setFavorite } = useGenericoFavorites()
   const [stepProposals, setStepProposals] = useState<SuggestedFromSteps[]>([])
   const [suggestingFromSteps, setSuggestingFromSteps] = useState(false)
   const [suggestFromStepsError, setSuggestFromStepsError] = useState<string | null>(null)
@@ -273,6 +273,7 @@ export function AddMeal() {
   }
 
   function selectProduct(id: number, product: Product) {
+    setFavorite(familyKey(product.name, product.description), product.id)
     const existing = ingredientRows.find((r) => r.id === id)
     const count = parseFloat(existing?.qty ?? '')
     const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1, despensaProducts)
@@ -900,30 +901,33 @@ export function IngredientSection({
               )}
               {showVariantChoice && (
                 <div
-                  className="flex flex-wrap gap-1.5"
+                  className="space-y-1.5"
                   role="group"
-                  aria-label="Variante na Despensa"
+                  aria-label="Variante favorita na Despensa"
                 >
-                  {variantChoices.map((p) => {
-                    const selected = row.productId === p.id
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          onSelectProduct(row.id, p)
-                        }}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                          selected
-                            ? 'bg-nourish-primary text-nourish-on-primary'
-                            : 'bg-nourish-surface border border-nourish-border text-nourish-text-dim'
-                        }`}
-                      >
-                        {variantChoiceLabel(p)}
-                      </button>
-                    )
-                  })}
+                  <p className="text-xs text-nourish-text-dim">Qual é a favorita?</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {variantChoices.map((p) => {
+                      const selected = row.productId === p.id
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            onSelectProduct(row.id, p)
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                            selected
+                              ? 'bg-nourish-primary text-nourish-on-primary'
+                              : 'bg-nourish-surface border border-nourish-border text-nourish-text-dim'
+                          }`}
+                        >
+                          {variantChoiceLabel(p)}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               )}
               {useCount && row.grams && !row.ignorePrice && (

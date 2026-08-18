@@ -2,7 +2,11 @@ import type { Product, Recipe, ShoppingListItem, StockItem } from '../types/groc
 import { findBestProductMatch } from '../features/receipt/matchProduct'
 import { getBuyAmountFromDesc } from './despensaAnalytics'
 import type { GenericoFavorites } from './genericoFavorites'
-import { resolveProductForIngredient, stockByProductId } from './ingredientMatch'
+import {
+  findIngredientProductMatches,
+  resolveProductForIngredient,
+  stockByProductId,
+} from './ingredientMatch'
 import { parseDescription } from './parseDescription'
 
 export interface IngredientShoppingNeed {
@@ -31,6 +35,11 @@ export function findIngredientShoppingNeeds(
         ? { productId: resolved.id }
         : findBestProductMatch(ing.name, products)
       if (!match || seen.has(match.productId)) continue
+
+      const familyInStock = findIngredientProductMatches(ing.name, products).some(
+        (p) => (stockMap[p.id] ?? 0) > 0
+      )
+      if (familyInStock) continue
 
       const amount = stockMap[match.productId] ?? 0
       if (amount > 0) continue

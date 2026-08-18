@@ -7,7 +7,7 @@ import type { Product, Recipe } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription } from '../utils/parseDescription'
 import { buildDescription, computeAutoTotal, readyAutoTotal, type IngredientRow } from '../utils/buildDescription'
-import { cookingName, ingredientDisplayName } from '../utils/despensaAnalytics'
+import { cookingName, familyKey, ingredientDisplayName } from '../utils/despensaAnalytics'
 import {
   applyIngredientName,
   filterProductsForIngredient,
@@ -95,7 +95,7 @@ export function EditMeal() {
   const [textSuggestions, setTextSuggestions] = useState<Record<number, string[]>>({})
   const [focusedRow, setFocusedRow] = useState<number | null>(null)
   const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const { favorites } = useGenericoFavorites()
+  const { favorites, setFavorite } = useGenericoFavorites()
   const [stepProposals, setStepProposals] = useState<SuggestedFromSteps[]>([])
   const [suggestingFromSteps, setSuggestingFromSteps] = useState(false)
   const [suggestFromStepsError, setSuggestFromStepsError] = useState<string | null>(null)
@@ -311,6 +311,7 @@ export function EditMeal() {
   }
 
   function selectProduct(rowId: number, product: Product) {
+    setFavorite(familyKey(product.name, product.description), product.id)
     const existing = ingredientRows.find((r) => r.id === rowId)
     const count = parseFloat(existing?.qty ?? '')
     const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1, despensaProducts)

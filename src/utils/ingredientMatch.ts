@@ -2,9 +2,9 @@
  * Match a stored meal-ingredient name to a Despensa product.
  *
  * Exact (accent- and case-insensitive) on product name, then NomeCurto, then
- * Generico. Among siblings, prefer what's in stock, then the only complete
- * variant, then the family favorite. Ask only when several complete SKUs are
- * out of stock.
+ * Generico. Among siblings: starred favorite, else the only in-stock SKU,
+ * else the only complete variant. When several still conflict, ask which
+ * one to star.
  */
 
 import type { Product } from '../types/grocy'
@@ -67,13 +67,20 @@ export function pickFavoriteProduct(
   favorites?: GenericoFavorites
 ): Product | null {
   if (matches.length === 0) return null
-  if (favorites) {
-    for (const product of matches) {
-      const key = familyKey(product.name, product.description)
-      if (favorites[key] === product.id) return product
-    }
+  return favoriteInMatches(matches, favorites) ?? matches[0]
+}
+
+/** Favorite SKU among matches, or null if none is starred. */
+export function favoriteInMatches(
+  matches: Product[],
+  favorites?: GenericoFavorites
+): Product | null {
+  if (!favorites || matches.length === 0) return null
+  for (const product of matches) {
+    const key = familyKey(product.name, product.description)
+    if (favorites[key] === product.id) return product
   }
-  return matches[0]
+  return null
 }
 
 export type StockByProduct = Record<number, number>
@@ -98,7 +105,7 @@ export function isVariantComplete(product: Product): boolean {
 
 export interface VariantPick {
   product: Product | null
-  /** Complete out-of-stock siblings — show a choice. Empty = don't ask. */
+  /** Conflicting variants — show a choice so the cook can star one. Empty = don't ask. */
   needsChoice: Product[]
 }
 
@@ -106,24 +113,10 @@ function stockOf(id: number, stock?: StockByProduct): number {
   return stock?.[id] ?? 0
 }
 
-function pickByStockThenFavorite(
-  products: Product[],
-  favorites?: GenericoFavorites,
-  stock?: StockByProduct
-): Product {
-  return [...products].sort((a, b) => {
-    const byStock = stockOf(b.id, stock) - stockOf(a.id, stock)
-    if (byStock !== 0) return byStock
-    const favA = favorites?.[familyKey(a.name, a.description)] === a.id ? 1 : 0
-    const favB = favorites?.[familyKey(b.name, b.description)] === b.id ? 1 : 0
-    return favB - favA
-  })[0]
-}
-
 /**
  * Least-work pick among family variants:
- * in stock → only complete SKU → favorite. Choice only when 2+ complete
- * variants are all out of stock.
+ * starred favorite → only in-stock SKU → only complete SKU.
+ * If several still conflict, ask and let the cook star one.
  */
 export function pickProductForIngredient(
   matches: Product[],
@@ -132,25 +125,22 @@ export function pickProductForIngredient(
   if (matches.length === 0) return { product: null, needsChoice: [] }
   if (matches.length === 1) return { product: matches[0], needsChoice: [] }
 
+  const fav = favoriteInMatches(matches, opts?.favorites)
+  if (fav) return { product: fav, needsChoice: [] }
+
   const inStock = matches.filter((p) => stockOf(p.id, opts?.stockByProduct) > 0)
   if (inStock.length === 1) return { product: inStock[0], needsChoice: [] }
-  if (inStock.length > 1) {
-    return {
-      product: pickByStockThenFavorite(inStock, opts?.favorites, opts?.stockByProduct),
-      needsChoice: [],
-    }
-  }
 
   const complete = matches.filter(isVariantComplete)
   if (complete.length === 1) return { product: complete[0], needsChoice: [] }
-  if (complete.length > 1) {
-    return {
-      product: pickFavoriteProduct(complete, opts?.favorites) ?? complete[0],
-      needsChoice: complete,
-    }
+
+  const pool =
+    complete.length > 1 ? complete : inStock.length > 1 ? inStock : matches
+  if (pool.length > 1) {
+    return { product: pool[0], needsChoice: pool }
   }
 
-  return { product: pickFavoriteProduct(matches, opts?.favorites), needsChoice: [] }
+  return { product: matches[0], needsChoice: [] }
 }
 
 export function resolveProductForIngredient(

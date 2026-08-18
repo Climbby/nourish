@@ -18,8 +18,8 @@ import { getMacrosFromDesc, type ProductMacros } from './productNutrition'
  * Exact (accent- and case-insensitive) matches on product name, NomeCurto, and
  * Generico. Fuzzy matching is deliberately left out: a wrong product silently
  * produces plausible-looking but wrong numbers. An unmatched ingredient is
- * reported instead. In-stock SKU, then the only complete variant, then the
- * family favorite; if that pick has no macros, the first sibling that does.
+ * reported instead. Starred favorite, then the only in-stock SKU, then the
+ * only complete variant; if that pick has no macros, the first sibling that does.
  */
 export function makeProductMacroLookup(
   products: Product[],
