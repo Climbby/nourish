@@ -4,6 +4,7 @@ import {
   loadGenericoFavorites,
   saveGenericoFavorites,
   setGenericoFavorite,
+  toggleGenericoFavorite,
 } from './genericoFavorites'
 
 const store = new Map<string, string>()
@@ -46,6 +47,11 @@ describe('genericoFavorites', () => {
       JSON.stringify({ cogumelos: 12, '': 5, leite: 'nope', ovos: 0 })
     )
     expect(loadGenericoFavorites()).toEqual({ cogumelos: 12 })
+  })
+
+  it('unstars the current favorite', () => {
+    setGenericoFavorite('cogumelos', 12)
+    expect(toggleGenericoFavorite('cogumelos', 12)).toEqual({})
   })
 
   it('survives corrupt storage', () => {

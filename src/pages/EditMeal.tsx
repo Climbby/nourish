@@ -95,7 +95,7 @@ export function EditMeal() {
   const [textSuggestions, setTextSuggestions] = useState<Record<number, string[]>>({})
   const [focusedRow, setFocusedRow] = useState<number | null>(null)
   const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const { favorites, setFavorite } = useGenericoFavorites()
+  const { favorites, toggleFavorite } = useGenericoFavorites()
   const [stepProposals, setStepProposals] = useState<SuggestedFromSteps[]>([])
   const [suggestingFromSteps, setSuggestingFromSteps] = useState(false)
   const [suggestFromStepsError, setSuggestFromStepsError] = useState<string | null>(null)
@@ -311,7 +311,6 @@ export function EditMeal() {
   }
 
   function selectProduct(rowId: number, product: Product) {
-    setFavorite(familyKey(product.name, product.description), product.id)
     const existing = ingredientRows.find((r) => r.id === rowId)
     const count = parseFloat(existing?.qty ?? '')
     const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1, despensaProducts)
@@ -333,6 +332,13 @@ export function EditMeal() {
     )
     setProductSuggestions((prev) => ({ ...prev, [rowId]: [] }))
     setTextSuggestions((prev) => ({ ...prev, [rowId]: [] }))
+  }
+
+  function toggleFavoriteVariant(rowId: number, product: Product) {
+    const key = familyKey(product.name, product.description)
+    const wasFavorite = favorites[key] === product.id
+    toggleFavorite(key, product.id)
+    if (!wasFavorite) selectProduct(rowId, product)
   }
 
   function addRow() {
@@ -539,6 +545,7 @@ export function EditMeal() {
               onAdd={addRow}
               onRemove={removeRow}
               onSelectProduct={selectProduct}
+              onToggleFavorite={toggleFavoriteVariant}
               onIgnorePrice={toggleIgnorePrice}
               onAmountModeChange={setAmountMode}
               onCommitName={commitRowName}

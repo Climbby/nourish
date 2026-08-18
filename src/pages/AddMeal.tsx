@@ -62,6 +62,26 @@ function TrashIcon() {
   )
 }
 
+function ChipStarIcon({ filled }: { filled: boolean }) {
+  return filled ? (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
+      <path
+        fillRule="evenodd"
+        d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.006 5.404.434c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.434 2.082-5.005Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  ) : (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z"
+      />
+    </svg>
+  )
+}
+
 const inputClass =
   'w-full px-4 py-3 bg-nourish-surface border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:border-transparent transition-shadow'
 
@@ -121,7 +141,7 @@ export function AddMeal() {
   const [textSuggestions, setTextSuggestions] = useState<Record<number, string[]>>({})
   const [focusedRow, setFocusedRow] = useState<number | null>(null)
   const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const { favorites, setFavorite } = useGenericoFavorites()
+  const { favorites, toggleFavorite } = useGenericoFavorites()
   const [stepProposals, setStepProposals] = useState<SuggestedFromSteps[]>([])
   const [suggestingFromSteps, setSuggestingFromSteps] = useState(false)
   const [suggestFromStepsError, setSuggestFromStepsError] = useState<string | null>(null)
@@ -273,7 +293,6 @@ export function AddMeal() {
   }
 
   function selectProduct(id: number, product: Product) {
-    setFavorite(familyKey(product.name, product.description), product.id)
     const existing = ingredientRows.find((r) => r.id === id)
     const count = parseFloat(existing?.qty ?? '')
     const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1, despensaProducts)
@@ -295,6 +314,13 @@ export function AddMeal() {
     )
     setProductSuggestions((prev) => ({ ...prev, [id]: [] }))
     setTextSuggestions((prev) => ({ ...prev, [id]: [] }))
+  }
+
+  function toggleFavoriteVariant(rowId: number, product: Product) {
+    const key = familyKey(product.name, product.description)
+    const wasFavorite = favorites[key] === product.id
+    toggleFavorite(key, product.id)
+    if (!wasFavorite) selectProduct(rowId, product)
   }
 
   function addRow() {
@@ -594,6 +620,7 @@ export function AddMeal() {
                   onAdd={addRow}
                   onRemove={removeRow}
                   onSelectProduct={selectProduct}
+                  onToggleFavorite={toggleFavoriteVariant}
                   onIgnorePrice={toggleIgnorePrice}
                   onAmountModeChange={setAmountMode}
                   onCommitName={commitRowName}
@@ -712,6 +739,7 @@ export function IngredientSection({
   onAdd,
   onRemove,
   onSelectProduct,
+  onToggleFavorite,
   onIgnorePrice,
   onAmountModeChange,
   onCommitName,
@@ -730,6 +758,7 @@ export function IngredientSection({
   onAdd: () => void
   onRemove: (id: number) => void
   onSelectProduct: (id: number, product: Product) => void
+  onToggleFavorite?: (id: number, product: Product) => void
   onIgnorePrice: (id: number) => void
   onAmountModeChange?: (id: number, mode: AmountMode) => void
   onCommitName?: (id: number) => void
@@ -765,6 +794,9 @@ export function IngredientSection({
             favorites
           )
           const showVariantChoice = !showSuggest && variantChoices.length > 1
+          const hasFamilyFavorite = variantChoices.some(
+            (p) => favorites[familyKey(p.name, p.description)] === p.id
+          )
           return (
             <div key={row.id} className={`space-y-1 relative ${liftRow ? 'z-30' : 'z-0'}`}>
               <div className="flex gap-2 items-start">
@@ -903,28 +935,62 @@ export function IngredientSection({
                 <div
                   className="space-y-1.5"
                   role="group"
-                  aria-label="Variante favorita na Despensa"
+                  aria-label="Variante na Despensa"
                 >
-                  <p className="text-xs text-nourish-text-dim">Qual é a favorita?</p>
+                  <p className="text-xs text-nourish-text-dim">
+                    {hasFamilyFavorite ? 'Variante nesta refeição' : 'Qual é a favorita?'}
+                  </p>
                   <div className="flex flex-wrap gap-1.5">
                     {variantChoices.map((p) => {
                       const selected = row.productId === p.id
+                      const isFav = favorites[familyKey(p.name, p.description)] === p.id
                       return (
-                        <button
+                        <div
                           key={p.id}
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault()
-                            onSelectProduct(row.id, p)
-                          }}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                          className={`inline-flex items-stretch rounded-lg overflow-hidden border ${
                             selected
-                              ? 'bg-nourish-primary text-nourish-on-primary'
-                              : 'bg-nourish-surface border border-nourish-border text-nourish-text-dim'
+                              ? 'bg-nourish-primary text-nourish-on-primary border-nourish-primary'
+                              : 'bg-nourish-surface border-nourish-border text-nourish-text-dim'
                           }`}
                         >
-                          {variantChoiceLabel(p)}
-                        </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault()
+                              onSelectProduct(row.id, p)
+                            }}
+                            className="px-2.5 py-1 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+                          >
+                            {variantChoiceLabel(p)}
+                          </button>
+                          {onToggleFavorite && (
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                onToggleFavorite(row.id, p)
+                              }}
+                              className={`px-1.5 py-1 focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                                isFav
+                                  ? selected
+                                    ? 'text-amber-200'
+                                    : 'text-amber-400'
+                                  : selected
+                                    ? 'text-nourish-on-primary/70'
+                                    : 'text-nourish-border'
+                              }`}
+                              aria-label={
+                                isFav
+                                  ? 'Remover variante favorita'
+                                  : 'Definir como variante favorita'
+                              }
+                              aria-pressed={isFav}
+                            >
+                              <ChipStarIcon filled={isFav} />
+                            </button>
+                          )}
+                        </div>
                       )
                     })}
                   </div>

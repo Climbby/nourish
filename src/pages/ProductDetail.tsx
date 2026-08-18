@@ -203,7 +203,7 @@ export function ProductDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const numId = parseInt(id!, 10)
-  const { favorites, setFavorite } = useGenericoFavorites()
+  const { favorites, toggleFavorite } = useGenericoFavorites()
 
   const [product, setProduct] = useState<Product | null>(null)
   const [siblings, setSiblings] = useState<Product[]>([])
@@ -579,7 +579,7 @@ export function ProductDetail() {
             overlay={nameOverlay}
             favoriteId={favorites[familyKey(product.name, product.description)]}
             onToggleFavorite={(variantId) =>
-              setFavorite(familyKey(product.name, product.description), variantId)
+              toggleFavorite(familyKey(product.name, product.description), variantId)
             }
           />
         ) : (

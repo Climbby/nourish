@@ -272,6 +272,23 @@ describe('applyIngredientName', () => {
       unitGrams: undefined,
     })
   })
+
+  it('keeps a manually picked sibling instead of snapping back to the favorite', () => {
+    const classic = product(
+      26,
+      'COGUMELOS DESP. CLASSICA 185G',
+      '[BuyAmount]\n1\n\n[UnitGrams]\n185\n\n[Generico]\nCogumelos'
+    )
+    const laminados = product(
+      42,
+      'COGUMELOS LAMINADOS CNT 185GR',
+      '[BuyAmount]\n1\n\n[UnitGrams]\n185\n\n[Generico]\nCogumelos'
+    )
+    const row = { id: 1, name: 'Cogumelos', price: '', productId: 26 }
+    expect(
+      applyIngredientName(row, 'Cogumelos', [classic, laminados], { cogumelos: 42 })
+    ).toMatchObject({ productId: 26 })
+  })
 })
 
 describe('patchIngredientAmountMode', () => {

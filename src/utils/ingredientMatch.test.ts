@@ -116,7 +116,9 @@ describe('resolveProductForIngredient', () => {
       completeDesc('[NomeCurto]\nCogumelos\n\n[Generico]\nCogumelos')
     )
     expect(resolveProductForIngredient('Cogumelos', [classic, laminados])?.id).toBe(42)
-    expect(variantChoicesForIngredient('Cogumelos', [classic, laminados])).toEqual([])
+    expect(variantChoicesForIngredient('Cogumelos', [classic, laminados]).map((p) => p.id)).toEqual([
+      26, 42,
+    ])
   })
 
   it('picks the in-stock SKU even if another variant is complete', () => {
@@ -130,8 +132,8 @@ describe('resolveProductForIngredient', () => {
       resolveProductForIngredient('Cogumelos', [classic, laminados], undefined, { 26: 1 })?.id
     ).toBe(26)
     expect(
-      variantChoicesForIngredient('Cogumelos', [classic, laminados], { 26: 1 })
-    ).toEqual([])
+      variantChoicesForIngredient('Cogumelos', [classic, laminados], { 26: 1 }).map((p) => p.id)
+    ).toEqual([26, 42])
   })
 
   it('uses the starred favorite even when another SKU has more stock', () => {
@@ -184,6 +186,11 @@ describe('pickProductForIngredient', () => {
     const pick = pickProductForIngredient([classic, laminados], { favorites: { cogumelos: 42 } })
     expect(pick.product?.id).toBe(42)
     expect(pick.needsChoice).toEqual([])
+    expect(
+      variantChoicesForIngredient('Cogumelos', [classic, laminados], undefined, { cogumelos: 42 }).map(
+        (p) => p.id
+      )
+    ).toEqual([42, 26])
   })
 
   it('asks when two packs are in stock and none is starred', () => {

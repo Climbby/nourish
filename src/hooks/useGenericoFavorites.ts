@@ -4,6 +4,7 @@ import {
   GENERICO_FAVORITES_KEY,
   loadGenericoFavorites,
   setGenericoFavorite,
+  toggleGenericoFavorite,
   type GenericoFavorites,
 } from '../utils/genericoFavorites'
 
@@ -19,9 +20,14 @@ export function useGenericoFavorites() {
     setFavorites(setGenericoFavorite(familyKey, productId))
   }
 
+  const toggleFavorite = (familyKey: string, productId: number) => {
+    setFavorites(toggleGenericoFavorite(familyKey, productId))
+  }
+
   return {
     favorites,
     setFavorite,
+    toggleFavorite,
     favoriteId: (familyKey: string) => favorites[familyKey],
   }
 }

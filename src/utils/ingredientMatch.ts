@@ -3,8 +3,8 @@
  *
  * Exact (accent- and case-insensitive) on product name, then NomeCurto, then
  * Generico. Among siblings: starred favorite, else the only in-stock SKU,
- * else the only complete variant. When several still conflict, ask which
- * one to star.
+ * else the only complete variant. Chips stay available so a meal can pick
+ * another pack without changing the favorite.
  */
 
 import type { Product } from '../types/grocy'
@@ -116,7 +116,7 @@ function stockOf(id: number, stock?: StockByProduct): number {
 /**
  * Least-work pick among family variants:
  * starred favorite → only in-stock SKU → only complete SKU.
- * If several still conflict, ask and let the cook star one.
+ * `needsChoice` is the conflict pool when nothing is starred.
  */
 export function pickProductForIngredient(
   matches: Product[],
@@ -155,17 +155,21 @@ export function resolveProductForIngredient(
   }).product
 }
 
-/** Complete family SKUs the cook should pick between, or []. */
+/** Family SKUs to show as chips (always, when there is more than one). */
 export function variantChoicesForIngredient(
   name: string,
   products: Product[],
   stockByProduct?: StockByProduct,
   favorites?: GenericoFavorites
 ): Product[] {
-  return pickProductForIngredient(findIngredientProductMatches(name, products), {
-    favorites,
-    stockByProduct,
-  }).needsChoice
+  const matches = findIngredientProductMatches(name, products)
+  if (matches.length <= 1) return []
+  return [...matches].sort((a, b) => {
+    const favA = favorites?.[familyKey(a.name, a.description)] === a.id ? 1 : 0
+    const favB = favorites?.[familyKey(b.name, b.description)] === b.id ? 1 : 0
+    if (favB !== favA) return favB - favA
+    return stockOf(b.id, stockByProduct) - stockOf(a.id, stockByProduct)
+  })
 }
 
 export function variantChoiceLabel(product: Product): string {

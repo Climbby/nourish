@@ -46,6 +46,26 @@ export function setGenericoFavorite(familyKey: string, productId: number): Gener
   return next
 }
 
+/** Drop the favorite so meals ask again (pick every time). */
+export function clearGenericoFavorite(familyKey: string): GenericoFavorites {
+  const key = familyKey.trim()
+  const current = loadGenericoFavorites()
+  if (!key || current[key] == null) return current
+  const next = { ...current }
+  delete next[key]
+  saveGenericoFavorites(next)
+  return next
+}
+
+/** Star this SKU, or unstar it if it is already the favorite. */
+export function toggleGenericoFavorite(familyKey: string, productId: number): GenericoFavorites {
+  const key = familyKey.trim()
+  if (!key || !Number.isFinite(productId) || productId <= 0) return loadGenericoFavorites()
+  const current = loadGenericoFavorites()
+  if (current[key] === productId) return clearGenericoFavorite(key)
+  return setGenericoFavorite(key, productId)
+}
+
 export function getGenericoFavoriteId(
   familyKey: string,
   favorites: GenericoFavorites = loadGenericoFavorites()

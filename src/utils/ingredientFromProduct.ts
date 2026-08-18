@@ -17,6 +17,7 @@ import {
 } from './despensaAnalytics'
 import type { GenericoFavorites } from './genericoFavorites'
 import {
+  findIngredientProductMatches,
   normalizeIngredientName,
   resolveProductForIngredient,
   type StockByProduct,
@@ -222,7 +223,9 @@ export function hydrateIngredientFromProducts(
 /**
  * Link a typed ingredient name to a Despensa product on exact SKU / NomeCurto /
  * Generico match. Keeps already-entered qty, grams, and €. `commitName` swaps
- * the typed string for the family display name (on blur / pick).
+ * the typed string for the family display name (on blur / pick). A product
+ * already on the row is kept if it still matches, so a per-meal pick is not
+ * snapped back to the family favorite.
  */
 export function applyIngredientName(
   row: IngredientRow,
@@ -231,7 +234,10 @@ export function applyIngredientName(
   favorites?: GenericoFavorites,
   opts?: { commitName?: boolean; stockByProduct?: StockByProduct }
 ): IngredientRow {
-  const match = resolveProductForIngredient(name, products, favorites, opts?.stockByProduct)
+  const matches = findIngredientProductMatches(name, products)
+  const kept = matches.find((p) => p.id === row.productId)
+  const match =
+    kept ?? resolveProductForIngredient(name, products, favorites, opts?.stockByProduct)
   if (!match) {
     return {
       ...row,
