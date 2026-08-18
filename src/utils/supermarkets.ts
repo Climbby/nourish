@@ -12,6 +12,8 @@ export interface BlockedPlace {
   place_key: string
   name: string
   blocked_at: string
+  /** HA zone id when known — visits may use this instead of the slug. */
+  zone_id?: string
 }
 
 export interface SupermarketsData {
@@ -95,12 +97,19 @@ export async function registerSupermarketVisit(zoneId: string): Promise<boolean>
   }
 }
 
-export async function blockSupermarket(place: string): Promise<boolean> {
+export async function blockSupermarket(
+  place: string,
+  opts?: { zone_id?: string }
+): Promise<boolean> {
   try {
     const res = await fetch('/nourish/supermarkets/respond', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'block', place }),
+      body: JSON.stringify({
+        action: 'block',
+        place,
+        ...(opts?.zone_id ? { zone_id: opts.zone_id } : {}),
+      }),
     })
     return res.ok
   } catch {

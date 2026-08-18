@@ -1,5 +1,6 @@
 import { BottomSheet } from './BottomSheet'
 import type { VisitReceiptLink } from '../utils/visitReceipts'
+import { formatPtDate } from '../utils/formatPtDate'
 
 const STORE_LABELS: Record<string, string> = {
   mixed: 'Misto',
@@ -33,7 +34,7 @@ export function VisitReceiptSheet({ receipt, supermarketName, onClose, onReplace
             {[
               supermarketName,
               store,
-              receipt.purchased_date,
+              receipt.purchased_date ? formatPtDate(receipt.purchased_date) : null,
               `${receipt.item_count} produto${receipt.item_count !== 1 ? 's' : ''}`,
               receipt.total_eur > 0 ? `€${receipt.total_eur.toFixed(2)}` : null,
             ]

@@ -8,11 +8,16 @@ export interface Nutrition {
   fat: number
 }
 
+/** Trailing `|i` on an ingredient line: keep the ingredient, skip it in the € sum. */
+export const INGREDIENT_PRICE_IGNORE_FLAG = 'i'
+
 export interface IngredientLine {
   name: string
   price: number | null
   /** Quantity in grams (or ml), used to derive nutrition from product macros. */
   grams: number | null
+  /** When true, this line is not part of the meal price (e.g. a pinch of salt). */
+  ignorePrice?: boolean
 }
 
 export interface ParsedRecipe {
@@ -30,9 +35,9 @@ export interface ParsedRecipe {
   verified: VerifiedField[]
   /** `supermercado` | `restaurante` — null if unset (legacy) */
   origin: string | null
-  /** Locality label for restaurant meals, e.g. "Condeixa, Coimbra" */
+  /** Restaurant name for eat-out meals (`[Local]`), e.g. "Cantina do ISCTE" */
   location: string | null
-  /** Coords for distance sort (from [Coords] section) */
+  /** Coords for distance on meal detail and Fora sort */
   locationCoords: { latitude: number; longitude: number } | null
 }
 
@@ -58,13 +63,26 @@ function numOrNull(raw: string | undefined): number | null {
   return isNaN(val) ? null : val
 }
 
+function isPriceIgnoreFlag(value: string): boolean {
+  return value.trim().toLowerCase() === INGREDIENT_PRICE_IGNORE_FLAG
+}
+
 /**
  * Ingredient lines are `Nome`, `Nome|preco`, or `Nome|preco|gramas` (with the
- * price optionally blank: `Nome||gramas`). Names containing a literal `|` still
- * parse the way they always did, so legacy recipes are unaffected.
+ * price optionally blank: `Nome||gramas`). An optional trailing `|i` means
+ * ignore this line when summing the meal price. Names containing a literal `|`
+ * still parse the way they always did, so legacy recipes are unaffected.
  */
 export function parseIngredientLine(line: string): IngredientLine {
-  const parts = line.split('|')
+  const rawParts = line.split('|')
+  let ignorePrice = false
+  let body = line
+  if (rawParts.length >= 2 && isPriceIgnoreFlag(rawParts[rawParts.length - 1])) {
+    ignorePrice = true
+    body = rawParts.slice(0, -1).join('|')
+  }
+
+  const parts = body.split('|')
 
   if (parts.length >= 3) {
     const grams = numOrNull(parts[parts.length - 1])
@@ -73,16 +91,24 @@ export function parseIngredientLine(line: string): IngredientLine {
     // Only read the 3-field form when the trailing fields really are numeric —
     // otherwise fall through to the legacy `name|price` split below.
     if (grams !== null && (price !== null || priceRaw === '')) {
-      return { name: parts.slice(0, -2).join('|').trim(), price, grams }
+      return {
+        name: parts.slice(0, -2).join('|').trim(),
+        price,
+        grams,
+        ...(ignorePrice ? { ignorePrice: true } : {}),
+      }
     }
   }
 
-  const pipeIdx = line.lastIndexOf('|')
-  if (pipeIdx === -1) return { name: line.trim(), price: null, grams: null }
+  const pipeIdx = body.lastIndexOf('|')
+  if (pipeIdx === -1) {
+    return { name: body.trim(), price: null, grams: null, ...(ignorePrice ? { ignorePrice: true } : {}) }
+  }
   return {
-    name: line.slice(0, pipeIdx).trim(),
-    price: numOrNull(line.slice(pipeIdx + 1)),
+    name: body.slice(0, pipeIdx).trim(),
+    price: numOrNull(body.slice(pipeIdx + 1)),
     grams: null,
+    ...(ignorePrice ? { ignorePrice: true } : {}),
   }
 }
 

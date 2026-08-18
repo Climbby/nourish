@@ -4,13 +4,20 @@ import { grocy } from '../api/grocy'
 import type { Product, QuantityUnit, Recipe, RecipeIngredient } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription, parseSteps } from '../utils/parseDescription'
-import { isRestaurantMeal, mealOriginLabel, resolveMealOrigin } from '../utils/mealOrigin'
+import { eatOutRestaurantName, isRestaurantMeal, mealOriginLabel, resolveMealOrigin } from '../utils/mealOrigin'
 import { VerifiedBadge } from '../components/VerifiedBadge'
 import { useFavourites } from '../hooks/useFavourites'
+import { useShowPrices } from '../hooks/useDisplayPrefs'
 import { useShowNutrition } from '../hooks/useShowNutrition'
 import { getLastNavPath } from '../utils/navMemory'
 import { deriveRecipeNutrition, isNutritionComplete } from '../utils/productNutrition'
 import { makeProductMacroLookup } from '../utils/recipeNutrition'
+import { ingredientDisplayName } from '../utils/despensaAnalytics'
+import { displayNameForIngredient, stockByProductId, type StockByProduct } from '../utils/ingredientMatch'
+import { useGenericoFavorites } from '../hooks/useGenericoFavorites'
+import { asCoords, fetchHomeCoords } from '../utils/homeCoords'
+import { distanceFromHome, formatDistanceKm } from '../utils/locality'
+import { getCurrentPosition } from '../utils/supermarketSearch'
 
 function PencilIcon() {
   return (
@@ -56,10 +63,13 @@ export function MealDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { isFavourite, toggle } = useFavourites()
+  const { favorites } = useGenericoFavorites()
   const showNutrition = useShowNutrition()
+  const showPrices = useShowPrices()
   const [recipe, setRecipe] = useState<Recipe | null>(null)
   const [ingredients, setIngredients] = useState<RecipeIngredient[]>([])
   const [products, setProducts] = useState<Record<number, Product>>({})
+  const [stockByProduct, setStockByProduct] = useState<StockByProduct>({})
   const [units, setUnits] = useState<Record<number, QuantityUnit>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -68,11 +78,53 @@ export function MealDetail() {
   const [deleting, setDeleting] = useState(false)
   const [kitchenMode, setKitchenMode] = useState(false)
   const [kitchenStep, setKitchenStep] = useState(0)
+  const [distanceLabel, setDistanceLabel] = useState<string | null>(null)
+
+  const parsed = useMemo(
+    () => (recipe ? parseDescription(recipe.description ?? '') : null),
+    [recipe]
+  )
+  const mealLat = parsed?.locationCoords?.latitude
+  const mealLon = parsed?.locationCoords?.longitude
+
+  useEffect(() => {
+    if (mealLat == null || mealLon == null) {
+      setDistanceLabel(null)
+      return
+    }
+    const meal = { latitude: mealLat, longitude: mealLon }
+    let cancelled = false
+    void (async () => {
+      try {
+        const home = asCoords(await fetchHomeCoords())
+        const homeM = distanceFromHome(home, meal)
+        if (!cancelled && homeM != null) setDistanceLabel(formatDistanceKm(homeM))
+      } catch {
+        /* keep empty until GPS */
+      }
+      try {
+        const user = await getCurrentPosition({
+          enableHighAccuracy: false,
+          timeout: 4000,
+          maximumAge: 120_000,
+        })
+        const userM = distanceFromHome(user, meal)
+        if (!cancelled && userM != null) setDistanceLabel(formatDistanceKm(userM))
+      } catch {
+        /* home distance already set if available */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [mealLat, mealLon])
+
+  const productList = useMemo(() => Object.values(products), [products])
 
   // Built here rather than below the early returns, so the hook order stays fixed.
   const macroLookup = useMemo(
-    () => makeProductMacroLookup(Object.values(products)),
-    [products]
+    () => makeProductMacroLookup(productList, favorites, stockByProduct),
+    [productList, favorites, stockByProduct]
   )
 
   useEffect(() => {
@@ -91,10 +143,15 @@ export function MealDetail() {
         setIngredients(ingrs)
         // Products are needed even without Grocy recipe ingredients, because
         // nutrition is derived from the macros stored on them.
-        const [prods, qus] = await Promise.all([grocy.getProducts(), grocy.getQuantityUnits()])
+        const [prods, qus, stock] = await Promise.all([
+          grocy.getProducts(),
+          grocy.getQuantityUnits(),
+          grocy.getStock(),
+        ])
         if (!mounted) return
         setProducts(Object.fromEntries(prods.map((p) => [p.id, p])))
         setUnits(Object.fromEntries(qus.map((u) => [u.id, u])))
+        setStockByProduct(stockByProductId(stock))
       })
       .catch((e: Error) => { if (mounted) setError(e.message) })
       .finally(() => { if (mounted) setLoading(false) })
@@ -153,7 +210,7 @@ export function MealDetail() {
 
   if (loading) return <div className="min-h-screen bg-nourish-bg">{header('Detalhes')}<Spinner /></div>
 
-  if (error || !recipe) {
+  if (error || !recipe || !parsed) {
     return (
       <div className="min-h-screen bg-nourish-bg">
         {header('Erro')}
@@ -166,12 +223,11 @@ export function MealDetail() {
     )
   }
 
-  const parsed = parseDescription(recipe.description ?? '')
   const { ingredients: parsedIngr, steps, nutrition, price } = parsed
   const origin = resolveMealOrigin(parsed.origin)
   const restaurant = isRestaurantMeal(parsed.origin)
+  const restaurantName = eatOutRestaurantName(parsed.origin, parsed.location)
   const nutricaoOk = parsed.verified.includes('nutricao')
-  const precoOk = parsed.verified.includes('preco')
   const stepLines = restaurant ? [] : parseSteps(steps)
 
   // Prefer nutrition computed from ingredient quantities × product macros.
@@ -219,11 +275,6 @@ export function MealDetail() {
               {parsed.category}
             </span>
           )}
-          {restaurant && parsed.location && (
-            <span className="text-[10px] px-2 py-0.5 rounded bg-nourish-surface-high text-nourish-text font-medium">
-              {parsed.location}
-            </span>
-          )}
           {!restaurant && parsed.timeMinutes !== null && (
             <span className="text-[10px] px-2 py-0.5 rounded bg-nourish-surface-high text-nourish-text-dim font-medium tabular-nums">
               {parsed.timeMinutes} min
@@ -231,7 +282,38 @@ export function MealDetail() {
           )}
         </div>
 
-        {((showNutrition && shownNutrition) || price !== null) && (
+        {restaurant && (restaurantName || (showPrices && price !== null) || distanceLabel) && (
+          <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
+            {restaurantName && (
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-nourish-text-dim">
+                  Localização
+                </span>
+                <span className="text-sm text-nourish-text font-medium text-right">{restaurantName}</span>
+              </div>
+            )}
+            {showPrices && price !== null && (
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-nourish-text-dim">
+                  Preço
+                </span>
+                <span className="text-sm text-nourish-primary font-semibold tabular-nums">
+                  €{price.toFixed(2)}
+                </span>
+              </div>
+            )}
+            {distanceLabel && (
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-nourish-text-dim">
+                  Distância
+                </span>
+                <span className="text-sm text-nourish-text font-medium tabular-nums">{distanceLabel}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {((showNutrition && shownNutrition) || (!restaurant && showPrices && price !== null)) && (
           <div className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
             {showNutrition && shownNutrition && (
               <div>
@@ -265,16 +347,15 @@ export function MealDetail() {
                 )}
               </div>
             )}
-            {price !== null && (
+            {!restaurant && showPrices && price !== null && (
               <div
                 className={`flex items-center justify-between ${
                   showNutrition && shownNutrition ? 'border-t border-nourish-border pt-3' : ''
                 }`}
               >
-                <span className="text-nourish-text-dim text-sm">{precoOk ? 'Custo' : 'Custo estimado'}</span>
-                <span className="text-nourish-primary font-semibold inline-flex items-center gap-1.5">
+                <span className="text-nourish-text-dim text-sm">Custo</span>
+                <span className="text-nourish-primary font-semibold tabular-nums">
                   €{price.toFixed(2)}
-                  {precoOk && <VerifiedBadge verified />}
                 </span>
               </div>
             )}
@@ -291,7 +372,11 @@ export function MealDetail() {
                 return (
                   <li key={ing.id} className="flex items-center gap-2 text-sm">
                     <span className="w-1.5 h-1.5 rounded-full bg-nourish-primary flex-shrink-0" />
-                    <span className="text-nourish-text">{product?.name ?? `Produto ${ing.product_id}`}</span>
+                    <span className="text-nourish-text">
+                      {product
+                        ? ingredientDisplayName(product.name, product.description)
+                        : `Produto ${ing.product_id}`}
+                    </span>
                     {ing.amount > 0 && (
                       <span className="ml-auto text-nourish-text-dim text-xs tabular-nums">
                         {ing.amount} {unit?.name ?? ''}
@@ -311,13 +396,15 @@ export function MealDetail() {
               {parsed.ingredientItems.map((item, i) => (
                 <li key={i} className="flex items-center gap-2 text-sm">
                   <span className="w-1.5 h-1.5 rounded-full bg-nourish-primary flex-shrink-0" />
-                  <span className="text-nourish-text">{item.name}</span>
+                  <span className="text-nourish-text">
+                    {displayNameForIngredient(item.name, productList, favorites)}
+                  </span>
                   {item.grams !== null && (
                     <span className="text-nourish-text-dim text-xs tabular-nums">
                       {item.grams} g
                     </span>
                   )}
-                  {item.price !== null && (
+                  {showPrices && item.price !== null && (
                     <span className="ml-auto text-nourish-text-dim text-xs tabular-nums">
                       €{item.price.toFixed(2)}
                     </span>

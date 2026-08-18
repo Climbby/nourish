@@ -2,10 +2,10 @@ import { useState, type MouseEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Recipe } from '../types/grocy'
 import { grocy } from '../api/grocy'
+import { useShowPrices } from '../hooks/useDisplayPrefs'
 import { useShowNutrition } from '../hooks/useShowNutrition'
 import { parseDescription } from '../utils/parseDescription'
-import { isRestaurantMeal, resolveMealOrigin } from '../utils/mealOrigin'
-import { distanceFromHome, formatLocalityMeta, type Coords } from '../utils/locality'
+import { eatOutRestaurantName, resolveMealOrigin } from '../utils/mealOrigin'
 import { logMealConsumption } from '../utils/logMealConsumption'
 import { VerifiedBadge } from './VerifiedBadge'
 
@@ -13,28 +13,23 @@ interface Props {
   recipe: Recipe
   showPortions?: boolean
   onLogged?: (recipeId: number, description: string) => void
-  homeCoords?: Coords | null
 }
 
-export function MealCard({ recipe, showPortions, onLogged, homeCoords }: Props) {
+export function MealCard({ recipe, showPortions, onLogged }: Props) {
   const navigate = useNavigate()
   const showNutrition = useShowNutrition()
+  const showPrices = useShowPrices()
   const [imgError, setImgError] = useState(false)
   const [logging, setLogging] = useState(false)
   const [logged, setLogged] = useState(false)
   const [logError, setLogError] = useState(false)
-  const { nutrition, price, portions, verified, location, locationCoords, origin } = parseDescription(
+  const { nutrition, price, portions, verified, location, origin } = parseDescription(
     recipe.description ?? ''
   )
   const nutricaoOk = verified.includes('nutricao')
-  const precoOk = verified.includes('preco')
   const showMacros = showNutrition && nutrition
-  const isFora = isRestaurantMeal(resolveMealOrigin(origin))
-  const distMeta =
-    isFora && location
-      ? formatLocalityMeta(distanceFromHome(homeCoords, locationCoords))
-      : null
-
+  const showPrice = showPrices && price !== null
+  const restaurant = eatOutRestaurantName(resolveMealOrigin(origin), location)
 
   async function handleComi(e: MouseEvent) {
     e.stopPropagation()
@@ -61,46 +56,41 @@ export function MealCard({ recipe, showPortions, onLogged, homeCoords }: Props) 
         onClick={() => navigate(`/meal/${recipe.id}`)}
         className="flex flex-col flex-1 min-h-0 text-left active:scale-[0.98] transition-transform duration-100 focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-inset"
       >
-        <div className="relative flex-shrink-0">
-          {recipe.picture_file_name && !imgError ? (
-            <img
-              src={grocy.pictureUrl(recipe.picture_file_name)}
-              alt={recipe.name}
-              className="w-full object-cover"
-              style={{ aspectRatio: '4/3' }}
-              onError={() => setImgError(true)}
-            />
-          ) : (
-            <div
-              className="w-full bg-nourish-surface-high flex items-center justify-center text-4xl"
-              style={{ aspectRatio: '4/3' }}
-            >
-              🍽️
-            </div>
-          )}
-          {showPortions && portions !== null && portions > 0 && (
-            <span className="absolute top-2 right-2 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full">
-              {portions}×
-            </span>
-          )}
-        </div>
+        {(recipe.picture_file_name || (showPortions && portions !== null && portions > 0)) && (
+          <div className="relative flex-shrink-0">
+            {recipe.picture_file_name && !imgError ? (
+              <img
+                src={grocy.pictureUrl(recipe.picture_file_name)}
+                alt={recipe.name}
+                className="w-full object-cover"
+                style={{ aspectRatio: '4/3' }}
+                loading="lazy"
+                decoding="async"
+                onError={() => setImgError(true)}
+              />
+            ) : recipe.picture_file_name ? (
+              <div className="w-full bg-nourish-surface-high" style={{ aspectRatio: '4/3' }} />
+            ) : null}
+            {showPortions && portions !== null && portions > 0 && (
+              <span className="absolute top-2 right-2 bg-nourish-primary text-nourish-on-primary text-xs font-bold px-2 py-0.5 rounded-full">
+                {portions}×
+              </span>
+            )}
+          </div>
+        )}
         <div className="p-3 flex flex-col flex-1 gap-2">
           <h3 className="font-semibold text-nourish-text text-sm leading-snug line-clamp-2 min-h-[2.5rem]">
             {recipe.name}
           </h3>
-          {isFora && location && (
-            <p className="text-[11px] text-nourish-text-dim leading-snug">
-              {location}
-              {distMeta && <span className="tabular-nums"> · {distMeta}</span>}
-            </p>
+          {restaurant && (
+            <p className="text-[11px] text-nourish-text-dim leading-snug truncate">{restaurant}</p>
           )}
 
-          {(price !== null || showMacros) && (
+          {(showPrice || showMacros) && (
             <div className="mt-auto flex items-center justify-between gap-1 flex-wrap">
-              {price !== null && (
-                <span className="text-nourish-primary text-xs font-semibold inline-flex items-center gap-1">
+              {showPrice && (
+                <span className="text-nourish-primary text-xs font-semibold">
                   €{price.toFixed(2)}
-                  {precoOk && <VerifiedBadge verified />}
                 </span>
               )}
               {showMacros && (

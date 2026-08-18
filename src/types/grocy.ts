@@ -66,7 +66,8 @@ export interface AddStockOptions {
 
 export interface ShoppingListItem {
   id: number
-  product_id: number
+  /** Null / 0 = free-text row (`note` holds the name). */
+  product_id: number | null
   amount: number
   note: string | null
   done: number

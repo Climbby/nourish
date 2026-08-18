@@ -11,8 +11,10 @@ import {
 } from '../utils/createPartRecipe'
 import { getMealAccessOrder } from '../utils/mealAccess'
 import { CATEGORIES_FOR_ROLE, ROLE_EMOJI, ROLE_LABEL, type PartRole } from '../utils/mealRole'
-import { MEAL_ORIGINS, resolveMealOrigin, type MealOrigin } from '../utils/mealOrigin'
+import { MEAL_ORIGINS, mealMatchesSearch, resolveMealOrigin, type MealOrigin } from '../utils/mealOrigin'
 import { parseDescription } from '../utils/parseDescription'
+import { ingredientDisplayName, getGenericoFromDesc, getNomeCurtoFromDesc } from '../utils/despensaAnalytics'
+import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
 import { BottomSheet } from './BottomSheet'
 import { MealListRow } from './MealListRow'
 
@@ -55,6 +57,7 @@ export function MealPickSheet({
   const [createError, setCreateError] = useState(false)
 
   const partRole = isPartRecipeRole(role) ? role : null
+  const { prefs } = useDisplayPrefs()
 
   useEffect(() => {
     if (!open) return
@@ -88,10 +91,11 @@ export function MealPickSheet({
       if (excludeIds?.has(r.id)) return false
       const parsed = parseDescription(r.description ?? '')
       if (parsed.category !== 'Completa') return false
+      if (prefs.hideProductsWithoutImage && !r.picture_file_name) return false
       if (originFilter !== 'all' && resolveMealOrigin(parsed.origin) !== originFilter) return false
-      return matchesQuery(r.name, q)
+      return mealMatchesSearch(r.name, parsed.origin, parsed.location, q)
     })
-  }, [partRole, recipes, excludeIds, originFilter, q])
+  }, [partRole, recipes, excludeIds, originFilter, q, prefs.hideProductsWithoutImage])
 
   /** Recipes already used for this role, most recently eaten first. */
   const usedOptions = useMemo(() => {
@@ -114,8 +118,15 @@ export function MealPickSheet({
 
   const productOptions = useMemo(() => {
     if (partRole === null) return []
-    return despensaCandidates(products, recipes).filter((p) => matchesQuery(p.name, q))
-  }, [partRole, products, recipes, q])
+    return despensaCandidates(products, recipes).filter((p) => {
+      if (prefs.hideProductsWithoutImage && !p.picture_file_name) return false
+      if (matchesQuery(p.name, q)) return true
+      if (matchesQuery(ingredientDisplayName(p.name, p.description), q)) return true
+      const curto = getNomeCurtoFromDesc(p.description)
+      const gen = getGenericoFromDesc(p.description)
+      return (curto != null && matchesQuery(curto, q)) || (gen != null && matchesQuery(gen, q))
+    })
+  }, [partRole, products, recipes, q, prefs.hideProductsWithoutImage])
 
   function startCreate(product: Product) {
     if (partRole === null) return
@@ -196,7 +207,7 @@ export function MealPickSheet({
         {partRole !== null && pendingProduct && (
           <div className="px-4 py-3 border-b border-nourish-border/60 shrink-0 bg-nourish-surface-high/50 space-y-2">
             <p className="text-sm font-semibold text-nourish-text truncate">
-              {ROLE_EMOJI[partRole]} {pendingProduct.name}
+              {ROLE_EMOJI[partRole]} {ingredientDisplayName(pendingProduct.name, pendingProduct.description)}
             </p>
             <p className="text-xs text-nourish-text-dim">
               Quanto costumas comer? É o que faz as macros serem reais.
@@ -287,7 +298,9 @@ export function MealPickSheet({
                   Da despensa
                 </h3>
                 <ul className="space-y-1">
-                  {productOptions.map((product) => (
+                  {productOptions.map((product) => {
+                    const label = ingredientDisplayName(product.name, product.description)
+                    return (
                     <li key={product.id}>
                       <button
                         type="button"
@@ -311,15 +324,21 @@ export function MealPickSheet({
                         )}
                         <span className="min-w-0 flex-1">
                           <span className="block text-sm text-nourish-text truncate">
-                            {product.name}
+                            {label}
                           </span>
+                          {label !== product.name && (
+                            <span className="block text-xs text-nourish-text-dim truncate">
+                              {product.name}
+                            </span>
+                          )}
                           <span className="block text-xs text-nourish-text-dim">
                             Criar {ROLE_LABEL[partRole].toLowerCase()}
                           </span>
                         </span>
                       </button>
                     </li>
-                  ))}
+                    )
+                  })}
                 </ul>
               </section>
             )}

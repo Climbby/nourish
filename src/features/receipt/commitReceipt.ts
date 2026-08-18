@@ -5,10 +5,13 @@ import {
   getBuyAmountFromDesc,
   getGenericoFromDesc,
   getPriceFromDesc,
+  getUnitGramsFromDesc,
+  inferUnitGramsFromNames,
 } from '../../utils/despensaAnalytics'
 import { parseVerifiedFields } from '../../utils/verification'
 import type { ReviewLine } from './types'
 import { setAlias } from './receiptAliases'
+import { syncReceiptIgnoreFromReview } from './receiptIgnore'
 
 export interface CommitResult {
   succeeded: { lineId: string; productId: number; created?: boolean }[]
@@ -27,6 +30,11 @@ function linePriceUnit(line: ReviewLine): 'kg' | 'un' {
   const qty = line.receiptLine.qty
   if (qty > 0 && (qty < 1 || !Number.isInteger(qty))) return 'kg'
   return 'un'
+}
+
+function lineUnitGrams(line: ReviewLine): number | null {
+  if (linePriceUnit(line) === 'kg') return null
+  return inferUnitGramsFromNames(line.productName, line.receiptLine.name)
 }
 
 /** Generico to persist only after user chose “Definir genérico”. */
@@ -68,6 +76,7 @@ async function ensureProductId(
       priceUnit: linePriceUnit(line),
       generico,
       nomeCurto: generico,
+      unitGrams: lineUnitGrams(line),
     }),
   })
   return { productId: result.created_object_id, created: true }
@@ -87,6 +96,7 @@ async function syncProductFromReceipt(
   const existingGen = getGenericoFromDesc(prod.description)
   const fromLine = lineGenerico(line)
   const generico = existingGen || fromLine
+  const unitGrams = getUnitGramsFromDesc(prod.description) ?? lineUnitGrams(line)
   await grocy.updateProduct(productId, {
     description: buildDespensaDescription(buyAmount, unitPrice, {
       verified,
@@ -94,6 +104,7 @@ async function syncProductFromReceipt(
       existingDescription: prod.description,
       priceUnit: linePriceUnit(line),
       generico: generico ?? undefined,
+      unitGrams: unitGrams ?? undefined,
     }),
   })
 }
@@ -105,6 +116,12 @@ export async function commitReceiptLines(
   opts?: { storeLabel?: string | null }
 ): Promise<CommitResult> {
   const toCommit = lines.filter((l) => l.included && l.stockAmount > 0)
+  syncReceiptIgnoreFromReview(
+    lines.map((l) => ({
+      included: l.included,
+      names: [l.receiptLine.name, l.productName],
+    }))
+  )
   const succeeded: CommitResult['succeeded'] = []
   const failed: CommitResult['failed'] = []
   const productIds: CommitResult['productIds'] = []

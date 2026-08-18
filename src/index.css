@@ -59,6 +59,13 @@ body {
 .animate-soft-fade {
   animation: soft-fade 0.22s ease-out;
 }
+@keyframes history-pane-in {
+  from { opacity: 0; transform: translateX(var(--history-dx, 10px)); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.animate-history-pane {
+  animation: history-pane-in 0.22s ease-out;
+}
 .animate-plan-dismiss-out {
   animation: plan-dismiss-out 0.28s ease-in forwards;
   pointer-events: none;
@@ -78,4 +85,15 @@ body {
 }
 .animate-plan-accept {
   animation: plan-accept 0.35s ease-out;
+}
+
+/* Mouse/touch click must not leave a green ring; keyboard :focus-visible still can. */
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible),
+[role='button']:focus:not(:focus-visible),
+summary:focus:not(:focus-visible) {
+  outline: none;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
+  box-shadow: var(--tw-shadow, 0 0 #0000);
 }

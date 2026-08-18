@@ -10,6 +10,8 @@ import {
   isEmptyLabel,
   type NutritionLabelResult,
 } from '../features/nutrition/extractNutritionLabel'
+import { applyInsaSource, insaMissingMessage } from '../utils/insaNutrition'
+import { InsaFoodSheet } from './InsaFoodSheet'
 
 const inputClass =
   'w-full px-3 py-2.5 bg-nourish-surface-high border border-nourish-border rounded-lg text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary'
@@ -61,11 +63,17 @@ function GalleryIcon() {
 
 export function ProductMacrosSection({
   macros,
+  lookupNames = [],
   onSave,
+  onNetGrams,
   saving = false,
 }: {
   macros: ProductMacros | null
+  /** Product name / NomeCurto / Generico, cooking names first. */
+  lookupNames?: string[]
   onSave: (next: ProductMacros | null) => void | Promise<void>
+  /** Pack net weight read from the nutrition photo (peso líquido). */
+  onNetGrams?: (grams: number) => void
   saving?: boolean
 }) {
   const [editing, setEditing] = useState(false)
@@ -74,6 +82,8 @@ export function ProductMacrosSection({
   const [reading, setReading] = useState(false)
   const [readError, setReadError] = useState<string | null>(null)
   const [warning, setWarning] = useState<string | null>(null)
+  const [insaNote, setInsaNote] = useState<string | null>(null)
+  const [insaSheetOpen, setInsaSheetOpen] = useState(false)
   const [showSheet, setShowSheet] = useState(false)
   const galleryRef = useRef<HTMLInputElement>(null)
   const cameraRef = useRef<HTMLInputElement>(null)
@@ -83,10 +93,23 @@ export function ProductMacrosSection({
     setSource(macros?.source ?? 'manual')
     setReadError(null)
     setWarning(null)
+    setInsaNote(null)
     setEditing(true)
   }
 
+  function handleSource(next: MacroSource) {
+    setReadError(null)
+    setWarning(null)
+    if (next !== 'insa') {
+      setInsaNote(null)
+      setSource(next)
+      return
+    }
+    setInsaSheetOpen(true)
+  }
+
   function applyExtraction(result: NutritionLabelResult) {
+    setInsaNote(null)
     setDraft({
       calories: String(result.macros.calories),
       protein: String(result.macros.protein),
@@ -107,6 +130,7 @@ export function ProductMacrosSection({
     } else {
       setWarning(null)
     }
+    if (result.netGrams != null) onNetGrams?.(result.netGrams)
   }
 
   async function handlePhoto(file: File | undefined) {
@@ -142,12 +166,30 @@ export function ProductMacrosSection({
     }
     const allZero =
       !next.calories && !next.protein && !next.carbs && !next.fat && !next.fibre
+    if (allZero && source === 'insa') {
+      setReadError(insaMissingMessage(lookupNames))
+      return
+    }
     void onSave(allZero ? null : next)
     setEditing(false)
   }
 
   return (
     <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
+      <InsaFoodSheet
+        open={insaSheetOpen}
+        suggested={applyInsaSource(lookupNames)}
+        onClose={() => setInsaSheetOpen(false)}
+        onPick={(match) => {
+          setDraft(draftFrom(match.macros))
+          setSource('insa')
+          setInsaNote(`Preenchido com valores INSA para «${match.foodName}» (por 100 g).`)
+          setReadError(null)
+          setWarning(null)
+          setInsaSheetOpen(false)
+        }}
+      />
+
       {showSheet && (
         <div className="fixed inset-0 z-40 bg-black/60" onClick={() => setShowSheet(false)}>
           <div
@@ -191,7 +233,7 @@ export function ProductMacrosSection({
       )}
 
       <div className="flex items-center justify-between gap-2">
-        <h3 className="font-semibold text-nourish-text text-sm">Nutrição por 100 g</h3>
+        <h3 className="font-semibold text-nourish-text text-sm">Nutrição (por 100g)</h3>
         {macros && !editing && (
           <span className="text-[10px] px-2 py-0.5 rounded bg-nourish-surface-high text-nourish-text-dim font-semibold uppercase tracking-wider">
             {MACRO_SOURCE_LABELS[macros.source]}
@@ -201,7 +243,7 @@ export function ProductMacrosSection({
 
       {!editing && (
         <>
-          {macros ? (
+          {macros && (
             <dl className="grid grid-cols-5 gap-2 text-center">
               {FIELDS.map(({ key, label, unit }) => (
                 <div key={key} className="rounded-lg bg-nourish-surface-high py-2">
@@ -213,11 +255,6 @@ export function ProductMacrosSection({
                 </div>
               ))}
             </dl>
-          ) : (
-            <p className="text-xs text-nourish-text-dim leading-relaxed">
-              Sem valores. Preenche uma vez e todas as receitas com este ingrediente passam a ter
-              nutrição calculada em vez de estimada.
-            </p>
           )}
 
           <div className="flex gap-2">
@@ -268,7 +305,7 @@ export function ProductMacrosSection({
                   key={s}
                   type="button"
                   aria-pressed={source === s}
-                  onClick={() => setSource(s)}
+                  onClick={() => handleSource(s)}
                   className={`flex-1 py-2 rounded-lg text-xs font-medium border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
                     source === s
                       ? 'bg-nourish-primary text-nourish-on-primary border-nourish-primary'
@@ -281,6 +318,32 @@ export function ProductMacrosSection({
             </div>
           </div>
 
+          {insaNote && (
+            <div className="flex items-start gap-2 rounded-lg bg-nourish-surface-high px-3 py-2">
+              <p className="text-xs text-nourish-text-dim leading-relaxed flex-1 min-w-0">
+                {insaNote}
+              </p>
+              <button
+                type="button"
+                onClick={() => setInsaSheetOpen(true)}
+                className="shrink-0 text-xs font-semibold text-nourish-primary py-0.5 focus:outline-none focus:ring-2 focus:ring-nourish-primary rounded"
+              >
+                Alterar
+              </button>
+            </div>
+          )}
+
+          {source === 'insa' && !insaNote && (
+            <button
+              type="button"
+              onClick={() => setInsaSheetOpen(true)}
+              className="w-full text-left text-xs text-nourish-text-dim leading-relaxed rounded-lg bg-nourish-surface-high px-3 py-2 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+            >
+              Valores da tabela nacional.{' '}
+              <span className="font-semibold text-nourish-primary">Alterar alimento</span>
+            </button>
+          )}
+
           {warning && (
             <p className="text-xs text-amber-400 leading-relaxed rounded-lg bg-nourish-surface-high px-3 py-2">
               {warning}
@@ -290,7 +353,10 @@ export function ProductMacrosSection({
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => setEditing(false)}
+              onClick={() => {
+                setInsaSheetOpen(false)
+                setEditing(false)
+              }}
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-nourish-surface-high text-nourish-text focus:outline-none focus:ring-2 focus:ring-nourish-primary"
             >
               Cancelar

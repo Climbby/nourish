@@ -1,3 +1,4 @@
+import { useShowPrices } from '../hooks/useDisplayPrefs'
 import { useShowNutrition } from '../hooks/useShowNutrition'
 import type { MealSpendRow } from '../utils/mealStats'
 import { formatTripCost } from '../utils/visitTripCost'
@@ -11,6 +12,7 @@ interface Props {
 
 export function MealSpendSheet({ meals, periodLabel, totalSpendEur, onClose }: Props) {
   const showNutrition = useShowNutrition()
+  const showPrices = useShowPrices()
   return (
     <div className="fixed inset-0 z-50 bg-black/60" onClick={onClose}>
       <div
@@ -21,7 +23,9 @@ export function MealSpendSheet({ meals, periodLabel, totalSpendEur, onClose }: P
         <div className="p-4 border-b border-nourish-border/60 shrink-0">
           <p className="text-sm font-semibold text-nourish-text">Refeições registadas</p>
           <p className="text-xs text-nourish-text-dim mt-0.5">
-            {periodLabel} · {formatTripCost(totalSpendEur)} · {meals.length} registo
+            {periodLabel}
+            {showPrices && <> · {formatTripCost(totalSpendEur)}</>}
+            {' '}· {meals.length} registo
             {meals.length !== 1 ? 's' : ''}
           </p>
         </div>
@@ -41,13 +45,14 @@ export function MealSpendSheet({ meals, periodLabel, totalSpendEur, onClose }: P
                   <p className="text-sm font-semibold text-nourish-text leading-snug">
                     {meal.recipeName}
                   </p>
-                  {meal.priceEur != null ? (
-                    <span className="text-sm font-bold tabular-nums text-nourish-primary shrink-0">
-                      {formatTripCost(meal.priceEur)}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-nourish-text-dim shrink-0">Sem preço</span>
-                  )}
+                  {showPrices &&
+                    (meal.priceEur != null ? (
+                      <span className="text-sm font-bold tabular-nums text-nourish-primary shrink-0">
+                        {formatTripCost(meal.priceEur)}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-nourish-text-dim shrink-0">Sem preço</span>
+                    ))}
                 </div>
                 <p className="text-xs text-nourish-text tabular-nums">
                   {meal.dayLabel}

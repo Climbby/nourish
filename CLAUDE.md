@@ -98,6 +98,15 @@ Completa
 
 [Notas]
 Menos sal da próxima.
+
+[Origem]
+restaurante
+
+[Local]
+Cantina do ISCTE
+
+[Coords]
+40.114,-8.499
 ```
 
 `parseDescription` / `buildDescription` handle encode/decode. Portions are decremented on meal log (with rollback on failure) and incremented via "Preparar refeição".
@@ -107,6 +116,8 @@ Menos sal da próxima.
 **Ingredient lines** are `Nome`, `Nome|preco`, or `Nome|preco|gramas` (price may be blank: `Nome||gramas`). The 3-field form is only read when both trailing fields are numeric, so names containing a literal `|` still parse the legacy way.
 
 **`[Tempo]`** is cook time in minutes — an estimate to be replaced by the real measured time. **`[Notas]`** is free text that accumulates as a recipe gets repeated.
+
+**`[Origem]`** is `supermercado` (home cooking) or `restaurante` (eat-out). **`[Local]`** is the restaurant name for eat-out meals — that is the display identity on cards, detail, and History (not reverse-geocoded locality). **`[Coords]`** is optional GPS used only to sort Fora meals by distance; it is not shown in the UI.
 
 ### Product nutrition
 
@@ -150,6 +161,8 @@ Configured in `.claude/` — do not recreate these:
 - **Agent** `mobile-ui-reviewer`: reviews components for mobile UX, safe-area, and Tailwind quality
 
 ## Deployment Target
+
+After finishing user-visible work, **commit locally and deploy** (do not wait to be asked). Do not `git push` unless asked.
 
 Production: static `dist/` served by Nginx from `/var/www/html` on **CT117 (`nourish`, 192.168.1.27)**, exposed externally via the Cloudflare tunnel running in CT105. SSH as root with `~/.ssh/pve_ed25519`; the Proxmox host is `pve` (192.168.1.3).
 

@@ -8,6 +8,8 @@ interface Props {
   label?: string
   /** When false, hide kcal / macros / objectivos (silent defaults still used for scoring). */
   showNutrition?: boolean
+  /** When false, hide € spend on the bar. */
+  showPrices?: boolean
 }
 
 export function MacroSummaryBar({
@@ -16,13 +18,16 @@ export function MacroSummaryBar({
   days,
   label = 'Plano',
   showNutrition = true,
+  showPrices = true,
 }: Props) {
   const expectedKcal = targets.caloriesPerDay * days
   const pct = expectedKcal > 0 ? Math.min(100, Math.round((totals.calories / expectedKcal) * 100)) : 0
   const spendLabel =
-    totals.mealsWithPrice > 0
+    showPrices && totals.mealsWithPrice > 0
       ? `€${totals.spend.toFixed(2)}`
       : null
+  const showPriceCoverage =
+    showPrices && totals.mealsWithPrice > 0 && totals.mealsWithPrice < days
 
   if (!showNutrition && !spendLabel) return null
 
@@ -55,7 +60,7 @@ export function MacroSummaryBar({
             <span>{totals.carbs}g C</span>
             <span>·</span>
             <span>{totals.fat}g G</span>
-            {totals.mealsWithPrice > 0 && totals.mealsWithPrice < days && (
+            {showPriceCoverage && (
               <>
                 <span>·</span>
                 <span>{totals.mealsWithPrice}/{days} com preço</span>
@@ -67,7 +72,7 @@ export function MacroSummaryBar({
           </div>
         </>
       )}
-      {!showNutrition && spendLabel && totals.mealsWithPrice > 0 && totals.mealsWithPrice < days && (
+      {!showNutrition && showPriceCoverage && (
         <p className="text-[10px] text-nourish-text-dim tabular-nums">
           {totals.mealsWithPrice}/{days} com preço
         </p>
@@ -80,17 +85,20 @@ export function MacroChips({
   nutrition,
   price,
   showNutrition = true,
+  showPrices = true,
 }: {
   nutrition?: { protein: number; carbs: number; fat: number; calories: number } | null
   price?: number | null
   showNutrition?: boolean
+  showPrices?: boolean
 }) {
   const showMacros = showNutrition && nutrition
-  if (!showMacros && (price === null || price === undefined)) return null
+  const showPrice = showPrices && price != null
+  if (!showMacros && !showPrice) return null
 
   return (
     <div className="flex flex-wrap gap-1 mt-1">
-      {price != null && (
+      {showPrice && (
         <span className="px-1.5 py-0.5 bg-nourish-primary/15 rounded text-[10px] text-nourish-primary font-semibold tabular-nums">
           €{price.toFixed(2)}
         </span>

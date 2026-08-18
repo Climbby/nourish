@@ -12,7 +12,7 @@ const OPTIONS: {
   label: string
   desc: string
   previewKey?: keyof AddMenuPreviews
-  /** Static image (e.g. Talão illustration) when not loaded from Grocy */
+  /** Static image (e.g. Talão photo) when not loaded from Grocy */
   imageUrl?: string
   /** Fallback when no photo — solid tint */
   tint: string
@@ -43,7 +43,7 @@ const OPTIONS: {
     label: 'Talão',
     desc: 'Ler talão e atualizar stock com preços',
     tint: 'bg-violet-950',
-    imageUrl: '/talao.svg',
+    imageUrl: '/talao.jpg',
   },
 ]
 

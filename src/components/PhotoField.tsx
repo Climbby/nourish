@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { useAutoOpenCamera } from '../utils/useAutoOpenCamera'
 import { ImageCropper } from './ImageCropper'
 
@@ -34,9 +34,20 @@ interface Props {
   labelClass: string
   /** Open the rear camera immediately (PWA shortcut / deep link). */
   autoOpenCamera?: boolean
+  /** Hide the “Foto” label (product detail uses the photo as the hero). */
+  hideLabel?: boolean
+  /** Drawn over the photo (e.g. title + actions). Sibling of the tap target so buttons stay valid. */
+  overlay?: ReactNode
 }
 
-export function PhotoField({ preview, onChange, labelClass, autoOpenCamera = false }: Props) {
+export function PhotoField({
+  preview,
+  onChange,
+  labelClass,
+  autoOpenCamera = false,
+  hideLabel = false,
+  overlay,
+}: Props) {
   const galleryRef = useRef<HTMLInputElement>(null)
   const cameraRef = useRef<HTMLInputElement>(null)
   const [showSheet, setShowSheet] = useState(false)
@@ -98,18 +109,34 @@ export function PhotoField({ preview, onChange, labelClass, autoOpenCamera = fal
       )}
 
       <div>
-        <label className={labelClass}>Foto</label>
-        <button
-          type="button"
-          onClick={() => setShowSheet(true)}
-          className="relative w-full bg-nourish-surface border-2 border-dashed border-nourish-border rounded-2xl overflow-hidden flex flex-col items-center justify-center gap-2 active:bg-nourish-surface-high transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+        {!hideLabel && <label className={labelClass}>Foto</label>}
+        <div
+          className={`relative w-full rounded-2xl overflow-hidden ${
+            preview
+              ? 'bg-nourish-surface'
+              : 'bg-nourish-surface border-2 border-dashed border-nourish-border'
+          }`}
           style={{ aspectRatio: '4/3' }}
         >
-          {preview
-            ? <img src={preview} className="absolute inset-0 w-full h-full object-cover" alt="preview" />
-            : <><BigCameraIcon /><p className="text-sm text-nourish-text-dim">Toca para adicionar foto</p></>
-          }
-        </button>
+          <button
+            type="button"
+            onClick={() => setShowSheet(true)}
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 active:bg-nourish-surface-high transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-nourish-primary"
+            aria-label={preview ? 'Alterar foto' : 'Adicionar foto'}
+          >
+            {preview ? (
+              <img src={preview} className="absolute inset-0 w-full h-full object-cover" alt="" />
+            ) : (
+              <>
+                <BigCameraIcon />
+                <p className="text-sm text-nourish-text-dim">Toca para adicionar foto</p>
+              </>
+            )}
+          </button>
+          {preview && overlay && (
+            <div className="absolute inset-x-0 bottom-0 z-10 pointer-events-none">{overlay}</div>
+          )}
+        </div>
         <input ref={galleryRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
       </div>

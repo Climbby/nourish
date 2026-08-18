@@ -22,6 +22,7 @@ import { fetchZoneCoordsFromHa, getZoneCoord, loadZoneCoords, saveZoneCoords } f
 import { fetchHaAtHome, HA_PERSON_ENTITY } from './ha-presence.mjs'
 import {
   blockSupermarket,
+  filterBlockedVisits,
   loadSupermarkets,
   removeTrackedSupermarket,
   shouldPromptForPlace,
@@ -144,7 +145,7 @@ function computeMetrics(events) {
     (e) => e.type === 'supermarket_enter' || e.type === 'supermarket_leave'
   )
   const visits = buildSupermarketVisits(shopEvents)
-  const realVisits = realSupermarketVisits(visits)
+  const realVisits = filterBlockedVisits(realSupermarketVisits(visits), loadSupermarkets().blocklist)
   const leaveHome = events.filter((e) => e.type === 'leave_home')
   const now = Date.now()
   const weekAgo = now - 7 * 86400000
@@ -222,7 +223,10 @@ const server = http.createServer(async (req, res) => {
       const events = loadEvents(days).filter(
         (e) => e.type === 'supermarket_enter' || e.type === 'supermarket_leave'
       )
-      const visits = realSupermarketVisits(buildSupermarketVisits(events))
+      const visits = filterBlockedVisits(
+        realSupermarketVisits(buildSupermarketVisits(events)),
+        loadSupermarkets().blocklist
+      )
       const enriched = await enrichVisitsWithTripDistance(visits)
       return send(200, { visits: enriched, days })
     }
@@ -265,7 +269,7 @@ const server = http.createServer(async (req, res) => {
         return send(200, result)
       }
       if (action === 'block') {
-        return send(200, blockSupermarket(place))
+        return send(200, blockSupermarket(place, { zone_id: j.zone_id }))
       }
       return send(400, { error: 'action must be track or block' })
     }

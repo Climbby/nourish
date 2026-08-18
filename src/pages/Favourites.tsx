@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 import { grocy } from '../api/grocy'
 import type { Recipe } from '../types/grocy'
-import { MealCard } from '../components/MealCard'
+import { MealBrowseList } from '../components/MealBrowseList'
 import { ConnectionError } from '../components/ConnectionError'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
 import { useFavourites } from '../hooks/useFavourites'
+import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
+import { parseDescription } from '../utils/parseDescription'
 
 export function Favourites() {
   const [recipes, setRecipes] = useState<Recipe[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const { favourites } = useFavourites()
+  const { prefs } = useDisplayPrefs()
 
   const loadFavourites = useCallback(() => {
     setLoading(true)
@@ -27,7 +30,12 @@ export function Favourites() {
     loadFavourites()
   }, [loadFavourites])
 
-  const favouriteRecipes = recipes.filter((r) => favourites.has(r.id))
+  const favouriteRecipes = recipes.filter((r) => {
+    if (!favourites.has(r.id)) return false
+    if (!prefs.hideProductsWithoutImage || r.picture_file_name) return true
+    const category = parseDescription(r.description ?? '').category
+    return category !== 'Completa' && category !== 'Ligeira'
+  })
 
   return (
     <div className="min-h-screen bg-nourish-bg">
@@ -52,11 +60,7 @@ export function Favourites() {
         )}
 
         {!loading && favouriteRecipes.length > 0 && (
-          <div className="grid grid-cols-2 gap-3">
-            {favouriteRecipes.map((r) => (
-              <MealCard key={r.id} recipe={r} />
-            ))}
-          </div>
+          <MealBrowseList recipes={favouriteRecipes} view={prefs.mealListView} />
         )}
       </main>
 

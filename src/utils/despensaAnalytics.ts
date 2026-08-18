@@ -90,9 +90,55 @@ export function getUnitGramsFromDesc(description: string | null): number | null 
   return isNaN(val) || val <= 0 ? null : val
 }
 
+const PACK_WEIGHT_RE = /(\d+(?:[.,]\d+)?)\s*(kg|kgs|gr(?:amas?)?|g)\b/gi
+
+/**
+ * Pack weight from a SKU / talão name (`185G`, `185GR`, `250 g`, `1KG`).
+ * Skips `10x50G`-style multipliers where the number is ambiguous.
+ */
+export function inferUnitGramsFromName(name: string): number | null {
+  const trimmed = name.trim()
+  if (!trimmed) return null
+  const re = new RegExp(PACK_WEIGHT_RE.source, 'gi')
+  const matches = [...trimmed.matchAll(re)]
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const m = matches[i]
+    const idx = m.index ?? 0
+    const before = trimmed.slice(Math.max(0, idx - 12), idx)
+    if (/\d+\s*[x×]\s*$/i.test(before)) continue
+    const n = parseFloat(m[1].replace(',', '.'))
+    if (!(n > 0)) continue
+    const unit = m[2].toLowerCase()
+    const grams = unit === 'kg' || unit === 'kgs' ? n * 1000 : n
+    if (grams < 5 || grams > 10000) continue
+    return Math.round(grams * 100) / 100
+  }
+  return null
+}
+
+/** First pack weight found among SKU / talão names. */
+export function inferUnitGramsFromNames(
+  ...names: Array<string | null | undefined>
+): number | null {
+  for (const name of names) {
+    if (!name) continue
+    const grams = inferUnitGramsFromName(name)
+    if (grams != null) return grams
+  }
+  return null
+}
+
 /** Display name for cooking: nome curto if set, else product name. */
 export function cookingName(productName: string, description: string | null): string {
   return getNomeCurtoFromDesc(description) || productName
+}
+
+/**
+ * Meal ingredient label: Generico family, then NomeCurto, then the product name.
+ * SKU / receipt names stay on the Grocy product; meals should not show them.
+ */
+export function ingredientDisplayName(productName: string, description: string | null): string {
+  return getGenericoFromDesc(description) || getNomeCurtoFromDesc(description) || productName
 }
 
 /** Despensa list title: Generico if set, else product name. */

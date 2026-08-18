@@ -3,12 +3,14 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { fetchSupermarketVisits, type SupermarketVisit } from '../api/homelabMetrics'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
+import { LongPressCard } from '../components/LongPressCard'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
 import { VisitCarSheet } from '../components/VisitCarSheet'
 import { VisitDateTime } from '../components/VisitDateTime'
 import { VisitReceiptSheet } from '../components/VisitReceiptSheet'
 import { useCars } from '../hooks/useCars'
+import { useShowPrices } from '../hooks/useDisplayPrefs'
 import { useFuelPrices } from '../hooks/useFuelPrices'
 import { useHouseholdProfiles } from '../hooks/useHouseholdProfiles'
 import { OwnershipControls } from '../components/OwnershipControls'
@@ -41,7 +43,14 @@ import {
 import {
   supermarketLabelForVisit,
 } from '../utils/visitSupermarketLabel'
-import { fetchSupermarkets, type TrackedSupermarket } from '../utils/supermarkets'
+import {
+  blockSupermarket,
+  fetchSupermarkets,
+  type BlockedPlace,
+  type TrackedSupermarket,
+} from '../utils/supermarkets'
+import { filterIgnoredVisits, ignoreTargetForVisit } from '../utils/ignoredSupermarket'
+import { VisitIgnoreSheet } from '../components/VisitIgnoreSheet'
 import {
   fetchVisitCars,
   visitCarMap,
@@ -59,6 +68,9 @@ import {
 import { carDisplayName } from '../utils/carDisplayName'
 import { formatVisitTotalCost } from '../utils/visitVisitCost'
 import { visitTripCostEur } from '../utils/visitTripCost'
+import { formatPtDate } from '../utils/formatPtDate'
+import { parseDescription } from '../utils/parseDescription'
+import { eatOutRestaurantName } from '../utils/mealOrigin'
 
 function todayStr() {
   const d = new Date()
@@ -73,18 +85,12 @@ function formatDay(day: string): string {
   if (day === today) return 'Hoje'
   if (day === yesterday) return 'Ontem'
   const [y, m, dd] = day.split('-').map(Number)
-  return new Date(y, m - 1, dd).toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' })
+  return formatPtDate(`${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`)
 }
 
 function formatTime(ts: string): string {
   const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T'))
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-function formatVisitDay(iso: string): string {
-  const d = new Date(iso)
-  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  return formatDay(day)
 }
 
 function CarIcon({ active }: { active?: boolean }) {
@@ -191,6 +197,12 @@ export function History() {
     setSearchParams({}, { replace: true })
   }
 
+  /** Tapping the already-selected segment still switches to the other tab. */
+  function onHistoryTabClick(clicked: HistoryTab) {
+    const next = clicked === tab ? (tab === 'meals' ? 'supermarket' : 'meals') : clicked
+    setTab(next)
+  }
+
   useEffect(() => {
     if (stateTab === 'supermarket' && searchParams.get('tab') !== 'supermarket') {
       setSearchParams({ tab: 'supermarket' }, { replace: true })
@@ -205,15 +217,20 @@ export function History() {
   const [visitCars, setVisitCars] = useState<VisitCarLink[]>([])
   const [visitAttrs, setVisitAttrs] = useState<VisitAttribution[]>([])
   const [trackedSupermarkets, setTrackedSupermarkets] = useState<TrackedSupermarket[]>([])
+  const [blockedPlaces, setBlockedPlaces] = useState<BlockedPlace[]>([])
   const [carSheetVisit, setCarSheetVisit] = useState<SupermarketVisit | null>(null)
+  const [ignoreVisit, setIgnoreVisit] = useState<SupermarketVisit | null>(null)
+  const [ignoreBusy, setIgnoreBusy] = useState(false)
+  const [ignoreError, setIgnoreError] = useState<string | null>(null)
   const [receiptSheet, setReceiptSheet] = useState<{
     visit: SupermarketVisit
     receipt: VisitReceiptLink
   } | null>(null)
   const { cars, refreshCars, enabled: carsEnabled } = useCars()
-  const { profiles, activeId, activeProfile } = useHouseholdProfiles()
+  const { profiles, activeId } = useHouseholdProfiles()
   const activeCars = carsEnabled ? cars : []
   const { priceForCar } = useFuelPrices()
+  const showPrices = useShowPrices()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -258,6 +275,7 @@ export function History() {
         setVisitReceipts(receipts)
         setVisitCars(carLinks)
         setTrackedSupermarkets(supermarkets?.tracked ?? [])
+        setBlockedPlaces(supermarkets?.blocklist ?? [])
         setVisitAttrs(attributions)
         setVisitOverrides(overrides)
       })
@@ -287,8 +305,13 @@ export function History() {
   const visibleVisits = useMemo(() => {
     if (!visits) return []
     const withOverrides = applyVisitOverrides(visits, visitOverrides)
-    return withOverrides.filter((v) => isVisitVisibleToProfile(v.entered_at, activeId, attrByVisit))
-  }, [visits, activeId, attrByVisit, visitOverrides])
+    const profileVisible = withOverrides.filter((v) =>
+      isVisitVisibleToProfile(v.entered_at, activeId, attrByVisit)
+    )
+    return filterIgnoredVisits(profileVisible, blockedPlaces, (v) =>
+      supermarketLabelForVisit(v, trackedSupermarkets)
+    )
+  }, [visits, activeId, attrByVisit, visitOverrides, blockedPlaces, trackedSupermarkets])
 
   const visibleEntries = useMemo(
     () => entries.filter((e) => isMealLogVisibleToProfile(e.note, activeId)),
@@ -335,6 +358,35 @@ export function History() {
     setVisitOverrides(next)
   }
 
+  async function ignoreStoreFromVisit() {
+    if (!ignoreVisit) return
+    const label = supermarketLabelForVisit(ignoreVisit, trackedSupermarkets)
+    const target = ignoreTargetForVisit(ignoreVisit, trackedSupermarkets, label)
+    setIgnoreBusy(true)
+    setIgnoreError(null)
+    const ok = await blockSupermarket(target.place, { zone_id: target.zone_id })
+    if (!ok) {
+      setIgnoreError('Não foi possível ignorar')
+      setIgnoreBusy(false)
+      return
+    }
+    const next = await fetchSupermarkets()
+    setBlockedPlaces(
+      next?.blocklist ?? [
+        ...blockedPlaces,
+        {
+          place_key: target.place,
+          name: target.place,
+          blocked_at: new Date().toISOString(),
+          zone_id: target.zone_id,
+        },
+      ]
+    )
+    setTrackedSupermarkets(next?.tracked ?? trackedSupermarkets)
+    setIgnoreBusy(false)
+    setIgnoreVisit(null)
+  }
+
   // Group by date
   const grouped = visibleEntries.reduce<Record<string, MealPlanEntry[]>>((acc, entry) => {
     acc[entry.day] = acc[entry.day] ?? []
@@ -348,15 +400,14 @@ export function History() {
     <div className="min-h-screen bg-nourish-bg">
       <header className="px-4 pt-12 pb-4 border-b border-nourish-border">
         <h1 className="text-2xl font-bold text-nourish-text">Historial</h1>
-        <p className="text-nourish-text-dim text-sm mt-0.5">
-          {tab === 'meals' ? 'O que comeste' : 'Idas ao supermercado'}
-          {activeProfile ? ` · ${activeProfile.name}` : ''}
-        </p>
         <div className="flex gap-2 mt-4 p-1 rounded-xl bg-nourish-bg border border-nourish-border">
           <button
             type="button"
-            onClick={() => setTab('meals')}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+            onClick={(e) => {
+              e.currentTarget.blur()
+              onHistoryTabClick('meals')
+            }}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors outline-none focus:outline-none focus:ring-0 ${
               tab === 'meals'
                 ? 'bg-nourish-surface text-nourish-text shadow-sm'
                 : 'text-nourish-text-dim'
@@ -366,8 +417,11 @@ export function History() {
           </button>
           <button
             type="button"
-            onClick={() => setTab('supermarket')}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+            onClick={(e) => {
+              e.currentTarget.blur()
+              onHistoryTabClick('supermarket')
+            }}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors outline-none focus:outline-none focus:ring-0 ${
               tab === 'supermarket'
                 ? 'bg-nourish-surface text-nourish-text shadow-sm'
                 : 'text-nourish-text-dim'
@@ -378,7 +432,14 @@ export function History() {
         </div>
       </header>
 
-      <main className="p-4" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)' }}>
+      <main
+        key={tab}
+        className="p-4 animate-history-pane"
+        style={{
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)',
+          ['--history-dx' as string]: tab === 'supermarket' ? '12px' : '-12px',
+        }}
+      >
         {tab === 'meals' && loading && <Spinner />}
 
         {tab === 'meals' && error && (
@@ -430,11 +491,15 @@ export function History() {
                       const receipt = receiptByVisit.get(visit.entered_at)
                       const supermarketName = supermarketLabelForVisit(visit, trackedSupermarkets)
                       const fuelCost = visitTripCostEur(carLink, visit, car)
-                      const totalCost = formatVisitTotalCost(receipt, fuelCost)
+                      const totalCost = showPrices ? formatVisitTotalCost(receipt, fuelCost) : null
                       return (
-                      <div
+                      <LongPressCard
                         key={visit.entered_at}
-                        className="p-3 bg-nourish-surface border border-nourish-border rounded-2xl"
+                        className="p-3 bg-nourish-surface border border-nourish-border rounded-2xl select-none"
+                        onLongPress={() => {
+                          setIgnoreError(null)
+                          setIgnoreVisit(visit)
+                        }}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
@@ -444,11 +509,11 @@ export function History() {
                             )}
                             {receipt && (
                               <p className="text-xs text-nourish-text-dim mt-0.5 truncate">
-                                Talão: {receiptSummary(receipt, !!totalCost)}
+                                Talão: {receiptSummary(receipt, !showPrices || !!totalCost)}
                               </p>
                             )}
                             <OwnershipControls
-                              ownerLabel={visitOwnerLabel(visit.entered_at, attrByVisit, profileName)}
+                              ownerLabel={visitOwnerLabel(visit.entered_at, attrByVisit, profileName, activeId)}
                               showClaim={canClaimVisit(visit.entered_at, activeId, attrByVisit)}
                               onClaim={() => void claimVisit(visit.entered_at)}
                             />
@@ -529,7 +594,7 @@ export function History() {
                             </div>
                           </div>
                         </div>
-                      </div>
+                      </LongPressCard>
                     )})}
                   </div>
                 </div>
@@ -556,6 +621,10 @@ export function History() {
                   {groupByRecipe(grouped[day]).map((group) => {
                     const { entry, count, allIds } = group
                     const recipe = recipes[entry.recipe_id]
+                    const parsedMeal = recipe ? parseDescription(recipe.description ?? '') : null
+                    const restaurant = parsedMeal
+                      ? eatOutRestaurantName(parsedMeal.origin, parsedMeal.location)
+                      : null
                     return (
                       <div
                         key={entry.id}
@@ -593,6 +662,11 @@ export function History() {
                               <p className="font-semibold text-nourish-text text-sm truncate">
                                 {recipe?.name ?? `Refeição ${entry.recipe_id}`}
                               </p>
+                              {restaurant && (
+                                <p className="text-[11px] text-nourish-text-dim truncate mt-0.5">
+                                  {restaurant}
+                                </p>
+                              )}
                               {entry.row_created_timestamp && (
                                 <div className="flex items-center gap-1.5 mt-0.5">
                                   <span className="text-xs text-nourish-primary font-medium">
@@ -606,7 +680,7 @@ export function History() {
                               )}
                             </button>
                             <OwnershipControls
-                              ownerLabel={mealLogOwnerLabel(entry.note, profileName)}
+                              ownerLabel={mealLogOwnerLabel(entry.note, profileName, activeId)}
                               showClaim={canClaimMealLog(entry.note, activeId)}
                               onClaim={() => void claimMeal(entry)}
                             />
@@ -671,6 +745,23 @@ export function History() {
           }}
         />
       )}
+
+      <VisitIgnoreSheet
+        open={!!ignoreVisit}
+        supermarketName={
+          ignoreVisit
+            ? supermarketLabelForVisit(ignoreVisit, trackedSupermarkets)
+            : 'Supermercado'
+        }
+        busy={ignoreBusy}
+        error={ignoreError}
+        onClose={() => {
+          if (ignoreBusy) return
+          setIgnoreVisit(null)
+          setIgnoreError(null)
+        }}
+        onIgnore={() => void ignoreStoreFromVisit()}
+      />
 
       <BottomNav />
     </div>

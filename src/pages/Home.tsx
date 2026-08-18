@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { Recipe } from '../types/grocy'
-import { MealCard } from '../components/MealCard'
-import { MealListRow } from '../components/MealListRow'
+import { MealBrowseList } from '../components/MealBrowseList'
 import { Checkbox } from '../components/Checkbox'
 import { ConnectionError } from '../components/ConnectionError'
 import { Spinner } from '../components/Spinner'
 import { BottomNav } from '../components/BottomNav'
 import { HistoryButton } from '../components/HistoryButton'
+import { ShoppingListButton } from '../components/ShoppingListSheet'
 import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
 import { useFavourites } from '../hooks/useFavourites'
 import { useMealAccessOrder } from '../hooks/useMealAccessOrder'
@@ -16,6 +16,7 @@ import { todayIsoDate, slotHasMeal, slotPrato, usePlannedMeals } from '../hooks/
 import { parseDescription } from '../utils/parseDescription'
 import {
   MEAL_ORIGINS,
+  mealMatchesSearch,
   resolveMealOrigin,
   type MealOrigin,
 } from '../utils/mealOrigin'
@@ -155,6 +156,9 @@ export function Home() {
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [verificationFilters, setVerificationFilters] = useState<Set<VerificationFilterKey>>(new Set())
   const [favouritesOnly, setFavouritesOnly] = useState(false)
+  const [withImageOnly, setWithImageOnly] = useState(false)
+  const [showShoppingList, setShowShoppingList] = useState(false)
+  const [shoppingListCount, setShoppingListCount] = useState(0)
   const [feedback, setFeedback] = useState<NavigationFeedback | null>(null)
   const [homeCoords, setHomeCoords] = useState<HomeCoords | null>(null)
   const filterRef = useRef<HTMLDivElement>(null)
@@ -221,6 +225,26 @@ export function Home() {
       return next
     })
   }
+
+  const mealsFiltersActive =
+    favouritesOnly || withImageOnly || verificationFilters.size > 0
+
+  const refreshShoppingListCount = useCallback(() => {
+    grocy
+      .getShoppingList()
+      .then((list) => setShoppingListCount(list.filter((i) => !i.done).length))
+      .catch(() => {
+        /* badge stays stale */
+      })
+  }, [])
+
+  useEffect(() => {
+    refreshShoppingListCount()
+  }, [refreshShoppingListCount])
+
+  useEffect(() => {
+    if (activeFilter !== 'despensa') setShowShoppingList(false)
+  }, [activeFilter])
 
   const retryLoadRecipes = useCallback(() => {
     setLoading(true)
@@ -328,13 +352,20 @@ export function Home() {
 
   const filtered = useMemo(() => {
     const list = recipes.filter((r) => {
-      if (query && !r.name.toLowerCase().includes(query.toLowerCase())) return false
-      if (favouritesOnly && !favourites.has(r.id)) return false
       const parsed = parsedById.get(r.id)!
+      if (query && !mealMatchesSearch(r.name, parsed.origin, parsed.location, query)) return false
+      if (favouritesOnly && !favourites.has(r.id)) return false
       if (activeFilter === 'completa' && parsed.category !== 'Completa') return false
       if (activeFilter === 'ligeira' && parsed.category !== 'Ligeira') return false
       if (originFilter !== 'all' && resolveMealOrigin(parsed.origin) !== originFilter) return false
       if (!mealMatchesVerificationFilters(parsed, verificationFilters)) return false
+      if (
+        (prefs.hideProductsWithoutImage || withImageOnly) &&
+        (activeFilter === 'completa' || activeFilter === 'ligeira') &&
+        !r.picture_file_name
+      ) {
+        return false
+      }
       return activeFilter === 'completa' || activeFilter === 'ligeira'
     })
     return sortRecipes(list, parsedById, effectiveSort, mealAccessOrder, asCoords(homeCoords))
@@ -347,6 +378,8 @@ export function Home() {
     activeFilter,
     originFilter,
     verificationFilters,
+    prefs.hideProductsWithoutImage,
+    withImageOnly,
     effectiveSort,
     mealAccessOrder,
     homeCoords,
@@ -414,8 +447,9 @@ export function Home() {
               </button>
             ))}
           </div>
-          {!isDespensa && (
-            <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {!isDespensa && (
+              <>
               <div className="relative" ref={sortRef}>
                 <button
                   type="button"
@@ -466,11 +500,11 @@ export function Home() {
                     setShowSortMenu(false)
                   }}
                   className={`p-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
-                    showVerificationFilters
+                    showVerificationFilters || mealsFiltersActive
                       ? 'bg-nourish-primary/15 border-nourish-primary/40 text-nourish-primary'
                       : 'bg-nourish-surface-high border-nourish-border text-nourish-text-dim'
                   }`}
-                  aria-label="Filtros de verificação"
+                  aria-label="Filtros"
                   aria-expanded={showVerificationFilters}
                 >
                   <FilterIcon />
@@ -489,6 +523,14 @@ export function Home() {
                       <HeartIcon filled={favouritesOnly} />
                       Favoritos
                     </label>
+                    <label className="flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-nourish-text cursor-pointer active:bg-nourish-surface-high">
+                      <Checkbox
+                        checked={withImageOnly}
+                        onChange={setWithImageOnly}
+                        label="Com imagem"
+                      />
+                      Com imagem
+                    </label>
                     <p className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
                       Verificação
                     </p>
@@ -505,12 +547,13 @@ export function Home() {
                         {label}
                       </label>
                     ))}
-                    {(verificationFilters.size > 0 || favouritesOnly) && (
+                    {mealsFiltersActive && (
                       <button
                         type="button"
                         onClick={() => {
                           setVerificationFilters(new Set())
                           setFavouritesOnly(false)
+                          setWithImageOnly(false)
                         }}
                         className="w-full px-2 py-1.5 text-xs text-nourish-text-dim underline"
                       >
@@ -520,8 +563,15 @@ export function Home() {
                   </div>
                 )}
               </div>
-            </div>
-          )}
+              </>
+            )}
+            {isDespensa && (
+              <ShoppingListButton
+                count={shoppingListCount}
+                onClick={() => setShowShoppingList(true)}
+              />
+            )}
+          </div>
         </div>
 
         {!isDespensa && (
@@ -560,7 +610,14 @@ export function Home() {
       )}
 
       <main className="p-4" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)' }}>
-        {isDespensa && <DespensaSection query={query} />}
+        {isDespensa && (
+          <DespensaSection
+            query={query}
+            shoppingListOpen={showShoppingList}
+            onShoppingListOpenChange={setShowShoppingList}
+            onShoppingListCountChange={setShoppingListCount}
+          />
+        )}
 
         {!isDespensa && loading && <Spinner />}
 
@@ -586,9 +643,7 @@ export function Home() {
                   className="w-14 h-14 rounded-xl object-cover flex-shrink-0 bg-nourish-surface-high"
                 />
               ) : (
-                <div className="w-14 h-14 rounded-xl bg-nourish-surface-high flex items-center justify-center text-2xl flex-shrink-0">
-                  🍽️
-                </div>
+                <div className="w-14 h-14 rounded-xl bg-nourish-surface-high flex-shrink-0" />
               )}
               <div className="min-w-0">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-nourish-text-dim">
@@ -625,32 +680,12 @@ export function Home() {
         )}
 
         {!isDespensa && !loading && filtered.length > 0 && (
-          prefs.mealListView === 'list' ? (
-            <ul className="bg-nourish-surface border border-nourish-border rounded-xl overflow-hidden divide-y divide-nourish-border/60">
-              {filtered.map((r) => (
-                <li key={r.id}>
-                  <MealListRow
-                    recipe={r}
-                    onClick={() => navigate(`/meal/${r.id}`)}
-                    onLogged={handleRecipeLogged}
-                    homeCoords={asCoords(homeCoords)}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              {filtered.map((r) => (
-                <MealCard
-                  key={r.id}
-                  recipe={r}
-                  showPortions={prefs.showMealPortions}
-                  onLogged={handleRecipeLogged}
-                  homeCoords={asCoords(homeCoords)}
-                />
-              ))}
-            </div>
-          )
+          <MealBrowseList
+            recipes={filtered}
+            view={prefs.mealListView}
+            showPortions={prefs.showMealPortions}
+            onLogged={handleRecipeLogged}
+          />
         )}
       </main>
 

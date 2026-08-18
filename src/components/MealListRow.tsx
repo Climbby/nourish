@@ -1,11 +1,11 @@
 import { useState, type MouseEvent, type ReactNode } from 'react'
 import { grocy } from '../api/grocy'
 import type { Recipe } from '../types/grocy'
+import { useShowPrices } from '../hooks/useDisplayPrefs'
 import { useShowNutrition } from '../hooks/useShowNutrition'
 import { logMealConsumption } from '../utils/logMealConsumption'
 import { parseDescription } from '../utils/parseDescription'
-import { isRestaurantMeal, resolveMealOrigin } from '../utils/mealOrigin'
-import { distanceFromHome, formatLocalityMeta, type Coords } from '../utils/locality'
+import { eatOutRestaurantName, resolveMealOrigin } from '../utils/mealOrigin'
 
 interface Props {
   recipe: Recipe
@@ -14,23 +14,19 @@ interface Props {
   onLogged?: (recipeId: number, description: string) => void
   /** Extra trailing control (rendered after Comi if both set) */
   trailing?: ReactNode
-  homeCoords?: Coords | null
 }
 
 /** Compact meal row — same layout as Escolher / list view on Refeições. */
-export function MealListRow({ recipe, onClick, onLogged, trailing, homeCoords }: Props) {
+export function MealListRow({ recipe, onClick, onLogged, trailing }: Props) {
   const showNutrition = useShowNutrition()
-  const { price, nutrition, location, locationCoords, origin } = parseDescription(recipe.description ?? '')
+  const showPrices = useShowPrices()
+  const { price, nutrition, location, origin } = parseDescription(recipe.description ?? '')
   const [logging, setLogging] = useState(false)
   const [logged, setLogged] = useState(false)
   const [logError, setLogError] = useState(false)
   const showMacros = showNutrition && nutrition
-  const isFora = isRestaurantMeal(resolveMealOrigin(origin))
-  const distMeta =
-    isFora && location
-      ? formatLocalityMeta(distanceFromHome(homeCoords, locationCoords))
-      : null
-
+  const showPrice = showPrices && price != null
+  const restaurant = eatOutRestaurantName(resolveMealOrigin(origin), location)
 
   async function handleComi(e: MouseEvent) {
     e.stopPropagation()
@@ -62,27 +58,24 @@ export function MealListRow({ recipe, onClick, onLogged, trailing, homeCoords }:
             src={grocy.pictureUrl(recipe.picture_file_name)}
             alt=""
             className="w-12 h-12 rounded-lg object-cover flex-shrink-0"
+            loading="lazy"
+            decoding="async"
           />
-        ) : (
-          <div className="w-12 h-12 rounded-lg bg-nourish-surface-high flex items-center justify-center text-xl flex-shrink-0">
-            🍽️
-          </div>
-        )}
+        ) : null}
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-nourish-text truncate">{recipe.name}</p>
-          {isFora && location && (
-            <p className="text-[11px] text-nourish-text-dim truncate mt-0.5">
-              {location}
-              {distMeta && <span className="tabular-nums"> · {distMeta}</span>}
+          {restaurant && (
+            <p className="text-[11px] text-nourish-text-dim truncate mt-0.5">{restaurant}</p>
+          )}
+          {(showPrice || showMacros) && (
+            <p className="text-xs text-nourish-text-dim tabular-nums mt-0.5">
+              {showPrice && (
+                <span className="text-nourish-primary font-semibold">€{price.toFixed(2)}</span>
+              )}
+              {showPrice && showMacros && ' · '}
+              {showMacros && `${nutrition.calories} kcal`}
             </p>
           )}
-          <p className="text-xs text-nourish-text-dim tabular-nums mt-0.5">
-            {price != null && (
-              <span className="text-nourish-primary font-semibold">€{price.toFixed(2)}</span>
-            )}
-            {price != null && showMacros && ' · '}
-            {showMacros && `${nutrition.calories} kcal`}
-          </p>
         </div>
       </button>
       {onLogged && (

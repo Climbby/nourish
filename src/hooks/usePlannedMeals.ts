@@ -99,13 +99,22 @@ export function normalizeParts(rawParts: unknown, legacyRecipeId?: unknown): Slo
 /**
  * Accepts both shapes.
  *
- * Legacy slots are `{ dayOffset, slot, recipeId, source }` and need the stored
+ * Legacy meals are `{ dayOffset, slot, recipeId, source }` and need the stored
  * `weekStart` to become absolute; the single recipe becomes the prato.
+ *
+ * Skip / dispensado is **one calendar day + slot** (`2026-08-05` lunch). A
+ * weekday index, `dayOffset` without a date, or any other undated flag is
+ * dropped so last Tuesday's skip cannot mark every future Tuesday.
  */
 export function normalizeSlot(raw: unknown, legacyAnchor?: string): PlannedSlot | null {
   if (!raw || typeof raw !== 'object') return null
   const s = raw as Record<string, unknown>
   if (s.slot !== 'almoco' && s.slot !== 'jantar') return null
+
+  if (s.source === 'dismissed') {
+    if (!isValidIsoDate(s.date)) return null
+    return { date: s.date, slot: s.slot, parts: [], source: 'dismissed' }
+  }
 
   let date: string | null = null
   if (isValidIsoDate(s.date)) {
@@ -115,9 +124,6 @@ export function normalizeSlot(raw: unknown, legacyAnchor?: string): PlannedSlot 
   }
   if (date === null) return null
 
-  if (s.source === 'dismissed') {
-    return { date, slot: s.slot, parts: [], source: 'dismissed' }
-  }
   if (s.source !== 'accepted' && s.source !== 'chosen') return null
 
   const parts = normalizeParts(s.parts, s.recipeId)
@@ -137,6 +143,12 @@ function reconcile(slots: PlannedSlot[], today: string): PlannedSlot[] {
   return [...byKey.values()]
 }
 
+function rawSlotNeedsRewrite(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return true
+  const s = raw as Record<string, unknown>
+  return !isValidIsoDate(s.date)
+}
+
 export function load(key: string, today = todayIsoDate()): StoredPlan {
   try {
     const raw = localStorage.getItem(key)
@@ -144,13 +156,18 @@ export function load(key: string, today = todayIsoDate()): StoredPlan {
     const parsed = JSON.parse(raw) as Record<string, unknown>
     if (!parsed || !Array.isArray(parsed.slots)) return { slots: [] }
 
-    // Pre-migration plans anchored their offsets on weekStart.
+    // Pre-migration meals anchored their offsets on weekStart. Skip flags
+    // never use that path — see normalizeSlot.
     const anchor = typeof parsed.weekStart === 'string' ? parsed.weekStart : undefined
     const slots = parsed.slots
       .map((s) => normalizeSlot(s, anchor))
       .filter((s): s is PlannedSlot => s != null)
 
-    return { slots: reconcile(slots, today) }
+    const next: StoredPlan = { slots: reconcile(slots, today) }
+    const stale =
+      typeof parsed.weekStart === 'string' || parsed.slots.some(rawSlotNeedsRewrite)
+    if (stale) save(key, next)
+    return next
   } catch {
     return { slots: [] }
   }

@@ -302,7 +302,9 @@ export async function findSupermarketNear(
     .slice(0, 6)
 }
 
-export function getCurrentPosition(): Promise<{ latitude: number; longitude: number }> {
+export function getCurrentPosition(
+  options?: PositionOptions
+): Promise<{ latitude: number; longitude: number }> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error('Geolocalização indisponível'))
@@ -315,7 +317,7 @@ export function getCurrentPosition(): Promise<{ latitude: number; longitude: num
           longitude: pos.coords.longitude,
         }),
       () => reject(new Error('Não foi possível obter a localização')),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30_000 }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30_000, ...options }
     )
   })
 }

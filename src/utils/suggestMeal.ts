@@ -1,6 +1,9 @@
-import type { MealPlanEntry, Recipe } from '../types/grocy'
+import type { MealPlanEntry, Product, Recipe } from '../types/grocy'
 import { profileScopedKey } from './householdProfiles'
 import { parseDescription } from './parseDescription'
+import { addDays, isoDate } from './planDates'
+import { occupiedStaplesNearDate, stapleClashPenalty, stapleKeysFromRecipe } from './stapleClash'
+import { createRng, hashSeed, pickScored } from './suggestionPick'
 
 export type SuggestionPreference = 'balanced' | 'cheap' | 'taste'
 
@@ -8,6 +11,8 @@ export interface SuggestionContext {
   recipes: Recipe[]
   favourites: Set<number>
   mealPlan: MealPlanEntry[]
+  /** Optional Despensa catalogue — staple clash uses Generico / NomeCurto when present. */
+  products?: Product[]
 }
 
 const LEGACY_PREF_KEY = 'nourish-suggestion-preference'
@@ -127,7 +132,8 @@ export function scoreRecipe(
 
 export function pickMealSuggestion(
   ctx: SuggestionContext,
-  preference: SuggestionPreference = 'taste'
+  preference: SuggestionPreference = 'taste',
+  salt = 0
 ): Recipe | null {
   const { recipes } = ctx
   if (recipes.length === 0) return null
@@ -141,7 +147,7 @@ export function pickMealSuggestion(
   }))
 
   scored.sort((a, b) => b.score - a.score)
-  const best = scored[0]
+  const best = pickScored(scored, createRng(hashSeed(salt, preference, 'single')))
   if (!best || best.score <= 0) {
     const recent = recentRecipeIds(ctx.mealPlan)
     const fallback = recipes.find((r) => !recent.has(r.id))
@@ -169,7 +175,8 @@ export function dayLabelForOffset(offset: number, date = new Date()): string {
 export function pickWeeklySuggestions(
   ctx: SuggestionContext,
   days = 7,
-  preference: SuggestionPreference = 'taste'
+  preference: SuggestionPreference = 'taste',
+  salt = 0
 ): DaySuggestion[] {
   const { recipes } = ctx
   if (recipes.length === 0) return []
@@ -180,19 +187,26 @@ export function pickWeeklySuggestions(
   const priceAnchor = preference === 'cheap' ? medianRecipePrice(recipes) : null
   const frequency = preference === 'taste' ? mealFrequency(ctx.mealPlan) : new Map()
 
+  const nearby: Array<{ date: string; recipe: Recipe }> = []
+  const origin = isoDate(today)
   for (let i = 0; i < days; i++) {
+    const date = addDays(origin, i)
+    const occupied = occupiedStaplesNearDate(nearby, date, ctx.products)
     const candidates = recipes
       .filter((r) => !picked.has(r.id))
-      .map((r) => ({
-        recipe: r,
-        score: scoreRecipe(r, ctx, picked, preference, priceAnchor, frequency),
-      }))
+      .map((r) => {
+        const score =
+          scoreRecipe(r, ctx, picked, preference, priceAnchor, frequency) -
+          stapleClashPenalty(stapleKeysFromRecipe(r, ctx.products), occupied)
+        return { recipe: r, score }
+      })
       .sort((a, b) => b.score - a.score)
 
-    const best = candidates[0]
+    const best = pickScored(candidates, createRng(hashSeed(salt, preference, i)))
     if (!best) break
 
     picked.add(best.recipe.id)
+    nearby.push({ date, recipe: best.recipe })
     result.push({
       dayLabel: dayLabelForOffset(i, today),
       dayOffset: i,

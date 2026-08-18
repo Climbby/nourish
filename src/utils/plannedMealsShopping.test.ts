@@ -35,12 +35,32 @@ describe('findIngredientShoppingNeeds', () => {
     expect(needs[0].productId).toBe(10)
   })
 
-  it('skips ingredients with stock available', () => {
-    const recipes = [recipe(1, 'Atum pasta', 'Atum enlatado|1.50')]
-    const products = [product(10, 'Atum enlatado')]
-    const stock: StockItem[] = [{ product_id: 10, amount: 2, value: 3, product: products[0] }]
+  it('prefers the favorite SKU when the ingredient is a Generico', () => {
+    const recipes = [recipe(1, 'Salteado', 'Cogumelos|1.90')]
+    const a = product(10, 'COGUMELOS CONTINENTE')
+    a.description = '[Generico]\nCogumelos'
+    const b = product(11, 'COGUMELOS AUCHAN')
+    b.description = '[Generico]\nCogumelos'
+    const stock: StockItem[] = [
+      { product_id: 10, amount: 0, value: 0, product: a },
+      { product_id: 11, amount: 0, value: 0, product: b },
+    ]
+    const needs = findIngredientShoppingNeeds(recipes, [a, b], stock, { cogumelos: 11 })
+    expect(needs).toHaveLength(1)
+    expect(needs[0].productId).toBe(11)
+  })
 
-    expect(findIngredientShoppingNeeds(recipes, products, stock)).toHaveLength(0)
+  it('does not shop when a sibling of the Generico is already in stock', () => {
+    const recipes = [recipe(1, 'Salteado', 'Cogumelos|1.90')]
+    const a = product(10, 'COGUMELOS CONTINENTE')
+    a.description = '[Generico]\nCogumelos'
+    const b = product(11, 'COGUMELOS AUCHAN')
+    b.description = '[Generico]\nCogumelos'
+    const stock: StockItem[] = [
+      { product_id: 10, amount: 0, value: 0, product: a },
+      { product_id: 11, amount: 2, value: 0, product: b },
+    ]
+    expect(findIngredientShoppingNeeds(recipes, [a, b], stock, { cogumelos: 10 })).toEqual([])
   })
 })
 

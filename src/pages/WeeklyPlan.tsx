@@ -6,13 +6,16 @@ import { BottomNav } from '../components/BottomNav'
 import { HelpInfo } from '../components/HelpInfo'
 import { MacroChips, MacroSummaryBar } from '../components/MacroSummaryBar'
 import { MealPickSheet } from '../components/MealPickSheet'
+import { PlanBuilderSheet } from '../components/PlanBuilderSheet'
 import { SavedPlansSheet } from '../components/SavedPlansSheet'
 import { SlotPartChips } from '../components/SlotPartChips'
 import { useSavedWeekPlans } from '../hooks/useSavedWeekPlans'
 import { HistoryButton } from '../components/HistoryButton'
 import { Spinner } from '../components/Spinner'
 import { useFavourites } from '../hooks/useFavourites'
+import { useShowPrices } from '../hooks/useDisplayPrefs'
 import { DEFAULT_TARGETS, useNutritionTargets } from '../hooks/useNutritionTargets'
+import { useProfileScopedKey } from '../hooks/useProfileScopedKey'
 import { useShowNutrition } from '../hooks/useShowNutrition'
 import {
   slotKey,
@@ -28,14 +31,19 @@ import {
 import { isPartRecipeRole } from '../utils/createPartRecipe'
 import { roleForCategory, type PartRole } from '../utils/mealRole'
 import { loadPartHabits, rememberPartHabit, type PartHabits } from '../utils/partHabits'
-import type { TemplateSlot } from '../utils/savedWeekPlans'
+import { mapTemplateToDates, type TemplateSlot, type WeekPlanAnchor } from '../utils/savedWeekPlans'
 import { mealOriginLabel, type MealOrigin } from '../utils/mealOrigin'
 import { logMealConsumption, logSlotConsumption } from '../utils/logMealConsumption'
 import { getActiveProfileId } from '../utils/householdProfiles'
 import { isMealLogVisibleToProfile } from '../utils/mealLogAttribution'
 import { parseDescription } from '../utils/parseDescription'
 import { buildPastSlots, pastSlotsAsPlanned } from '../utils/pastPlan'
-import { addDays } from '../utils/planDates'
+import {
+  builderSuggestionPreference,
+  weekSunday,
+} from '../utils/planBuilder'
+import { MAX_FUTURE_DAYS } from '../utils/planDates'
+import { loadGenericoFavorites } from '../utils/genericoFavorites'
 import {
   filterNewShoppingNeeds,
   findIngredientShoppingNeeds,
@@ -45,6 +53,7 @@ import {
   saveSuggestionPreference,
   type SuggestionPreference,
 } from '../utils/suggestMeal'
+import { loadSuggestionSalt, rotateSuggestionSalt } from '../utils/suggestionSalt'
 import { rememberNavPath } from '../utils/navMemory'
 import { loadPlanOrigins, savePlanOrigins } from '../utils/planOriginsMemory'
 import {
@@ -133,8 +142,9 @@ const DATE_SLOT_KEY = /^\d{4}-\d{2}-\d{2}:(almoco|jantar)$/
 export function WeeklyPlan() {
   const navigate = useNavigate()
   const { favourites } = useFavourites()
-  const { targets } = useNutritionTargets()
+  const { targets, enabled: targetsEnabled, setEnabled: setTargetsEnabled } = useNutritionTargets()
   const nutritionActive = useShowNutrition()
+  const showPrices = useShowPrices()
   const {
     slots,
     getSlot,
@@ -147,6 +157,8 @@ export function WeeklyPlan() {
   } = usePlannedMeals()
   const { plans: savedPlans, save: saveWeekPlan, remove: removeWeekPlan } = useSavedWeekPlans()
   const [plansOpen, setPlansOpen] = useState(false)
+  const [builderOpen, setBuilderOpen] = useState(false)
+  const saltStorageKey = useProfileScopedKey('nourish-suggestion-salt')
 
   const today = todayIsoDate()
 
@@ -155,6 +167,7 @@ export function WeeklyPlan() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [preference, setPreference] = useState<SuggestionPreference>(() => loadSuggestionPreference())
+  const [suggestionSalt, setSuggestionSalt] = useState(() => loadSuggestionSalt())
   const [deniedByKey, setDeniedByKey] = useState<Record<string, number[]>>({})
   const [originByKey, setOriginByKey] = useState<Record<string, MealOrigin>>(() => {
     // Drop pre-migration `0:almoco` keys, which can never match a date key again.
@@ -167,6 +180,10 @@ export function WeeklyPlan() {
   useEffect(() => {
     rememberNavPath('plan', '/plan')
   }, [])
+
+  useEffect(() => {
+    setSuggestionSalt(loadSuggestionSalt())
+  }, [saltStorageKey])
 
   useEffect(() => {
     savePlanOrigins(originByKey)
@@ -271,9 +288,19 @@ export function WeeklyPlan() {
   const suggestions = useMemo(
     () =>
       !loading
-        ? buildSlotSuggestions(ctx, planTargets, slots, deniedByKey, preference, originByKey, today)
+        ? buildSlotSuggestions(
+            ctx,
+            planTargets,
+            slots,
+            deniedByKey,
+            preference,
+            originByKey,
+            today,
+            MAX_FUTURE_DAYS,
+            suggestionSalt
+          )
         : new Map<string, number>(),
-    [ctx, planTargets, slots, deniedByKey, preference, originByKey, today, loading]
+    [ctx, planTargets, slots, deniedByKey, preference, originByKey, today, loading, suggestionSalt]
   )
 
   /** The role a logged recipe fills, read off its category. */
@@ -489,17 +516,34 @@ export function WeeklyPlan() {
   }
 
   /**
-   * Replace the upcoming plan with a template, mapping day 0 onto today.
-   * The past record is left untouched.
+   * Replace the upcoming plan with a template. Today-anchored moulds start at
+   * today; constructor plans map Sunday onto this week's Sunday and skip the past.
    */
-  function applyPlanSlots(planSlots: TemplateSlot[]) {
+  function applyPlanSlots(planSlots: TemplateSlot[], weekAnchor: WeekPlanAnchor = 'today') {
+    setSuggestionSalt(rotateSuggestionSalt())
     clearUpcoming(today)
-    for (const s of planSlots) {
-      const date = addDays(today, s.dayOffset)
+    for (const s of mapTemplateToDates(planSlots, today, weekAnchor)) {
       for (const part of s.parts) {
-        setPart(date, s.slot, part.role, part.recipeId, 'chosen')
+        setPart(s.date, s.slot, part.role, part.recipeId, 'chosen')
       }
     }
+  }
+
+  /** Fill empty Dom–Sáb slots in the builder using the live Completa scorer. */
+  function suggestEmptyForBuilder(decided: PlannedSlot[], honor = targetsEnabled) {
+    const sunday = weekSunday(today)
+    return buildSlotSuggestions(
+      ctx,
+      planTargets,
+      decided,
+      {},
+      builderSuggestionPreference(honor, preference),
+      {},
+      sunday,
+      7,
+      suggestionSalt,
+      7
+    )
   }
 
   /**
@@ -623,7 +667,12 @@ export function WeeklyPlan() {
         grocy.getShoppingList(),
       ])
       // Every part's ingredients — dedupe by product is already handled inside.
-      const needs = findIngredientShoppingNeeds(partRecipes, products, stock)
+      const needs = findIngredientShoppingNeeds(
+        partRecipes,
+        products,
+        stock,
+        loadGenericoFavorites()
+      )
       const toAdd = filterNewShoppingNeeds(needs, existingList)
       if (toAdd.length > 0) {
         await Promise.all(toAdd.map((n) => grocy.addToShoppingList(n.productId, n.buyAmount)))
@@ -839,7 +888,7 @@ export function WeeklyPlan() {
                     >
                       {weekdayLabel(date, today)}
                     </h2>
-                    {spend > 0 && (
+                    {showPrices && spend > 0 && (
                       <span
                         className={`text-xs font-semibold tabular-nums ${
                           isPast ? 'text-nourish-text-dim' : 'text-nourish-primary'
@@ -1033,6 +1082,7 @@ export function WeeklyPlan() {
                                   nutrition={slotNutrition}
                                   price={slotPrice}
                                   showNutrition={nutritionActive}
+                                  showPrices={showPrices}
                                 />
                               </div>
                             </button>
@@ -1164,6 +1214,7 @@ export function WeeklyPlan() {
                 days={Math.max(1, plannedDayCount(slots, today))}
                 label="Plano da semana"
                 showNutrition={nutritionActive}
+                showPrices={showPrices}
               />
             )}
           </>
@@ -1192,6 +1243,19 @@ export function WeeklyPlan() {
         onSave={saveWeekPlan}
         onApply={applyPlanSlots}
         onRemove={removeWeekPlan}
+        onOpenBuilder={() => setBuilderOpen(true)}
+      />
+
+      <PlanBuilderSheet
+        open={builderOpen}
+        recipes={recipes}
+        onClose={() => setBuilderOpen(false)}
+        onSave={saveWeekPlan}
+        onApply={applyPlanSlots}
+        suggestEmpty={suggestEmptyForBuilder}
+        honorTargets={targetsEnabled}
+        targets={planTargets}
+        onIgnoreTargets={() => setTargetsEnabled(false)}
       />
 
       <BottomNav />

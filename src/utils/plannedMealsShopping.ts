@@ -1,6 +1,8 @@
 import type { Product, Recipe, ShoppingListItem, StockItem } from '../types/grocy'
 import { findBestProductMatch } from '../features/receipt/matchProduct'
 import { getBuyAmountFromDesc } from './despensaAnalytics'
+import type { GenericoFavorites } from './genericoFavorites'
+import { resolveProductForIngredient, stockByProductId } from './ingredientMatch'
 import { parseDescription } from './parseDescription'
 
 export interface IngredientShoppingNeed {
@@ -14,19 +16,23 @@ export interface IngredientShoppingNeed {
 export function findIngredientShoppingNeeds(
   recipes: Recipe[],
   products: Product[],
-  stock: StockItem[]
+  stock: StockItem[],
+  favorites?: GenericoFavorites
 ): IngredientShoppingNeed[] {
-  const stockByProduct = new Map(stock.map((s) => [s.product_id, s.amount]))
+  const stockMap = stockByProductId(stock)
   const seen = new Set<number>()
   const needs: IngredientShoppingNeed[] = []
 
   for (const recipe of recipes) {
     const { ingredientItems } = parseDescription(recipe.description ?? '')
     for (const ing of ingredientItems) {
-      const match = findBestProductMatch(ing.name, products)
+      const resolved = resolveProductForIngredient(ing.name, products, favorites, stockMap)
+      const match = resolved
+        ? { productId: resolved.id }
+        : findBestProductMatch(ing.name, products)
       if (!match || seen.has(match.productId)) continue
 
-      const amount = stockByProduct.get(match.productId) ?? 0
+      const amount = stockMap[match.productId] ?? 0
       if (amount > 0) continue
 
       const product = products.find((p) => p.id === match.productId)
@@ -51,7 +57,9 @@ export function filterNewShoppingNeeds(
   existingList: ShoppingListItem[]
 ): IngredientShoppingNeed[] {
   const onList = new Set(
-    existingList.filter((i) => !i.done).map((i) => i.product_id)
+    existingList.flatMap((i) =>
+      !i.done && i.product_id != null && i.product_id > 0 ? [i.product_id] : []
+    )
   )
   return needs.filter((n) => !onList.has(n.productId))
 }

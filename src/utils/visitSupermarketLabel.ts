@@ -7,6 +7,7 @@ const KNOWN_STORE_LABELS: Record<string, string> = {
   lidl: 'Lidl',
   pingo_doce: 'Pingo Doce',
   minipreco: 'Minipreço',
+  intermarche: 'Intermarché',
 }
 
 /** Human-readable supermarket name from a HA zone id (e.g. zone.auchan). */

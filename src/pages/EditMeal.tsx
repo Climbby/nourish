@@ -1,28 +1,42 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
-import { analyzeMeal, suggestIngredients } from '../api/ai'
+import { analyzeMeal, extractIngredientNamesFromSteps, suggestIngredients } from '../api/ai'
 import { grocyConfig } from '../config/grocy'
 import type { Product, Recipe } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { parseDescription } from '../utils/parseDescription'
-import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
-import { cookingName } from '../utils/despensaAnalytics'
+import { buildDescription, computeAutoTotal, readyAutoTotal, type IngredientRow } from '../utils/buildDescription'
+import { cookingName, ingredientDisplayName } from '../utils/despensaAnalytics'
 import {
+  applyIngredientName,
   filterProductsForIngredient,
   hydrateIngredientFromProducts,
+  patchIngredientAmount,
+  patchIngredientAmountMode,
   resolveIngredientFromProduct,
 } from '../utils/ingredientFromProduct'
-import { IngredientSection, NutritionSection, PriceSection, PortionsSection, TimeNotesSection } from './AddMeal'
+import { stockByProductId, type StockByProduct } from '../utils/ingredientMatch'
+import {
+  collectIngredientSuggestions,
+  defaultAmountMode,
+  findIngredientStepMismatch,
+  mergeSuggestedIngredientRows,
+  type AmountMode,
+  type SuggestedFromSteps,
+} from '../utils/ingredientSteps'
+import { IngredientSection, NutritionSection, PriceSection, StepsSection, TimeNotesSection } from './AddMeal'
 import { AiGenerateButton } from '../components/AiGenerateButton'
 import { MealOriginField } from '../components/MealOriginField'
-import { MealLocalityField } from '../components/MealLocalityField'
+import { MealRestaurantField } from '../components/MealRestaurantField'
 import { PhotoField } from '../components/PhotoField'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
 import type { VerifiedField } from '../utils/verification'
 import { resolveMealOrigin, type MealOrigin } from '../utils/mealOrigin'
 import type { Coords } from '../utils/locality'
 import { useShowNutrition } from '../hooks/useShowNutrition'
+import { useShowPrices } from '../hooks/useDisplayPrefs'
+import { useGenericoFavorites } from '../hooks/useGenericoFavorites'
 
 const { despensaGroupId: DESPENSA_GROUP_ID } = grocyConfig
 
@@ -43,6 +57,7 @@ export function EditMeal() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const showNutrition = useShowNutrition()
+  const showPrices = useShowPrices()
   const rowIdRef = useRef(1)
 
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -63,12 +78,11 @@ export function EditMeal() {
   const [fat, setFat] = useState('')
   const [category, setCategory] = useState('')
   const [origin, setOrigin] = useState<MealOrigin>('supermercado')
-  const [location, setLocation] = useState('')
+  const [restaurant, setRestaurant] = useState('')
   const [locationCoords, setLocationCoords] = useState<Coords | null>(null)
   const [portions, setPortions] = useState('')
   const [priceOverride, setPriceOverride] = useState('')
   const [verifyNutricao, setVerifyNutricao] = useState(false)
-  const [verifyMealPrice, setVerifyMealPrice] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [nameError, setNameError] = useState(false)
@@ -76,21 +90,30 @@ export function EditMeal() {
   const [aiError, setAiError] = useState<string | null>(null)
   const [existingProducts, setExistingProducts] = useState<string[]>([])
   const [despensaProducts, setDespensaProducts] = useState<Product[]>([])
+  const [stockByProduct, setStockByProduct] = useState<StockByProduct>({})
   const [productSuggestions, setProductSuggestions] = useState<Record<number, Product[]>>({})
   const [textSuggestions, setTextSuggestions] = useState<Record<number, string[]>>({})
   const [focusedRow, setFocusedRow] = useState<number | null>(null)
   const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { favorites } = useGenericoFavorites()
+  const [stepProposals, setStepProposals] = useState<SuggestedFromSteps[]>([])
+  const [suggestingFromSteps, setSuggestingFromSteps] = useState(false)
+  const [suggestFromStepsError, setSuggestFromStepsError] = useState<string | null>(null)
+  const [suggestFromStepsEmpty, setSuggestFromStepsEmpty] = useState(false)
 
   const numId = id ? parseInt(id, 10) : NaN
 
   useEffect(() => {
-    grocy.getProducts().then((products) => {
-      const despensa = products.filter(
-        (p) => p.product_group_id === DESPENSA_GROUP_ID && p.active !== 0
-      )
-      setDespensaProducts(despensa)
-      setExistingProducts(despensa.map((p) => cookingName(p.name, p.description)))
-    }).catch(() => {})
+    Promise.all([grocy.getProducts(), grocy.getStock()])
+      .then(([products, stock]) => {
+        const despensa = products.filter(
+          (p) => p.product_group_id === DESPENSA_GROUP_ID && p.active !== 0
+        )
+        setDespensaProducts(despensa)
+        setExistingProducts(despensa.map((p) => ingredientDisplayName(p.name, p.description)))
+        setStockByProduct(stockByProductId(stock))
+      })
+      .catch(() => {})
   }, [])
 
   const debouncedSuggest = useCallback(async (rowId: number, query: string) => {
@@ -99,7 +122,7 @@ export function EditMeal() {
       setTextSuggestions((prev) => ({ ...prev, [rowId]: [] }))
       return
     }
-    const matched = filterProductsForIngredient(query, despensaProducts)
+    const matched = filterProductsForIngredient(query, despensaProducts, 8, favorites)
     setProductSuggestions((prev) => ({ ...prev, [rowId]: matched }))
     if (matched.length >= 3 || query.length < 2) {
       setTextSuggestions((prev) => ({ ...prev, [rowId]: [] }))
@@ -107,13 +130,17 @@ export function EditMeal() {
     }
     const results = await suggestIngredients(query, existingProducts)
     const matchedNames = new Set(
-      matched.flatMap((p) => [p.name.toLowerCase(), cookingName(p.name, p.description).toLowerCase()])
+      matched.flatMap((p) => [
+        p.name.toLowerCase(),
+        cookingName(p.name, p.description).toLowerCase(),
+        ingredientDisplayName(p.name, p.description).toLowerCase(),
+      ])
     )
     setTextSuggestions((prev) => ({
       ...prev,
       [rowId]: results.filter((s) => !matchedNames.has(s.toLowerCase())),
     }))
-  }, [despensaProducts, existingProducts])
+  }, [despensaProducts, existingProducts, favorites])
 
   useEffect(() => {
     if (!id || isNaN(numId)) {
@@ -122,13 +149,15 @@ export function EditMeal() {
       return
     }
 
-    Promise.all([grocy.getRecipe(numId), grocy.getProducts()])
-      .then(([r, products]) => {
+    Promise.all([grocy.getRecipe(numId), grocy.getProducts(), grocy.getStock()])
+      .then(([r, products, stock]) => {
         const despensa = products.filter(
           (p) => p.product_group_id === DESPENSA_GROUP_ID && p.active !== 0
         )
+        const stockMap = stockByProductId(stock)
         setDespensaProducts(despensa)
-        setExistingProducts(despensa.map((p) => cookingName(p.name, p.description)))
+        setExistingProducts(despensa.map((p) => ingredientDisplayName(p.name, p.description)))
+        setStockByProduct(stockMap)
 
         setRecipe(r)
         setName(r.name)
@@ -137,15 +166,23 @@ export function EditMeal() {
 
         if (parsed.ingredientItems.length > 0) {
           const rows = parsed.ingredientItems.map((item, i) => {
-            const link = hydrateIngredientFromProducts(item.name, item.grams, despensa)
+            const link = hydrateIngredientFromProducts(
+              item.name,
+              item.grams,
+              despensa,
+              favorites,
+              stockMap
+            )
             return {
               id: i + 1,
               name: link.name,
               price: item.price !== null ? item.price.toFixed(2) : '',
-              grams: item.grams !== null ? String(item.grams) : '',
+              grams: link.grams != null ? String(link.grams) : '',
               qty: link.qty || undefined,
               productId: link.productId,
               unitGrams: link.unitGrams,
+              amountMode: defaultAmountMode(link.unitGrams),
+              ...(item.ignorePrice ? { ignorePrice: true } : {}),
             }
           })
           setIngredientRows(rows)
@@ -167,10 +204,9 @@ export function EditMeal() {
 
         if (parsed.price !== null) setPriceOverride(parsed.price.toFixed(2))
         setVerifyNutricao(parsed.verified.includes('nutricao'))
-        setVerifyMealPrice(parsed.verified.includes('preco'))
         setCategory(parsed.category ?? '')
         setOrigin(resolveMealOrigin(parsed.origin))
-        setLocation(parsed.location ?? '')
+        setRestaurant(parsed.location ?? '')
         setLocationCoords(parsed.locationCoords)
         setPortions(parsed.portions !== null ? String(parsed.portions) : '')
 
@@ -187,7 +223,18 @@ export function EditMeal() {
       })
   }, [numId])
 
-  const autoTotal = computeAutoTotal(ingredientRows)
+  const autoPrice = computeAutoTotal(ingredientRows)
+  const autoTotal = readyAutoTotal(ingredientRows)
+  const stepsMismatch = useMemo(
+    () =>
+      findIngredientStepMismatch(
+        ingredientRows.map((r) => r.name),
+        comoFazer,
+        despensaProducts,
+        favorites
+      ),
+    [ingredientRows, comoFazer, despensaProducts, favorites]
+  )
 
   async function photoForAi(): Promise<File | null> {
     if (photoFile) return photoFile
@@ -217,7 +264,6 @@ export function EditMeal() {
       }
       if (result.totalPrice !== null) {
         setPriceOverride(result.totalPrice.toFixed(2))
-        setVerifyMealPrice(false)
       }
       if (result.ingredients.length > 0) {
         const existingNames = new Set(
@@ -250,31 +296,10 @@ export function EditMeal() {
       prev.map((r) => {
         if (r.id !== rowId) return r
         if (field === 'name') {
-          return {
-            ...r,
-            name: value,
-            productId: undefined,
-            unitGrams: undefined,
-            qty: undefined,
-          }
+          return applyIngredientName(r, value, despensaProducts, favorites, { stockByProduct })
         }
-        if (field === 'qty') {
-          const count = parseFloat(value)
-          if (r.productId != null && count > 0) {
-            const product = despensaProducts.find((p) => p.id === r.productId)
-            if (product) {
-              const resolved = resolveIngredientFromProduct(product, count)
-              return {
-                ...r,
-                qty: value,
-                price: resolved.price,
-                grams: resolved.grams,
-                name: resolved.name,
-                unitGrams: resolved.unitGrams,
-              }
-            }
-          }
-          return { ...r, qty: value }
+        if (field === 'qty' || field === 'grams') {
+          return patchIngredientAmount(r, field, value, despensaProducts)
         }
         return { ...r, [field]: value }
       })
@@ -288,7 +313,7 @@ export function EditMeal() {
   function selectProduct(rowId: number, product: Product) {
     const existing = ingredientRows.find((r) => r.id === rowId)
     const count = parseFloat(existing?.qty ?? '')
-    const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1)
+    const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1, despensaProducts)
     setIngredientRows((prev) =>
       prev.map((r) =>
         r.id === rowId
@@ -300,6 +325,7 @@ export function EditMeal() {
               qty: resolved.qty,
               productId: resolved.productId,
               unitGrams: resolved.unitGrams,
+              amountMode: existing?.amountMode ?? defaultAmountMode(resolved.unitGrams),
             }
           : r
       )
@@ -312,11 +338,72 @@ export function EditMeal() {
     setIngredientRows((prev) => [...prev, { id: rowIdRef.current++, name: '', price: '' }])
   }
 
+  function toggleIgnorePrice(id: number) {
+    setIngredientRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, ignorePrice: !r.ignorePrice } : r))
+    )
+  }
+
   function removeRow(id: number) {
     setIngredientRows((prev) => {
       const next = prev.filter((r) => r.id !== id)
       return next.length === 0 ? [{ id: rowIdRef.current++, name: '', price: '' }] : next
     })
+  }
+
+  function commitRowName(id: number) {
+    setIngredientRows((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? applyIngredientName(r, r.name, despensaProducts, favorites, {
+              commitName: true,
+              stockByProduct,
+            })
+          : r
+      )
+    )
+  }
+
+  function setAmountMode(id: number, mode: AmountMode) {
+    setIngredientRows((prev) => prev.map((r) => (r.id === id ? patchIngredientAmountMode(r, mode) : r)))
+  }
+
+  async function handleSuggestFromSteps() {
+    if (!comoFazer.trim()) return
+    setSuggestingFromSteps(true)
+    setSuggestFromStepsError(null)
+    setSuggestFromStepsEmpty(false)
+    try {
+      const found = await collectIngredientSuggestions(
+        comoFazer,
+        despensaProducts,
+        ingredientRows.map((r) => r.name),
+        favorites,
+        extractIngredientNamesFromSteps
+      )
+      setStepProposals(found)
+      if (found.length === 0) setSuggestFromStepsEmpty(true)
+    } catch (e) {
+      setSuggestFromStepsError(e instanceof Error ? e.message : 'Não foi possível sugerir')
+    } finally {
+      setSuggestingFromSteps(false)
+    }
+  }
+
+  function acceptStepProposal(suggestion: SuggestedFromSteps) {
+    setIngredientRows((prev) =>
+      mergeSuggestedIngredientRows(prev, [suggestion], () => rowIdRef.current++)
+    )
+    setStepProposals((prev) => prev.filter((p) => p.displayName !== suggestion.displayName))
+    setSuggestFromStepsEmpty(false)
+  }
+
+  function acceptAllStepProposals() {
+    setIngredientRows((prev) =>
+      mergeSuggestedIngredientRows(prev, stepProposals, () => rowIdRef.current++)
+    )
+    setStepProposals([])
+    setSuggestFromStepsEmpty(false)
   }
 
   async function handleSave() {
@@ -334,9 +421,7 @@ export function EditMeal() {
         (protein.trim() && parseFloat(protein) > 0) ||
         (carbs.trim() && parseFloat(carbs) > 0) ||
         (fat.trim() && parseFloat(fat) > 0)
-      const finalPrice = priceOverride !== '' ? parseFloat(priceOverride) : autoTotal
       if (verifyNutricao && hasNutricao) verified.add('nutricao')
-      if (verifyMealPrice && !isNaN(finalPrice) && finalPrice > 0) verified.add('preco')
 
       const description = buildDescription({
         ingredientRows,
@@ -348,7 +433,7 @@ export function EditMeal() {
         portions: origin === 'supermercado' && portions !== '' ? parseInt(portions, 10) : null,
         verified,
         origin,
-        location: origin === 'restaurante' ? location : null,
+        location: origin === 'restaurante' ? restaurant : null,
         locationCoords: origin === 'restaurante' ? locationCoords : null,
         timeMinutes,
         notes,
@@ -421,19 +506,23 @@ export function EditMeal() {
         <div>
           <label className={labelClass}>Nome <span className="text-red-400">*</span></label>
           <input type="text" value={name} onChange={(e) => { setName(e.target.value); setNameError(false) }}
-            placeholder="Ex: Esparguete com atum" className={`${inputClass} ${nameError ? 'border-red-500' : ''}`} />
+            placeholder={origin === 'restaurante' ? 'Ex: Bitoque' : 'Ex: Esparguete com atum'} className={`${inputClass} ${nameError ? 'border-red-500' : ''}`} />
           {nameError && <p className="text-red-400 text-xs mt-1">Nome é obrigatório</p>}
           <AiGenerateButton loading={analyzing} disabled={saving} onClick={handleAnalyze} />
           {aiError && <p className="text-red-400 text-xs mt-1">{aiError}</p>}
         </div>
 
-        <MealOriginField value={origin} onChange={setOrigin} labelClass={labelClass} />
+        <MealOriginField
+          value={origin}
+          onChange={setOrigin}
+          labelClass={labelClass}
+        />
         {origin === 'restaurante' && (
-          <MealLocalityField
-            location={location}
+          <MealRestaurantField
+            restaurant={restaurant}
             coords={locationCoords}
-            onChange={(label, coords) => {
-              setLocation(label)
+            onChange={(name, coords) => {
+              setRestaurant(name)
               setLocationCoords(coords)
             }}
             labelClass={labelClass}
@@ -449,19 +538,38 @@ export function EditMeal() {
               onAdd={addRow}
               onRemove={removeRow}
               onSelectProduct={selectProduct}
+              onIgnorePrice={toggleIgnorePrice}
+              onAmountModeChange={setAmountMode}
+              onCommitName={commitRowName}
               inputClass={inputClass}
               labelClass={labelClass}
               productSuggestions={productSuggestions}
               textSuggestions={textSuggestions}
               focusedRow={focusedRow}
               onFocus={setFocusedRow}
+              favorites={favorites}
+              despensaProducts={despensaProducts}
+              stockByProduct={stockByProduct}
             />
 
-            <div>
-              <label className={labelClass}>Como fazer <span className="text-nourish-border font-normal">(opcional)</span></label>
-              <textarea value={comoFazer} onChange={(e) => setComoFazer(e.target.value)}
-                rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
-            </div>
+            <StepsSection
+              value={comoFazer}
+              onChange={(v) => {
+                setComoFazer(v)
+                setSuggestFromStepsEmpty(false)
+              }}
+              mismatch={stepsMismatch}
+              onSuggest={handleSuggestFromSteps}
+              suggesting={suggestingFromSteps}
+              suggestError={suggestFromStepsError}
+              suggestEmpty={suggestFromStepsEmpty}
+              proposals={stepProposals}
+              onAccept={acceptStepProposal}
+              onAcceptAll={acceptAllStepProposals}
+              onDismissProposals={() => setStepProposals([])}
+              inputClass={inputClass}
+              labelClass={labelClass}
+            />
 
             <TimeNotesSection
               timeMinutes={timeMinutes}
@@ -517,30 +625,15 @@ export function EditMeal() {
           </>
         )}
 
-        <PriceSection
-          autoTotal={origin === 'supermercado' ? autoTotal : 0}
-          priceOverride={priceOverride}
-          onOverrideChange={(v) => {
-            setPriceOverride(v)
-            setVerifyMealPrice(false)
-          }}
-          inputClass={inputClass}
-          labelClass={labelClass}
-        />
-        <VerifyCheckbox
-          id="edit-verify-preco"
-          checked={verifyMealPrice}
-          onChange={setVerifyMealPrice}
-          label="Preço verificado"
-          disabled={
-            (priceOverride === '' || parseFloat(priceOverride) <= 0) &&
-            (origin !== 'supermercado' || autoTotal <= 0)
-          }
-        />
-
-        {origin === 'supermercado' && (
-          <PortionsSection portions={portions} onChange={setPortions}
-            inputClass={inputClass} labelClass={labelClass} />
+        {(origin !== 'restaurante' || showPrices) && (
+          <PriceSection
+            autoTotal={origin === 'supermercado' ? autoTotal : 0}
+            missingPrices={origin === 'supermercado' ? autoPrice.missing : []}
+            priceOverride={priceOverride}
+            onOverrideChange={setPriceOverride}
+            inputClass={inputClass}
+            labelClass={labelClass}
+          />
         )}
 
         {saveError && <div className="p-3 bg-red-900/30 border border-red-800 text-red-400 rounded-xl text-sm">{saveError}</div>}

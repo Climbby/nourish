@@ -241,6 +241,13 @@ export const grocy = {
       body: JSON.stringify({ product_id: productId, amount }),
     }),
 
+  addFreeTextToShoppingList: (note: string, amount = 1) =>
+    apiFetch<{ created_object_id: number }>('/objects/shopping_list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_id: null, amount, note }),
+    }),
+
   removeFromShoppingList: (id: number) =>
     apiFetch<void>(`/objects/shopping_list/${id}`, { method: 'DELETE' }),
 

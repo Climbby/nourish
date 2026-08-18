@@ -67,4 +67,11 @@ describe('normalizeNutritionLabel', () => {
   it('does not treat a partially-filled label as empty', () => {
     expect(isEmptyLabel(normalizeNutritionLabel({ protein: 20 }))).toBe(false)
   })
+
+  it('reads pack net weight and ignores junk', () => {
+    expect(normalizeNutritionLabel({ calories: 18, netGrams: 185 }).netGrams).toBe(185)
+    expect(normalizeNutritionLabel({ calories: 18, net_grams: 250 }).netGrams).toBe(250)
+    expect(normalizeNutritionLabel({ calories: 18, netGrams: 2 }).netGrams).toBeNull()
+    expect(normalizeNutritionLabel({ calories: 18, netGrams: null }).netGrams).toBeNull()
+  })
 })

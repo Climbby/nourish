@@ -6,11 +6,16 @@ import {
 } from '../../utils/genericoSuggestions'
 import { findBestProductMatch } from './matchProduct'
 import { getAliasProductId } from './receiptAliases'
+import { isReceiptNameIgnored, loadReceiptIgnoreList } from './receiptIgnore'
 import type { ReviewLine, ReviewNameOrigin } from './types'
 
 let lineIdCounter = 0
 
-export function buildReviewLines(receiptLines: import('./types').ReceiptLine[], products: Product[]): ReviewLine[] {
+export function buildReviewLines(
+  receiptLines: import('./types').ReceiptLine[],
+  products: Product[],
+  ignoredNames: string[] = loadReceiptIgnoreList()
+): ReviewLine[] {
   const known = listKnownGenericos(products)
 
   return receiptLines.map((receiptLine) => {
@@ -43,7 +48,7 @@ export function buildReviewLines(receiptLines: import('./types').ReceiptLine[], 
       genericoChoice: 'pending',
       stockAmount: buyAmount,
       price: receiptLine.lineTotal,
-      included: true,
+      included: !isReceiptNameIgnored(receiptLine.name, ignoredNames),
     }
   })
 }

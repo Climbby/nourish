@@ -57,7 +57,7 @@ describe('mealLogAttribution', () => {
       share: true,
     })
     expect(mealLogSlot(both)).toBe('almoco')
-    expect(mealLogOwnerLabel(both, (id) => id)).toBe('Ambos comemos')
+    expect(mealLogOwnerLabel(both, (id) => id, 'francisco')).toBe('Ambos comemos')
     expect(canClaimMealLog(both, 'francisco')).toBe(false)
     expect(canClaimMealLog(both, 'pai')).toBe(false)
     expect(canClaimMealLog(first, 'pai')).toBe(true)
@@ -66,7 +66,10 @@ describe('mealLogAttribution', () => {
   it('reads legacy single-owner notes', () => {
     const legacy = JSON.stringify({ owner: 'pai', share: true })
     expect(parseMealLogNote(legacy)?.owners).toEqual(['pai'])
-    expect(mealLogOwnerLabel(legacy, (id) => (id === 'pai' ? 'Pai' : id))).toBe('Pai')
+    expect(mealLogOwnerLabel(legacy, (id) => (id === 'pai' ? 'Pai' : id), 'francisco')).toBe('Pai')
+    const mine = encodeMealLogNote({ owner: 'francisco' })
+    expect(mealLogOwnerLabel(mine, (id) => (id === 'francisco' ? 'Francisco' : id), 'francisco')).toBeNull()
+    expect(mealLogOwnerLabel(mine, (id) => (id === 'francisco' ? 'Francisco' : id), 'pai')).toBe('Francisco')
   })
 })
 
@@ -99,10 +102,11 @@ describe('visitAttributions visibility', () => {
 
   it('labels dual owners as Ambos and allows claim only when not yet owner', () => {
     expect(visitOwnerIds(map.get('both'))).toEqual(['francisco', 'pai'])
-    expect(visitOwnerLabel('both', map, (id) => id)).toBe('Ambos fomos ao supermercado')
-    expect(visitOwnerLabel('a', map, (id) => (id === 'francisco' ? 'Francisco' : id))).toBe(
-      'Francisco'
-    )
+    const names = (id: string) => (id === 'francisco' ? 'Francisco' : id === 'pai' ? 'Pai' : id)
+    expect(visitOwnerLabel('both', map, names, 'francisco')).toBe('Ambos fomos ao supermercado')
+    expect(visitOwnerLabel('a', map, names, 'francisco')).toBeNull()
+    expect(visitOwnerLabel('a', map, names, 'pai')).toBe('Francisco')
+    expect(visitOwnerLabel('b', map, names, 'francisco')).toBe('Pai')
     expect(canClaimVisit('a', 'pai', map)).toBe(true)
     expect(canClaimVisit('a', 'francisco', map)).toBe(false)
     expect(canClaimVisit('both', 'pai', map)).toBe(false)

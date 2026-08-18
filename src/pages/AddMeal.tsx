@@ -1,26 +1,47 @@
-import { useRef, useState, useEffect, useCallback } from 'react'
+import { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
-import { analyzeMeal, analyzeProduct, suggestIngredients } from '../api/ai'
+import { analyzeMeal, analyzeProduct, extractIngredientNamesFromSteps, suggestIngredients } from '../api/ai'
 import { grocyConfig } from '../config/grocy'
 import type { Product } from '../types/grocy'
-import { buildDescription, computeAutoTotal, type IngredientRow } from '../utils/buildDescription'
-import { buildDespensaDescription, cookingName } from '../utils/despensaAnalytics'
+import { buildDescription, computeAutoTotal, readyAutoTotal, type IngredientRow } from '../utils/buildDescription'
+import { buildDespensaDescription, cookingName, familyKey, ingredientDisplayName } from '../utils/despensaAnalytics'
+import { useGenericoFavorites } from '../hooks/useGenericoFavorites'
 import {
+  applyIngredientName,
+  canUseUnitCount,
   filterProductsForIngredient,
+  patchIngredientAmount,
+  patchIngredientAmountMode,
   resolveIngredientFromProduct,
 } from '../utils/ingredientFromProduct'
+import {
+  stockByProductId,
+  variantChoiceLabel,
+  variantChoicesForIngredient,
+  type StockByProduct,
+} from '../utils/ingredientMatch'
+import {
+  collectIngredientSuggestions,
+  defaultAmountMode,
+  findIngredientStepMismatch,
+  mergeSuggestedIngredientRows,
+  type AmountMode,
+  type IngredientStepMismatch,
+  type SuggestedFromSteps,
+} from '../utils/ingredientSteps'
 import type { NavigationFeedbackState } from '../utils/navigationFeedback'
 import type { VerifiedField } from '../utils/verification'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
 import { AiGenerateButton } from '../components/AiGenerateButton'
 import { MealOriginField } from '../components/MealOriginField'
-import { MealLocalityField } from '../components/MealLocalityField'
+import { MealRestaurantField } from '../components/MealRestaurantField'
 import { PhotoField } from '../components/PhotoField'
 import { type MealOrigin } from '../utils/mealOrigin'
 import type { Coords } from '../utils/locality'
 import { fetchAtHome, originFromAtHome } from '../utils/haPresence'
 import { useShowNutrition } from '../hooks/useShowNutrition'
+import { useShowPrices } from '../hooks/useDisplayPrefs'
 import { CATEGORY_FOR_ROLE, isPartRole } from '../utils/mealRole'
 
 const { despensaGroupId: DESPENSA_GROUP_ID, defaultLocationId: DEFAULT_LOCATION_ID, defaultQuId: DEFAULT_QU_ID } = grocyConfig
@@ -50,6 +71,7 @@ export function AddMeal() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const showNutrition = useShowNutrition()
+  const showPrices = useShowPrices()
   const rowIdRef = useRef(1)
 
   const typeParam = searchParams.get('type') ?? ''
@@ -78,14 +100,14 @@ export function AddMeal() {
     return ''
   })
   const [origin, setOrigin] = useState<MealOrigin>('supermercado')
-  const [location, setLocation] = useState('')
+  const originTouchedRef = useRef(false)
+  const [restaurant, setRestaurant] = useState('')
   const [locationCoords, setLocationCoords] = useState<Coords | null>(null)
   const [buyAmount, setBuyAmount] = useState('1')
   const [unitPrice, setUnitPrice] = useState('')
   const [verifyPrice, setVerifyPrice] = useState(false)
   const [verifyCalories, setVerifyCalories] = useState(false)
   const [verifyNutricao, setVerifyNutricao] = useState(false)
-  const [verifyMealPrice, setVerifyMealPrice] = useState(false)
   const [priceOverride, setPriceOverride] = useState('')
   const [saving, setSaving] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
@@ -94,22 +116,42 @@ export function AddMeal() {
   const [nameError, setNameError] = useState(false)
   const [existingProducts, setExistingProducts] = useState<string[]>([])
   const [despensaProducts, setDespensaProducts] = useState<Product[]>([])
+  const [stockByProduct, setStockByProduct] = useState<StockByProduct>({})
   const [productSuggestions, setProductSuggestions] = useState<Record<number, Product[]>>({})
   const [textSuggestions, setTextSuggestions] = useState<Record<number, string[]>>({})
   const [focusedRow, setFocusedRow] = useState<number | null>(null)
   const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { favorites } = useGenericoFavorites()
+  const [stepProposals, setStepProposals] = useState<SuggestedFromSteps[]>([])
+  const [suggestingFromSteps, setSuggestingFromSteps] = useState(false)
+  const [suggestFromStepsError, setSuggestFromStepsError] = useState<string | null>(null)
+  const [suggestFromStepsEmpty, setSuggestFromStepsEmpty] = useState(false)
 
-  const autoTotal = computeAutoTotal(ingredientRows)
+  const autoPrice = computeAutoTotal(ingredientRows)
+  const autoTotal = readyAutoTotal(ingredientRows)
+  const stepsMismatch = useMemo(
+    () =>
+      findIngredientStepMismatch(
+        ingredientRows.map((r) => r.name),
+        comoFazer,
+        despensaProducts,
+        favorites
+      ),
+    [ingredientRows, comoFazer, despensaProducts, favorites]
+  )
 
   useEffect(() => {
     if (!isDespensa) {
-      grocy.getProducts().then((products) => {
-        const despensa = products.filter(
-          (p) => p.product_group_id === DESPENSA_GROUP_ID && p.active !== 0
-        )
-        setDespensaProducts(despensa)
-        setExistingProducts(despensa.map((p) => cookingName(p.name, p.description)))
-      }).catch(() => {})
+      Promise.all([grocy.getProducts(), grocy.getStock()])
+        .then(([products, stock]) => {
+          const despensa = products.filter(
+            (p) => p.product_group_id === DESPENSA_GROUP_ID && p.active !== 0
+          )
+          setDespensaProducts(despensa)
+          setExistingProducts(despensa.map((p) => ingredientDisplayName(p.name, p.description)))
+          setStockByProduct(stockByProductId(stock))
+        })
+        .catch(() => {})
     }
   }, [isDespensa])
 
@@ -117,7 +159,7 @@ export function AddMeal() {
     if (isDespensa) return
     let cancelled = false
     fetchAtHome().then((atHome) => {
-      if (cancelled) return
+      if (cancelled || originTouchedRef.current) return
       const suggested = originFromAtHome(atHome)
       if (suggested) setOrigin(suggested)
     })
@@ -132,7 +174,7 @@ export function AddMeal() {
       setTextSuggestions((prev) => ({ ...prev, [id]: [] }))
       return
     }
-    const matched = filterProductsForIngredient(query, despensaProducts)
+    const matched = filterProductsForIngredient(query, despensaProducts, 8, favorites)
     setProductSuggestions((prev) => ({ ...prev, [id]: matched }))
     if (matched.length >= 3 || query.length < 2) {
       setTextSuggestions((prev) => ({ ...prev, [id]: [] }))
@@ -140,13 +182,17 @@ export function AddMeal() {
     }
     const results = await suggestIngredients(query, existingProducts)
     const matchedNames = new Set(
-      matched.flatMap((p) => [p.name.toLowerCase(), cookingName(p.name, p.description).toLowerCase()])
+      matched.flatMap((p) => [
+        p.name.toLowerCase(),
+        cookingName(p.name, p.description).toLowerCase(),
+        ingredientDisplayName(p.name, p.description).toLowerCase(),
+      ])
     )
     setTextSuggestions((prev) => ({
       ...prev,
       [id]: results.filter((s) => !matchedNames.has(s.toLowerCase())),
     }))
-  }, [despensaProducts, existingProducts])
+  }, [despensaProducts, existingProducts, favorites])
 
   async function handleAnalyze() {
     setAnalyzing(true)
@@ -174,7 +220,6 @@ export function AddMeal() {
         }
         if (result.totalPrice !== null) {
           setPriceOverride(result.totalPrice.toFixed(2))
-          setVerifyMealPrice(false)
         }
 
         if (result.ingredients.length > 0) {
@@ -213,31 +258,10 @@ export function AddMeal() {
       prev.map((r) => {
         if (r.id !== id) return r
         if (field === 'name') {
-          return {
-            ...r,
-            name: value,
-            productId: undefined,
-            unitGrams: undefined,
-            qty: undefined,
-          }
+          return applyIngredientName(r, value, despensaProducts, favorites, { stockByProduct })
         }
-        if (field === 'qty') {
-          const count = parseFloat(value)
-          if (r.productId != null && count > 0) {
-            const product = despensaProducts.find((p) => p.id === r.productId)
-            if (product) {
-              const resolved = resolveIngredientFromProduct(product, count)
-              return {
-                ...r,
-                qty: value,
-                price: resolved.price,
-                grams: resolved.grams,
-                name: resolved.name,
-                unitGrams: resolved.unitGrams,
-              }
-            }
-          }
-          return { ...r, qty: value }
+        if (field === 'qty' || field === 'grams') {
+          return patchIngredientAmount(r, field, value, despensaProducts)
         }
         return { ...r, [field]: value }
       })
@@ -251,7 +275,7 @@ export function AddMeal() {
   function selectProduct(id: number, product: Product) {
     const existing = ingredientRows.find((r) => r.id === id)
     const count = parseFloat(existing?.qty ?? '')
-    const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1)
+    const resolved = resolveIngredientFromProduct(product, count > 0 ? count : 1, despensaProducts)
     setIngredientRows((prev) =>
       prev.map((r) =>
         r.id === id
@@ -263,6 +287,7 @@ export function AddMeal() {
               qty: resolved.qty,
               productId: resolved.productId,
               unitGrams: resolved.unitGrams,
+              amountMode: existing?.amountMode ?? defaultAmountMode(resolved.unitGrams),
             }
           : r
       )
@@ -275,11 +300,72 @@ export function AddMeal() {
     setIngredientRows((prev) => [...prev, { id: rowIdRef.current++, name: '', price: '' }])
   }
 
+  function toggleIgnorePrice(id: number) {
+    setIngredientRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, ignorePrice: !r.ignorePrice } : r))
+    )
+  }
+
   function removeRow(id: number) {
     setIngredientRows((prev) => {
       const next = prev.filter((r) => r.id !== id)
       return next.length === 0 ? [{ id: rowIdRef.current++, name: '', price: '' }] : next
     })
+  }
+
+  function commitRowName(id: number) {
+    setIngredientRows((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? applyIngredientName(r, r.name, despensaProducts, favorites, {
+              commitName: true,
+              stockByProduct,
+            })
+          : r
+      )
+    )
+  }
+
+  function setAmountMode(id: number, mode: AmountMode) {
+    setIngredientRows((prev) => prev.map((r) => (r.id === id ? patchIngredientAmountMode(r, mode) : r)))
+  }
+
+  async function handleSuggestFromSteps() {
+    if (!comoFazer.trim()) return
+    setSuggestingFromSteps(true)
+    setSuggestFromStepsError(null)
+    setSuggestFromStepsEmpty(false)
+    try {
+      const found = await collectIngredientSuggestions(
+        comoFazer,
+        despensaProducts,
+        ingredientRows.map((r) => r.name),
+        favorites,
+        extractIngredientNamesFromSteps
+      )
+      setStepProposals(found)
+      if (found.length === 0) setSuggestFromStepsEmpty(true)
+    } catch (e) {
+      setSuggestFromStepsError(e instanceof Error ? e.message : 'Não foi possível sugerir')
+    } finally {
+      setSuggestingFromSteps(false)
+    }
+  }
+
+  function acceptStepProposal(suggestion: SuggestedFromSteps) {
+    setIngredientRows((prev) =>
+      mergeSuggestedIngredientRows(prev, [suggestion], () => rowIdRef.current++)
+    )
+    setStepProposals((prev) => prev.filter((p) => p.displayName !== suggestion.displayName))
+    setSuggestFromStepsEmpty(false)
+  }
+
+  function acceptAllStepProposals() {
+    setIngredientRows((prev) =>
+      mergeSuggestedIngredientRows(prev, stepProposals, () => rowIdRef.current++)
+    )
+    setStepProposals([])
+    setSuggestFromStepsEmpty(false)
   }
 
   function buildDespensaVerified(): Set<VerifiedField> {
@@ -297,9 +383,7 @@ export function AddMeal() {
         (protein.trim() && parseFloat(protein) > 0) ||
         (carbs.trim() && parseFloat(carbs) > 0) ||
         (fat.trim() && parseFloat(fat) > 0))
-    const finalPrice = priceOverride !== '' ? parseFloat(priceOverride) : autoTotal
     if (verifyNutricao && hasNutricao) v.add('nutricao')
-    if (verifyMealPrice && !isNaN(finalPrice) && finalPrice > 0) v.add('preco')
     return v
   }
 
@@ -354,7 +438,7 @@ export function AddMeal() {
           category,
           verified: buildMealVerified(),
           origin,
-          location: origin === 'restaurante' ? location : null,
+          location: origin === 'restaurante' ? restaurant : null,
           locationCoords: origin === 'restaurante' ? locationCoords : null,
           timeMinutes,
           notes,
@@ -408,7 +492,13 @@ export function AddMeal() {
         <div>
           <label className={labelClass}>Nome <span className="text-red-400">*</span></label>
           <input type="text" value={name} onChange={(e) => { setName(e.target.value); setNameError(false) }}
-            placeholder={isDespensa ? 'Ex: Leite, Água, Pão…' : 'Ex: Esparguete com atum'}
+            placeholder={
+              isDespensa
+                ? 'Ex: Leite, Água, Pão…'
+                : origin === 'restaurante'
+                  ? 'Ex: Bitoque'
+                  : 'Ex: Esparguete com atum'
+            }
             className={`${inputClass} ${nameError ? 'border-red-500' : ''}`} />
           {nameError && <p className="text-red-400 text-xs mt-1">Nome é obrigatório</p>}
           <AiGenerateButton loading={analyzing} disabled={saving} onClick={handleAnalyze} />
@@ -475,13 +565,20 @@ export function AddMeal() {
           </>
         ) : (
           <>
-            <MealOriginField value={origin} onChange={setOrigin} labelClass={labelClass} />
+            <MealOriginField
+              value={origin}
+              onChange={(next) => {
+                originTouchedRef.current = true
+                setOrigin(next)
+              }}
+              labelClass={labelClass}
+            />
             {origin === 'restaurante' && (
-              <MealLocalityField
-                location={location}
+              <MealRestaurantField
+                restaurant={restaurant}
                 coords={locationCoords}
-                onChange={(label, coords) => {
-                  setLocation(label)
+                onChange={(name, coords) => {
+                  setRestaurant(name)
                   setLocationCoords(coords)
                 }}
                 labelClass={labelClass}
@@ -496,18 +593,37 @@ export function AddMeal() {
                   onAdd={addRow}
                   onRemove={removeRow}
                   onSelectProduct={selectProduct}
+                  onIgnorePrice={toggleIgnorePrice}
+                  onAmountModeChange={setAmountMode}
+                  onCommitName={commitRowName}
                   inputClass={inputClass}
                   labelClass={labelClass}
                   productSuggestions={productSuggestions}
                   textSuggestions={textSuggestions}
                   focusedRow={focusedRow}
                   onFocus={setFocusedRow}
+                  favorites={favorites}
+                  despensaProducts={despensaProducts}
+                  stockByProduct={stockByProduct}
                 />
-                <div>
-                  <label className={labelClass}>Como fazer <span className="text-nourish-border font-normal">(opcional)</span></label>
-                  <textarea value={comoFazer} onChange={(e) => setComoFazer(e.target.value)}
-                    rows={4} placeholder="Descreve os passos de preparação..." className={`${inputClass} resize-none`} />
-                </div>
+                <StepsSection
+                  value={comoFazer}
+                  onChange={(v) => {
+                    setComoFazer(v)
+                    setSuggestFromStepsEmpty(false)
+                  }}
+                  mismatch={stepsMismatch}
+                  onSuggest={handleSuggestFromSteps}
+                  suggesting={suggestingFromSteps}
+                  suggestError={suggestFromStepsError}
+                  suggestEmpty={suggestFromStepsEmpty}
+                  proposals={stepProposals}
+                  onAccept={acceptStepProposal}
+                  onAcceptAll={acceptAllStepProposals}
+                  onDismissProposals={() => setStepProposals([])}
+                  inputClass={inputClass}
+                  labelClass={labelClass}
+                />
                 <TimeNotesSection
                   timeMinutes={timeMinutes}
                   notes={notes}
@@ -560,26 +676,16 @@ export function AddMeal() {
                 />
               </>
             )}
-            <PriceSection
-              autoTotal={origin === 'supermercado' ? autoTotal : 0}
-              priceOverride={priceOverride}
-              onOverrideChange={(v) => {
-                setPriceOverride(v)
-                setVerifyMealPrice(false)
-              }}
-              inputClass={inputClass}
-              labelClass={labelClass}
-            />
-            <VerifyCheckbox
-              id="meal-verify-preco"
-              checked={verifyMealPrice}
-              onChange={setVerifyMealPrice}
-              label="Preço verificado"
-              disabled={
-                (priceOverride === '' || parseFloat(priceOverride) <= 0) &&
-                (origin !== 'supermercado' || autoTotal <= 0)
-              }
-            />
+            {(origin !== 'restaurante' || showPrices) && (
+              <PriceSection
+                autoTotal={origin === 'supermercado' ? autoTotal : 0}
+                missingPrices={origin === 'supermercado' ? autoPrice.missing : []}
+                priceOverride={priceOverride}
+                onOverrideChange={setPriceOverride}
+                inputClass={inputClass}
+                labelClass={labelClass}
+              />
+            )}
           </>
         )}
 
@@ -605,39 +711,61 @@ export function IngredientSection({
   onAdd,
   onRemove,
   onSelectProduct,
+  onIgnorePrice,
+  onAmountModeChange,
+  onCommitName,
   inputClass,
   labelClass,
   productSuggestions = {},
   textSuggestions = {},
   focusedRow = null,
   onFocus,
+  favorites = {},
+  despensaProducts = [],
+  stockByProduct,
 }: {
   rows: IngredientRow[]
   onUpdate: (id: number, field: 'name' | 'price' | 'grams' | 'qty', value: string) => void
   onAdd: () => void
   onRemove: (id: number) => void
   onSelectProduct: (id: number, product: Product) => void
+  onIgnorePrice: (id: number) => void
+  onAmountModeChange?: (id: number, mode: AmountMode) => void
+  onCommitName?: (id: number) => void
   inputClass: string
   labelClass: string
   productSuggestions?: Record<number, Product[]>
   textSuggestions?: Record<number, string[]>
   focusedRow?: number | null
   onFocus?: (id: number | null) => void
+  favorites?: Record<string, number>
+  despensaProducts?: Product[]
+  stockByProduct?: StockByProduct
 }) {
+  const [openUnitRow, setOpenUnitRow] = useState<number | null>(null)
+
   return (
     <div>
       <label className={labelClass}>Ingredientes <span className="text-nourish-border font-normal">(opcional)</span></label>
-      <p className="text-xs text-nourish-text-dim mb-2">
-        Escolhe da Despensa para preencher preço e gramas. Com gramas/unidade no produto, podes contar (ex: 2 latas).
-      </p>
       <div className="space-y-3">
         {rows.map((row) => {
-          const useCount = row.productId != null && row.unitGrams != null && row.unitGrams > 0
+          const hasUnitGrams = canUseUnitCount(row.unitGrams)
+          const mode: AmountMode = row.amountMode ?? defaultAmountMode(row.unitGrams)
+          const useCount = mode === 'un'
           const products = productSuggestions[row.id] ?? []
           const texts = textSuggestions[row.id] ?? []
           const showSuggest = onFocus && focusedRow === row.id && (products.length > 0 || texts.length > 0)
+          const liftRow = focusedRow === row.id || openUnitRow === row.id
+          const linked = row.productId != null
+          const variantChoices = variantChoicesForIngredient(
+            row.name,
+            despensaProducts,
+            stockByProduct,
+            favorites
+          )
+          const showVariantChoice = !showSuggest && variantChoices.length > 1
           return (
-            <div key={row.id} className="space-y-1">
+            <div key={row.id} className={`space-y-1 relative ${liftRow ? 'z-30' : 'z-0'}`}>
               <div className="flex gap-2 items-start">
                 <div className="flex-1 relative">
                   <input
@@ -645,15 +773,21 @@ export function IngredientSection({
                     value={row.name}
                     onChange={(e) => onUpdate(row.id, 'name', e.target.value)}
                     onFocus={() => onFocus?.(row.id)}
-                    onBlur={() => setTimeout(() => onFocus?.(null), 200)}
+                    onBlur={() => {
+                      setTimeout(() => {
+                        onCommitName?.(row.id)
+                        onFocus?.(null)
+                      }, 200)
+                    }}
                     placeholder="Ingrediente da Despensa…"
                     className={`${inputClass} w-full`}
                   />
                   {showSuggest && (
-                    <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-nourish-surface border border-nourish-border rounded-xl shadow-lg overflow-hidden max-h-56 overflow-y-auto">
+                    <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-nourish-surface border border-nourish-border rounded-xl shadow-lg overflow-hidden max-h-56 overflow-y-auto">
                       {products.map((p) => {
-                        const label = cookingName(p.name, p.description)
+                        const label = ingredientDisplayName(p.name, p.description)
                         const showFull = label !== p.name
+                        const isFav = favorites[familyKey(p.name, p.description)] === p.id
                         return (
                           <button
                             key={p.id}
@@ -665,7 +799,14 @@ export function IngredientSection({
                             }}
                             className="w-full text-left px-4 py-2 text-sm text-nourish-text hover:bg-nourish-border/20 transition-colors focus:outline-none"
                           >
-                            <span className="font-medium">{label}</span>
+                            <span className="font-medium">
+                              {label}
+                              {isFav && (
+                                <span className="ml-1 text-amber-400" aria-label="Variante favorita">
+                                  ★
+                                </span>
+                              )}
+                            </span>
                             {showFull && (
                               <span className="block text-xs text-nourish-text-dim truncate">{p.name}</span>
                             )}
@@ -705,45 +846,95 @@ export function IngredientSection({
                     value={row.price}
                     onChange={(e) => onUpdate(row.id, 'price', e.target.value)}
                     placeholder="0.00"
-                    className={`${inputClass} pl-7 pr-2`}
+                    className={`${inputClass} pl-7 pr-2 ${row.ignorePrice ? 'opacity-40' : ''}`}
                     min="0"
                     step="0.01"
+                    aria-disabled={row.ignorePrice}
                   />
                 </div>
-                {useCount ? (
-                  <div className="relative flex-1">
+                <div className="relative flex-1">
+                  {useCount ? (
                     <input
                       type="number"
                       inputMode="decimal"
                       value={row.qty ?? ''}
                       onChange={(e) => onUpdate(row.id, 'qty', e.target.value)}
                       placeholder="Qtd"
-                      className={`${inputClass} pr-10`}
+                      className={`${inputClass} pr-14`}
                       min="0"
                       step="1"
                     />
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">un</span>
-                  </div>
-                ) : (
-                  <div className="relative flex-1">
+                  ) : (
                     <input
                       type="number"
-                      inputMode="numeric"
+                      inputMode="decimal"
                       value={row.grams ?? ''}
                       onChange={(e) => onUpdate(row.id, 'grams', e.target.value)}
                       placeholder="Quantidade"
-                      className={`${inputClass} pr-8`}
+                      className={`${inputClass} pr-14`}
                       min="0"
                       step="1"
                     />
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">g</span>
-                  </div>
-                )}
+                  )}
+                  <AmountUnitPicker
+                    mode={mode}
+                    open={openUnitRow === row.id}
+                    onOpenChange={(open) => setOpenUnitRow(open ? row.id : null)}
+                    onChange={(next) => onAmountModeChange?.(row.id, next)}
+                  />
+                </div>
               </div>
+              {row.name.trim() !== '' && (
+                <button
+                  type="button"
+                  onClick={() => onIgnorePrice(row.id)}
+                  aria-pressed={!!row.ignorePrice}
+                  className={`text-xs font-medium rounded-md px-1 py-1 -ml-1 min-h-8 focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                    row.ignorePrice ? 'text-nourish-primary' : 'text-nourish-text-dim'
+                  }`}
+                >
+                  {row.ignorePrice ? 'A ignorar no €' : 'Ignorar no €'}
+                </button>
+              )}
+              {showVariantChoice && (
+                <div
+                  className="flex flex-wrap gap-1.5"
+                  role="group"
+                  aria-label="Variante na Despensa"
+                >
+                  {variantChoices.map((p) => {
+                    const selected = row.productId === p.id
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          onSelectProduct(row.id, p)
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-nourish-primary ${
+                          selected
+                            ? 'bg-nourish-primary text-nourish-on-primary'
+                            : 'bg-nourish-surface border border-nourish-border text-nourish-text-dim'
+                        }`}
+                      >
+                        {variantChoiceLabel(p)}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
               {useCount && row.grams && (
                 <p className="text-xs text-nourish-text-dim pl-0.5">
                   ≈ {row.grams} g
                   {row.unitGrams != null ? ` (${row.unitGrams} g/un)` : ''}
+                </p>
+              )}
+              {useCount && !hasUnitGrams && (
+                <p className="text-xs text-amber-400 pl-0.5">
+                  {linked
+                    ? 'Falta o peso por embalagem (g/un) na Despensa — a nutrição por 100 g não chega.'
+                    : 'Ingrediente não ligado à Despensa — as unidades não convertem para gramas.'}
                 </p>
               )}
             </div>
@@ -753,6 +944,171 @@ export function IngredientSection({
       <button type="button" onClick={onAdd} className="mt-2 text-sm text-nourish-primary font-medium focus:outline-none">
         + Adicionar ingrediente
       </button>
+    </div>
+  )
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
+      <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+    </svg>
+  )
+}
+
+function AmountUnitPicker({
+  mode,
+  open,
+  onOpenChange,
+  onChange,
+}: {
+  mode: AmountMode
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onChange: (mode: AmountMode) => void
+}) {
+  return (
+    <div className="absolute inset-y-0 right-1 flex items-center">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Unidade da quantidade"
+        onClick={() => onOpenChange(!open)}
+        onBlur={() => setTimeout(() => onOpenChange(false), 150)}
+        className="flex items-center gap-0.5 px-1.5 py-1 rounded-md text-sm text-nourish-text-dim hover:text-nourish-text focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+      >
+        {mode === 'un' ? 'un' : 'g'}
+        <ChevronDownIcon />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          className="absolute right-0 top-full z-50 mt-1 min-w-[4.5rem] bg-nourish-surface border border-nourish-border rounded-lg shadow-lg overflow-hidden"
+        >
+          {(['g', 'un'] as const).map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              role="option"
+              aria-selected={mode === opt}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                onChange(opt)
+                onOpenChange(false)
+              }}
+              className={`w-full text-left px-3 py-2 text-sm focus:outline-none hover:bg-nourish-border/20 ${
+                mode === opt ? 'text-nourish-primary font-semibold' : 'text-nourish-text'
+              }`}
+            >
+              {opt === 'un' ? 'un' : 'g'}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function StepsSection({
+  value,
+  onChange,
+  mismatch,
+  onSuggest,
+  suggesting,
+  suggestError,
+  suggestEmpty,
+  proposals,
+  onAccept,
+  onAcceptAll,
+  onDismissProposals,
+  inputClass,
+  labelClass,
+}: {
+  value: string
+  onChange: (value: string) => void
+  mismatch: IngredientStepMismatch
+  onSuggest: () => void
+  suggesting: boolean
+  suggestError: string | null
+  suggestEmpty: boolean
+  proposals: SuggestedFromSteps[]
+  onAccept: (suggestion: SuggestedFromSteps) => void
+  onAcceptAll: () => void
+  onDismissProposals: () => void
+  inputClass: string
+  labelClass: string
+}) {
+  const hasSteps = value.trim().length > 0
+  return (
+    <div>
+      <label className={labelClass}>Como fazer <span className="text-nourish-border font-normal">(opcional)</span></label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={4}
+        placeholder="Descreve os passos de preparação..."
+        className={`${inputClass} resize-none`}
+      />
+      {hasSteps && mismatch.unusedIngredients.length > 0 && (
+        <p className="text-xs text-amber-400/90 mt-1.5">
+          Não mencionados nos passos: {mismatch.unusedIngredients.join(', ')}. Se não os usaste, diz nos passos.
+        </p>
+      )}
+      {hasSteps && mismatch.extraInSteps.length > 0 && (
+        <p className="text-xs text-nourish-text-dim mt-1">
+          Nos passos mas não na lista: {mismatch.extraInSteps.join(', ')}.
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onSuggest}
+        disabled={!hasSteps || suggesting}
+        className="mt-2 w-full py-2.5 rounded-lg text-sm font-semibold bg-nourish-surface-high border border-nourish-border text-nourish-text active:bg-nourish-border/25 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+      >
+        {suggesting ? 'A sugerir…' : 'Sugerir ingredientes'}
+      </button>
+      {suggestError && <p className="text-red-400 text-xs mt-1.5">{suggestError}</p>}
+      {suggestEmpty && proposals.length === 0 && (
+        <p className="text-xs text-nourish-text-dim mt-1.5">
+          Não encontrámos produtos da Despensa nos passos.
+        </p>
+      )}
+      {proposals.length > 0 && (
+        <div className="mt-2 p-3 rounded-xl bg-nourish-surface border border-nourish-border space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-nourish-text-dim">Encontrámos na Despensa — toca para adicionar:</p>
+            <button
+              type="button"
+              onClick={onDismissProposals}
+              className="text-xs text-nourish-text-dim underline focus:outline-none"
+            >
+              Fechar
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {proposals.map((p) => (
+              <button
+                key={p.displayName}
+                type="button"
+                onClick={() => onAccept(p)}
+                className="px-3 py-1.5 rounded-full text-sm font-medium bg-nourish-bg border border-nourish-border text-nourish-text active:bg-nourish-border/20 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+              >
+                + {p.displayName}
+              </button>
+            ))}
+          </div>
+          {proposals.length > 1 && (
+            <button
+              type="button"
+              onClick={onAcceptAll}
+              className="text-sm text-nourish-primary font-medium focus:outline-none"
+            >
+              Adicionar todos
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -775,8 +1131,10 @@ export function NutritionSection({ calories, protein, carbs, fat, onChange, inpu
   )
 }
 
-export function PriceSection({ autoTotal, priceOverride, onOverrideChange, inputClass, labelClass }: {
-  autoTotal: number; priceOverride: string
+export function PriceSection({ autoTotal, missingPrices = [], priceOverride, onOverrideChange, inputClass, labelClass }: {
+  autoTotal: number
+  missingPrices?: string[]
+  priceOverride: string
   onOverrideChange: (v: string) => void
   inputClass: string; labelClass: string
 }) {
@@ -791,6 +1149,11 @@ export function PriceSection({ autoTotal, priceOverride, onOverrideChange, input
           )}
         </p>
       )}
+      {autoTotal <= 0 && missingPrices.length > 0 && (
+        <p className="text-xs text-nourish-text-dim mb-1.5">
+          Falta € em {missingPrices.join(', ')}. Ignora se não conta.
+        </p>
+      )}
       <div className="relative">
         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-nourish-text-dim text-sm pointer-events-none">€</span>
         <input type="number" value={priceOverride} onChange={(e) => onOverrideChange(e.target.value)}
@@ -800,28 +1163,6 @@ export function PriceSection({ autoTotal, priceOverride, onOverrideChange, input
       {priceOverride !== '' && autoTotal > 0 && parseFloat(priceOverride) !== autoTotal && (
         <p className="text-xs text-nourish-text-dim mt-1">A usar valor manual em vez da soma</p>
       )}
-    </div>
-  )
-}
-
-export function PortionsSection({ portions, onChange, inputClass, labelClass }: {
-  portions: string
-  onChange: (v: string) => void
-  inputClass: string
-  labelClass: string
-}) {
-  return (
-    <div>
-      <label className={labelClass}>Porções no frigorífico <span className="text-nourish-border font-normal">(opcional)</span></label>
-      <input
-        type="number"
-        value={portions}
-        onChange={(e) => onChange(e.target.value)}
-        min="0"
-        placeholder="0"
-        className={inputClass}
-      />
-      <p className="text-xs text-nourish-text-dim mt-1">Quantas porções prontas tens guardadas</p>
     </div>
   )
 }
@@ -847,9 +1188,6 @@ export function TimeNotesSection({ timeMinutes, notes, onTimeChange, onNotesChan
           placeholder="30"
           className={inputClass}
         />
-        <p className="text-xs text-nourish-text-dim mt-1">
-          Actualiza com o tempo real depois de cozinhares
-        </p>
       </div>
 
       <div>
@@ -861,9 +1199,6 @@ export function TimeNotesSection({ timeMinutes, notes, onTimeChange, onNotesChan
           placeholder="Ex: menos sal da próxima, 20 min chegam..."
           className={`${inputClass} resize-none`}
         />
-        <p className="text-xs text-nourish-text-dim mt-1">
-          O que mudar da próxima vez — vai-se acumulando a cada repetição
-        </p>
       </div>
     </>
   )

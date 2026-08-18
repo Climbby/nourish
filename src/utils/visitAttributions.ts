@@ -157,15 +157,17 @@ export function canClaimVisit(
   return !visitOwnerIds(byVisit.get(visitEnteredAt)).includes(activeProfileId)
 }
 
-/** Label for History rows: single name, or Ambos when co-owned. */
+/** Label for History rows. Hide the active profile's own name; keep Ambos / other people. */
 export function visitOwnerLabel(
   visitEnteredAt: string,
   byVisit: Map<string, VisitAttribution>,
-  nameOf: (id: string) => string | null
+  nameOf: (id: string) => string | null,
+  activeProfileId?: string | null
 ): string | null {
   const owners = visitOwnerIds(byVisit.get(visitEnteredAt))
   if (owners.length === 0) return null
   if (owners.length >= 2) return 'Ambos fomos ao supermercado'
+  if (activeProfileId && owners[0] === activeProfileId) return null
   return nameOf(owners[0])
 }
 

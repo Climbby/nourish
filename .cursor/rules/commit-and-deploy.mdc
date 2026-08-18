@@ -1,0 +1,13 @@
+---
+description: Always commit and deploy Nourish after finishing user-visible work
+alwaysApply: true
+---
+
+# Commit and deploy
+
+When a change is finished (feature, fix, or other user-visible work), **commit it and deploy** without waiting to be asked again.
+
+1. Commit locally with a concise message (why, not what). Do not commit `.env` or secrets.
+2. Deploy: `npm run build`, SCP `dist/` to CT117 (`nourish`, **192.168.1.27**) as root with `~/.ssh/pve_ed25519`, envsubst `nginx.conf` (`GROCY_API_KEY`, `GROCY_HOST`, `OPENROUTER_API_KEY` from `.env`), `nginx -t && nginx -s reload`.
+3. Stop and report if build, SCP, or nginx fails.
+4. Do not `git push` unless the user asks.

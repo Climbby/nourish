@@ -19,6 +19,7 @@ const LEGACY_PREF_KEYS = [
   'nourish-favourites',
   'nourish-planned-slots',
   'nourish-suggestion-preference',
+  'nourish-suggestion-salt',
   'nourish-plan-origins',
   'nourish-meal-access-order',
 ] as const

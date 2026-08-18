@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { localityLabelFromPhotonProps, formatDistanceKm, estimateDriveMinutes } from './locality'
+import {
+  localityLabelFromPhotonProps,
+  formatDistanceKm,
+  estimateDriveMinutes,
+  restaurantNameFromPhotonProps,
+} from './locality'
 
 describe('localityLabelFromPhotonProps', () => {
   it('formats village + county as Condeixa, Coimbra', () => {
@@ -29,5 +34,27 @@ describe('distance helpers', () => {
 
   it('estimates drive minutes', () => {
     expect(estimateDriveMinutes(20000)).toBe(30)
+  })
+})
+
+describe('restaurantNameFromPhotonProps', () => {
+  it('returns restaurant POI names', () => {
+    expect(
+      restaurantNameFromPhotonProps({ name: 'Cantina do ISCTE', osm_value: 'restaurant' })
+    ).toBe('Cantina do ISCTE')
+    expect(
+      restaurantNameFromPhotonProps({ name: 'Café Central', osm_value: 'cafe' })
+    ).toBe('Café Central')
+  })
+
+  it('ignores locality-only reverse results', () => {
+    expect(
+      restaurantNameFromPhotonProps({
+        name: 'Condeixa-a-Nova',
+        city: 'Condeixa-a-Nova',
+        county: 'Coimbra',
+      })
+    ).toBeNull()
+    expect(restaurantNameFromPhotonProps({ osm_value: 'restaurant' })).toBeNull()
   })
 })

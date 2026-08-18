@@ -1,25 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import type { Product, StockLogEntry } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { PhotoField } from '../components/PhotoField'
 import { ProductMacrosSection } from '../components/ProductMacrosSection'
+import { ProductVariantCarousel } from '../components/ProductVariantCarousel'
+import { BottomNav } from '../components/BottomNav'
 import {
   getMacrosFromDesc,
   upsertMacrosSection,
   type ProductMacros,
 } from '../utils/productNutrition'
+import { insaLookupNames } from '../utils/insaNutrition'
 import {
   buildDespensaDescription,
+  familyKey,
   formatDespensaPriceLabel,
   getBuyAmountFromDesc,
   getGenericoFromDesc,
-  getNomeCurtoFromDesc,
   getPriceFromDesc,
   getPriceUnitFromDesc,
   getStoreFromDesc,
   getUnitGramsFromDesc,
+  inferUnitGramsFromName,
   shortStoreBrand,
 } from '../utils/despensaAnalytics'
 import {
@@ -28,16 +32,24 @@ import {
   type StorePriceItem,
 } from '../utils/storePrices'
 import { fetchVisitReceipts, type VisitReceiptLink } from '../utils/visitReceipts'
-import { listDespensaProductsForMerge, mergeProducts } from '../utils/mergeProducts'
 import { parseVerifiedFields } from '../utils/verification'
+import { formatPtDate } from '../utils/formatPtDate'
+import {
+  aggregateFamilyPurchases,
+  findGenericoSiblings,
+  mergeStorePriceItems,
+  nextSiblingId,
+  toVariantSummaries,
+  type FamilyVariantSummary,
+} from '../utils/productFamily'
+import { useGenericoFavorites } from '../hooks/useGenericoFavorites'
 
 const PRICES_SITE = 'https://supermercados-portugal.guessitgame.me/#'
 const HISTORY_LIMIT = 20
 const labelClass = 'block text-sm font-medium text-nourish-text-dim mb-1.5'
 
 function formatLogDate(ts: string): string {
-  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T'))
-  return d.toLocaleDateString('pt-PT', { day: 'numeric', month: 'short', year: 'numeric' })
+  return formatPtDate(ts)
 }
 
 function dayKey(ts: string): string {
@@ -50,6 +62,26 @@ function BackIcon() {
       <path
         fillRule="evenodd"
         d="M7.72 12.53a.75.75 0 0 1 0-1.06l7.5-7.5a.75.75 0 1 1 1.06 1.06L9.31 12l6.97 6.97a.75.75 0 1 1-1.06 1.06l-7.5-7.5Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  )
+}
+
+function PencilIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+      <path d="M21.731 2.269a2.625 2.625 0 0 0-3.712 0l-1.157 1.157 3.712 3.712 1.157-1.157a2.625 2.625 0 0 0 0-3.712ZM19.513 8.199l-3.712-3.712-8.4 8.4a5.25 5.25 0 0 0-1.32 2.214l-.8 2.685a.75.75 0 0 0 .933.933l2.685-.8a5.25 5.25 0 0 0 2.214-1.32l8.4-8.4Z" />
+    </svg>
+  )
+}
+
+function PlusIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7">
+      <path
+        fillRule="evenodd"
+        d="M12 3.75a.75.75 0 0 1 .75.75v6.75h6.75a.75.75 0 0 1 0 1.5h-6.75v6.75a.75.75 0 0 1-1.5 0v-6.75H4.5a.75.75 0 0 1 0-1.5h6.75V4.5a.75.75 0 0 1 .75-.75Z"
         clipRule="evenodd"
       />
     </svg>
@@ -122,7 +154,6 @@ function storePriceForPurchase(
       best = p
     }
   }
-  // Only use near matches (within 3 days)
   return bestDist <= 3 * 24 * 60 * 60 * 1000 ? best : null
 }
 
@@ -160,13 +191,24 @@ function pricesSiteProductUrl(opts: {
   return `${PRICES_SITE}/product?${params.toString()}`
 }
 
+function sortLog(entries: StockLogEntry[]): StockLogEntry[] {
+  return [...entries].sort(
+    (a, b) =>
+      new Date(b.row_created_timestamp.replace(' ', 'T')).getTime() -
+      new Date(a.row_created_timestamp.replace(' ', 'T')).getTime()
+  )
+}
+
 export function ProductDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const numId = parseInt(id!, 10)
+  const { favorites, setFavorite } = useGenericoFavorites()
 
   const [product, setProduct] = useState<Product | null>(null)
-  const [log, setLog] = useState<StockLogEntry[]>([])
+  const [siblings, setSiblings] = useState<Product[]>([])
+  const [variantSummaries, setVariantSummaries] = useState<FamilyVariantSummary[]>([])
+  const [familyLog, setFamilyLog] = useState<StockLogEntry[]>([])
   const [storePrices, setStorePrices] = useState<StorePriceItem[]>([])
   const [receipts, setReceipts] = useState<VisitReceiptLink[]>([])
   const [loading, setLoading] = useState(true)
@@ -175,22 +217,26 @@ export function ProductDetail() {
   const [stockSaving, setStockSaving] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [generico, setGenerico] = useState('')
-  const [nomeCurto, setNomeCurto] = useState('')
   const [unitGrams, setUnitGrams] = useState('')
   const [metaSaving, setMetaSaving] = useState(false)
-  const [mergeOpen, setMergeOpen] = useState(false)
-  const [mergeTargets, setMergeTargets] = useState<Product[]>([])
-  const [mergeIntoId, setMergeIntoId] = useState<number | ''>('')
-  const [mergeBusy, setMergeBusy] = useState(false)
-  const [mergeMsg, setMergeMsg] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState(false)
   const [macrosSaving, setMacrosSaving] = useState(false)
 
-  function sortLog(entries: StockLogEntry[]): StockLogEntry[] {
-    return [...entries].sort(
-      (a, b) =>
-        new Date(b.row_created_timestamp.replace(' ', 'T')).getTime() -
-        new Date(a.row_created_timestamp.replace(' ', 'T')).getTime()
-    )
+  /** Avoid reloading family history when swiping within the same Generico. */
+  const familyCacheKey = useRef<string | null>(null)
+
+  function applyProduct(prod: Product) {
+    setProduct(prod)
+    setGenerico(getGenericoFromDesc(prod.description) ?? '')
+    const stored = getUnitGramsFromDesc(prod.description)
+    const inferred = inferUnitGramsFromName(prod.name)
+    setUnitGrams((stored ?? inferred)?.toString() ?? '')
+    setPhotoPreview(prod.picture_file_name ? grocy.productPictureUrl(prod.picture_file_name) : null)
+  }
+
+  function goToVariant(nextId: number) {
+    if (nextId === numId) return
+    navigate(`/product/${nextId}`, { replace: true })
   }
 
   useEffect(() => {
@@ -199,65 +245,134 @@ export function ProductDetail() {
       setLoading(false)
       return
     }
-    setLoading(true)
-    setError(null)
-    Promise.all([
-      grocy.getProduct(numId),
-      grocy.getStockLog(numId),
-      fetchVisitReceipts(),
-    ])
-      .then(async ([prod, logEntries, visitReceipts]) => {
-        const prices = await fetchStorePriceHistory({
-          product_id: numId,
-          product_name: prod.name,
+
+    let cancelled = false
+
+    async function load() {
+      setError(null)
+
+      const cachedSibling = siblings.find((s) => s.id === numId)
+      const sameFamily =
+        cachedSibling != null &&
+        siblings.length > 1 &&
+        familyCacheKey.current != null
+
+      if (sameFamily && cachedSibling) {
+        applyProduct(cachedSibling)
+        setLoading(false)
+        // Refresh this SKU in background so edits elsewhere stay current
+        void grocy.getProduct(numId).then((prod) => {
+          if (cancelled) return
+          applyProduct(prod)
+          setSiblings((prev) => prev.map((s) => (s.id === prod.id ? prod : s)))
+          setVariantSummaries((prev) =>
+            prev.map((v) =>
+              v.id === prod.id
+                ? {
+                    id: prod.id,
+                    name: prod.name,
+                    picture_file_name: prod.picture_file_name,
+                    price: getPriceFromDesc(prod.description),
+                    description: prod.description,
+                  }
+                : v
+            )
+          )
         })
-        setProduct(prod)
-        setGenerico(getGenericoFromDesc(prod.description) ?? '')
-        setNomeCurto(getNomeCurtoFromDesc(prod.description) ?? '')
-        const ug = getUnitGramsFromDesc(prod.description)
-        setUnitGrams(ug != null ? String(ug) : '')
-        if (prod.picture_file_name) {
-          setPhotoPreview(grocy.productPictureUrl(prod.picture_file_name))
-        }
-        setLog(sortLog(logEntries))
-        setStorePrices(prices ?? [])
+        return
+      }
+
+      setLoading(true)
+      try {
+        const [prod, allProducts, visitReceipts] = await Promise.all([
+          grocy.getProduct(numId),
+          grocy.getProducts(),
+          fetchVisitReceipts(),
+        ])
+        if (cancelled) return
+
+        const family = findGenericoSiblings(allProducts, prod)
+        const multi = family.length > 1
+        const cacheKey = multi
+          ? (getGenericoFromDesc(prod.description) ?? '').toLowerCase()
+          : `solo:${prod.id}`
+
+        applyProduct(prod)
+        setSiblings(family)
+        setVariantSummaries(toVariantSummaries(family))
         setReceipts(visitReceipts)
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false))
+        familyCacheKey.current = cacheKey
+
+        const memberIds = family.map((p) => p.id)
+        const [logs, priceLists] = await Promise.all([
+          Promise.all(memberIds.map((pid) => grocy.getStockLog(pid))),
+          Promise.all(
+            family.map((p) =>
+              fetchStorePriceHistory({ product_id: p.id, product_name: p.name })
+            )
+          ),
+        ])
+        if (cancelled) return
+
+        setFamilyLog(sortLog(logs.flat()))
+        setStorePrices(mergeStorePriceItems(priceLists.map((p) => p ?? [])))
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Erro ao carregar')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+    // siblings intentionally omitted — cache hit uses ref + current siblings snapshot
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numId])
 
-  async function reloadLog() {
-    setLog(sortLog(await grocy.getStockLog(numId)))
+  async function reloadFamilyLog() {
+    const ids = (siblings.length > 0 ? siblings : product ? [product] : []).map((p) => p.id)
+    if (ids.length === 0) return
+    const logs = await Promise.all(ids.map((pid) => grocy.getStockLog(pid)))
+    setFamilyLog(sortLog(logs.flat()))
   }
 
-  async function handlePhotoChange(file: File | null, url: string | null) {
+  async function handlePhotoChange(file: File, url: string) {
     setPhotoPreview(url)
     if (!file || !product) return
     try {
       const picture_file_name = await grocy.uploadProductPicture(file, numId)
       await grocy.updateProduct(numId, { picture_file_name })
-      setProduct({ ...product, picture_file_name })
+      const updated = { ...product, picture_file_name }
+      setProduct(updated)
+      setSiblings((prev) => prev.map((s) => (s.id === numId ? updated : s)))
+      setVariantSummaries((prev) =>
+        prev.map((v) => (v.id === numId ? { ...v, picture_file_name } : v))
+      )
     } catch {
       /* keep preview */
     }
   }
 
-  async function handleSaveCookingMeta() {
+  async function handleSaveCookingMeta(overrides?: { unitGrams?: string }) {
     if (!product) return
     setMetaSaving(true)
     try {
       const buyAmount = getBuyAmountFromDesc(product.description, product.id)
       const price = getPriceFromDesc(product.description)
+      const nextGrams = overrides?.unitGrams ?? unitGrams
       const description = buildDespensaDescription(buyAmount, price, {
         verified: parseVerifiedFields(product.description),
         existingDescription: product.description,
         generico: generico || null,
-        nomeCurto: nomeCurto || null,
-        unitGrams: unitGrams || null,
+        unitGrams: nextGrams || null,
       })
       await grocy.updateProduct(numId, { description })
-      setProduct({ ...product, description })
+      const updated = { ...product, description }
+      setProduct(updated)
+      setSiblings((prev) => prev.map((s) => (s.id === numId ? updated : s)))
+      if (overrides?.unitGrams != null) setUnitGrams(overrides.unitGrams)
     } catch {
       /* keep local */
     } finally {
@@ -265,13 +380,25 @@ export function ProductDetail() {
     }
   }
 
+  useEffect(() => {
+    if (loading || !product) return
+    if (getUnitGramsFromDesc(product.description) != null) return
+    const inferred = inferUnitGramsFromName(product.name)
+    if (inferred == null) return
+    void handleSaveCookingMeta({ unitGrams: String(inferred) })
+    // Persist pack weight decoded from the SKU name once per product open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, product?.id])
+
   async function handleSaveMacros(next: ProductMacros | null) {
     if (!product) return
     setMacrosSaving(true)
     try {
       const description = upsertMacrosSection(product.description, next)
       await grocy.updateProduct(numId, { description })
-      setProduct({ ...product, description })
+      const updated = { ...product, description }
+      setProduct(updated)
+      setSiblings((prev) => prev.map((s) => (s.id === numId ? updated : s)))
     } catch {
       /* keep local */
     } finally {
@@ -279,48 +406,17 @@ export function ProductDetail() {
     }
   }
 
-  async function openMerge() {
-    setMergeMsg(null)
-    setMergeOpen(true)
-    setMergeIntoId('')
-    try {
-      setMergeTargets(await listDespensaProductsForMerge(numId))
-    } catch {
-      setMergeTargets([])
-    }
-  }
-
-  async function handleMerge() {
-    if (!mergeIntoId || typeof mergeIntoId !== 'number') return
-    setMergeBusy(true)
-    setMergeMsg(null)
-    try {
-      const result = await mergeProducts(mergeIntoId, numId)
-      const warn =
-        result.recipesWarned > 0
-          ? ` (${result.recipesWarned} receita(s) podem precisar de revisão)`
-          : ''
-      navigate(`/product/${result.canonicalId}`, {
-        replace: true,
-        state: {
-          feedback: {
-            kind: 'success',
-            message: `Fundido · stock ${result.stockTransferred}${warn}`,
-          },
-        },
-      })
-    } catch (e) {
-      setMergeMsg(e instanceof Error ? e.message : 'Falha ao fundir')
-    } finally {
-      setMergeBusy(false)
-    }
-  }
-
   async function handleRemoveProduct() {
     setStockSaving(true)
     try {
       await grocy.deleteProduct(numId)
-      navigate('/meals?filter=despensa', { replace: true })
+      const siblingId = nextSiblingId(siblings, numId)
+      familyCacheKey.current = null
+      if (siblingId != null) {
+        navigate(`/product/${siblingId}`, { replace: true })
+      } else {
+        navigate('/meals?filter=despensa', { replace: true })
+      }
     } catch {
       setConfirmRemove(false)
     } finally {
@@ -330,14 +426,21 @@ export function ProductDetail() {
 
   async function handleUndoEntry(entry: StockLogEntry) {
     if (!entry.transaction_id || entry.undone) return
-    setLog((prev) => prev.filter((e) => e.id !== entry.id))
+    setFamilyLog((prev) => prev.filter((e) => e.id !== entry.id))
     try {
       await grocy.undoStockTransaction(entry.transaction_id)
-      await reloadLog()
+      await reloadFamilyLog()
     } catch {
-      await reloadLog()
+      await reloadFamilyLog()
     }
   }
+
+  const familyTitle =
+    generico.trim() ||
+    (product ? getGenericoFromDesc(product.description) : null) ||
+    product?.name ||
+    'Produto'
+  const multiVariant = variantSummaries.length > 1
 
   const header = (
     <header className="flex items-center gap-3 px-4 pt-12 pb-4 border-b border-nourish-border">
@@ -349,8 +452,13 @@ export function ProductDetail() {
         <BackIcon />
       </button>
       <h2 className="font-semibold text-nourish-text text-lg truncate flex-1">
-        {product?.name ?? 'Produto'}
+        {multiVariant ? familyTitle : (product?.name ?? 'Produto')}
       </h2>
+      {multiVariant && (
+        <span className="text-[11px] text-nourish-text-dim tabular-nums shrink-0">
+          {variantSummaries.findIndex((v) => v.id === numId) + 1}/{variantSummaries.length}
+        </span>
+      )}
     </header>
   )
 
@@ -378,9 +486,9 @@ export function ProductDetail() {
 
   const catalogPrice = getPriceFromDesc(product.description)
   const storeFromDesc = getStoreFromDesc(product.description)
-
-  const activeLog = log.filter((e) => !e.undone)
-  const purchases = activeLog.filter((e) => e.transaction_type === 'purchase').slice(0, HISTORY_LIMIT)
+  const suggestedUnitGrams = inferUnitGramsFromName(product.name)
+  const purchases = aggregateFamilyPurchases(familyLog, HISTORY_LIMIT)
+  const nameById = new Map(siblings.map((s) => [s.id, s.name]))
 
   const latestByStore = (() => {
     const latest = new Map<string, StorePriceItem>()
@@ -390,27 +498,99 @@ export function ProductDetail() {
     return [...latest.values()].sort((a, b) => b.observed_at.localeCompare(a.observed_at))
   })()
 
+  const variantHref = `/add-product?generico=${encodeURIComponent(
+    generico.trim() || getGenericoFromDesc(product.description) || product.name
+  )}`
+  const displayName = generico.trim() || product.name
+
+  const nameOverlay = (
+    <div className="bg-gradient-to-t from-black/80 via-black/45 to-transparent px-4 pt-12 pb-3">
+      {editingName ? (
+        <input
+          autoFocus
+          value={generico}
+          onChange={(e) => setGenerico(e.target.value)}
+          onBlur={() => {
+            setEditingName(false)
+            void handleSaveCookingMeta()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          placeholder={product.name}
+          className="pointer-events-auto w-full bg-transparent text-white font-semibold text-lg leading-tight placeholder-white/50 focus:outline-none"
+        />
+      ) : (
+        <div className="flex items-end gap-2">
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-semibold text-lg leading-tight drop-shadow-sm">
+              {displayName}
+            </p>
+            {multiVariant && (
+              <p className="text-white/85 text-xs mt-1 truncate">
+                {product.name}
+                {catalogPrice != null && (
+                  <>
+                    {' '}
+                    ·{' '}
+                    <span className="tabular-nums font-semibold">
+                      {formatDespensaPriceLabel(catalogPrice, product.description)}
+                    </span>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!generico.trim()) setGenerico(product.name)
+              setEditingName(true)
+            }}
+            className="pointer-events-auto p-2 -mr-2 -mb-1 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-white/80"
+            aria-label="Editar nome"
+          >
+            <PencilIcon />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+
   return (
     <div
       className="min-h-screen bg-nourish-bg"
-      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 32px)' }}
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 140px)' }}
     >
       {header}
 
       <div className="px-4 pt-5 space-y-5">
-        <PhotoField preview={photoPreview} onChange={handlePhotoChange} labelClass={labelClass} />
+        {multiVariant ? (
+          <ProductVariantCarousel
+            variants={variantSummaries}
+            activeId={numId}
+            activePreview={photoPreview}
+            onActiveChange={goToVariant}
+            onPhotoChange={handlePhotoChange}
+            overlay={nameOverlay}
+            favoriteId={favorites[familyKey(product.name, product.description)]}
+            onToggleFavorite={(variantId) =>
+              setFavorite(familyKey(product.name, product.description), variantId)
+            }
+          />
+        ) : (
+          <PhotoField
+            preview={photoPreview}
+            onChange={handlePhotoChange}
+            labelClass={labelClass}
+            hideLabel
+            overlay={nameOverlay}
+          />
+        )}
 
-        <ProductMacrosSection
-          macros={getMacrosFromDesc(product.description)}
-          onSave={(next) => void handleSaveMacros(next)}
-          saving={macrosSaving}
-        />
-
-        <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-3">
-          <div>
-            <label className={labelClass}>
-              Nome genérico <span className="text-nourish-border font-normal">(família)</span>
-            </label>
+        {!photoPreview && !multiVariant && (
+          <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4">
+            <label className={labelClass}>Nome</label>
             <input
               type="text"
               value={generico}
@@ -419,111 +599,16 @@ export function ProductDetail() {
               placeholder="ex: Cogumelos"
               className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
             />
-            <p className="text-xs text-nourish-text-dim mt-1">
-              Agrupa variantes na Despensa (vários packs, um nome)
-            </p>
-          </div>
-          <div>
-            <label className={labelClass}>
-              Nome curto <span className="text-nourish-border font-normal">(cozinhar)</span>
-            </label>
-            <input
-              type="text"
-              value={nomeCurto}
-              onChange={(e) => setNomeCurto(e.target.value)}
-              onBlur={() => void handleSaveCookingMeta()}
-              placeholder="ex: Atum, Ovo…"
-              className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-            />
-          </div>
-          <div>
-            <label className={labelClass}>
-              Gramas por unidade <span className="text-nourish-border font-normal">(opcional)</span>
-            </label>
-            <input
-              type="number"
-              value={unitGrams}
-              onChange={(e) => setUnitGrams(e.target.value)}
-              onBlur={() => void handleSaveCookingMeta()}
-              placeholder="ex: 120 para lata, ~55 para ovo"
-              min="0"
-              step="1"
-              className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-            />
-            {metaSaving && (
-              <p className="text-xs text-nourish-text-dim mt-1">A guardar…</p>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              navigate(
-                `/add-product?generico=${encodeURIComponent(
-                  generico.trim() || getGenericoFromDesc(product.description) || product.name
-                )}`
-              )
-            }
-            className="w-full py-2.5 rounded-xl text-sm font-semibold border border-nourish-border text-nourish-text focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-          >
-            Adicionar variante…
-          </button>
-          {!mergeOpen ? (
-            <button
-              type="button"
-              onClick={() => void openMerge()}
-              className="w-full py-2.5 rounded-xl text-sm font-semibold border border-nourish-border text-nourish-text focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-            >
-              Fundir com outro produto…
-            </button>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-xs text-nourish-text-dim leading-snug">
-                Este produto (duplicado) funde-se no canónico escolhido: stock, aliases e ingredientes
-                de receitas passam para lá; este fica inactivo.
-              </p>
-              <select
-                value={mergeIntoId === '' ? '' : String(mergeIntoId)}
-                onChange={(e) =>
-                  setMergeIntoId(e.target.value ? parseInt(e.target.value, 10) : '')
-                }
-                className="w-full px-3 py-2 bg-nourish-surface-high border border-nourish-border rounded-lg text-nourish-text text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-              >
-                <option value="">— Escolher canónico —</option>
-                {mergeTargets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                    {getGenericoFromDesc(p.description)
-                      ? ` · ${getGenericoFromDesc(p.description)}`
-                      : ''}
-                  </option>
-                ))}
-              </select>
-              {mergeMsg && <p className="text-xs text-red-400">{mergeMsg}</p>}
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMergeOpen(false)}
-                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-nourish-surface-high text-nourish-text"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  disabled={mergeBusy || mergeIntoId === ''}
-                  onClick={() => void handleMerge()}
-                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-nourish-primary text-nourish-on-primary disabled:opacity-40"
-                >
-                  {mergeBusy ? 'A fundir…' : 'Fundir'}
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
+            {metaSaving && <p className="text-xs text-nourish-text-dim mt-1">A guardar…</p>}
+          </section>
+        )}
 
         {latestByStore.length > 0 && (
           <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="font-semibold text-nourish-text text-sm">Preço por loja</h3>
+              <h3 className="font-semibold text-nourish-text text-sm">
+                {multiVariant ? 'Preço por loja (família)' : 'Preço por loja'}
+              </h3>
               <a
                 href={pricesSiteProductUrl({ name: product.name, productId: numId })}
                 target="_blank"
@@ -556,23 +641,70 @@ export function ProductDetail() {
           </section>
         )}
 
+        <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4">
+          <label className={labelClass}>
+            Gramas por unidade <span className="text-nourish-border font-normal">(opcional)</span>
+          </label>
+          <input
+            type="number"
+            inputMode="decimal"
+            value={unitGrams}
+            onChange={(e) => setUnitGrams(e.target.value)}
+            onBlur={() => void handleSaveCookingMeta()}
+            placeholder={suggestedUnitGrams != null ? String(suggestedUnitGrams) : 'ex: 185'}
+            min="0"
+            step="1"
+            className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+          />
+          <p className="text-xs text-nourish-text-dim mt-1">
+            Peso de uma unidade (pack, lata, ovo) — para contar unidades nas refeições
+            {getUnitGramsFromDesc(product.description) == null && suggestedUnitGrams != null
+              ? ` · detectado ${suggestedUnitGrams} g no nome`
+              : ''}
+          </p>
+          {metaSaving && <p className="text-xs text-nourish-text-dim mt-1">A guardar…</p>}
+        </section>
+
+        <ProductMacrosSection
+          macros={getMacrosFromDesc(product.description)}
+          lookupNames={insaLookupNames({
+            productName: product.name,
+            description: product.description,
+            generico,
+          })}
+          onSave={(next) => void handleSaveMacros(next)}
+          onNetGrams={(grams) => void handleSaveCookingMeta({ unitGrams: String(grams) })}
+          saving={macrosSaving}
+        />
+
         {purchases.length > 0 && (
           <section>
-            <h3 className="font-semibold text-nourish-text mb-3">Historial de compras</h3>
+            <h3 className="font-semibold text-nourish-text mb-3">
+              {multiVariant ? 'Historial de compras (família)' : 'Historial de compras'}
+            </h3>
             <div className="space-y-2">
               {purchases.map((entry) => {
                 const matched = storePriceForPurchase(entry, storePrices)
-                const storeLabel = matched?.store_label ?? storeFromDesc ?? null
+                const entryProduct =
+                  siblings.find((s) => s.id === entry.product_id) ?? product
+                const entryCatalog = getPriceFromDesc(entryProduct.description)
+                const storeLabel =
+                  matched?.store_label ?? getStoreFromDesc(entryProduct.description) ?? storeFromDesc ?? null
                 const storeBrand = storeLabel ? shortStoreBrand(storeLabel) : null
                 const unitLabel = matched
                   ? formatUnitPrice(matched)
-                  : catalogPrice != null && getPriceUnitFromDesc(product.description) === 'kg'
-                    ? formatDespensaPriceLabel(catalogPrice, product.description)
-                    : catalogPrice != null
-                      ? `€${catalogPrice.toFixed(2)}`
+                  : entryCatalog != null &&
+                      getPriceUnitFromDesc(entryProduct.description) === 'kg'
+                    ? formatDespensaPriceLabel(entryCatalog, entryProduct.description)
+                    : entryCatalog != null
+                      ? `€${entryCatalog.toFixed(2)}`
                       : null
                 const paid = (entry.price ?? 0) > 0 ? entry.price! : null
                 const receipt = findReceiptForPurchase(entry, receipts, matched)
+                const siblingName =
+                  multiVariant && entry.product_id !== numId
+                    ? nameById.get(entry.product_id)
+                    : null
 
                 return (
                   <div
@@ -604,8 +736,12 @@ export function ProductDetail() {
                       <p className="text-sm text-nourish-text">
                         {formatLogDate(entry.row_created_timestamp)}
                       </p>
-                      {(storeBrand || unitLabel) && (
+                      {(storeBrand || unitLabel || siblingName) && (
                         <p className="text-xs text-nourish-text-dim truncate mt-0.5">
+                          {siblingName && (
+                            <span className="text-nourish-text-dim">{siblingName}</span>
+                          )}
+                          {siblingName && (storeBrand || unitLabel) && ' · '}
                           {storeBrand}
                           {storeBrand && unitLabel && ' · '}
                           {unitLabel && (
@@ -621,14 +757,25 @@ export function ProductDetail() {
                         €{paid.toFixed(2)}
                       </span>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => handleUndoEntry(entry)}
-                      className="p-3 pr-3 text-nourish-border hover:text-red-400 transition-colors focus:outline-none"
-                      aria-label="Anular registo"
-                    >
-                      <TrashIcon />
-                    </button>
+                    {multiVariant && entry.product_id !== numId ? (
+                      <button
+                        type="button"
+                        onClick={() => goToVariant(entry.product_id)}
+                        className="p-3 text-nourish-text-dim text-[10px] font-medium shrink-0 focus:outline-none"
+                        aria-label="Ver variante desta compra"
+                      >
+                        →
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleUndoEntry(entry)}
+                        className="p-3 pr-3 text-nourish-border hover:text-red-400 transition-colors focus:outline-none"
+                        aria-label="Anular registo"
+                      >
+                        <TrashIcon />
+                      </button>
+                    )}
                   </div>
                 )
               })}
@@ -648,12 +795,14 @@ export function ProductDetail() {
               onClick={() => setConfirmRemove(true)}
               className="w-full py-3 rounded-xl text-sm font-semibold text-red-400 border border-red-800/50 bg-red-900/10 active:bg-red-900/20"
             >
-              Remover da despensa
+              {multiVariant ? 'Remover esta variante' : 'Remover da despensa'}
             </button>
           ) : (
             <div className="space-y-2 p-3 rounded-xl bg-red-900/20 border border-red-800/50">
               <p className="text-sm text-red-300 text-center">
-                O produto é apagado permanentemente do Grocy. Esta ação não pode ser desfeita.
+                {multiVariant
+                  ? 'Só esta variante é apagada do Grocy. As outras da família ficam na despensa. Esta ação não pode ser desfeita.'
+                  : 'O produto é apagado permanentemente do Grocy. Esta ação não pode ser desfeita.'}
               </p>
               <div className="flex gap-2">
                 <button
@@ -677,6 +826,22 @@ export function ProductDetail() {
           )}
         </section>
       </div>
+
+      <div
+        className="pointer-events-none fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-sm flex justify-end px-4"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 72px)' }}
+      >
+        <button
+          type="button"
+          onClick={() => navigate(variantHref)}
+          className="pointer-events-auto w-14 h-14 rounded-full bg-nourish-primary text-nourish-on-primary shadow-lg flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-nourish-primary focus:ring-offset-2 focus:ring-offset-nourish-bg"
+          aria-label="Adicionar variante"
+          title="Adicionar variante"
+        >
+          <PlusIcon />
+        </button>
+      </div>
+      <BottomNav />
     </div>
   )
 }

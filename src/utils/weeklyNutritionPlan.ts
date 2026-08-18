@@ -8,6 +8,9 @@ import {
   type SuggestionContext,
   type SuggestionPreference,
 } from './suggestMeal'
+import { addDays, isoDate } from './planDates'
+import { occupiedStaplesNearDate, stapleClashPenalty, stapleKeysFromRecipe } from './stapleClash'
+import { createRng, hashSeed, pickScored } from './suggestionPick'
 
 export type MacroKey = 'calories' | 'protein' | 'carbs' | 'fat'
 
@@ -32,7 +35,7 @@ export interface WeekPlanTotals {
   mealsWithPrice: number
 }
 
-const MACRO_LABEL: Record<MacroKey, string> = {
+export const MACRO_LABEL: Record<MacroKey, string> = {
   calories: 'Calorias',
   protein: 'Proteína',
   carbs: 'Hidratos',
@@ -206,7 +209,8 @@ export function pickBalancedWeeklySuggestions(
   targets: NutritionTargets,
   days = 7,
   now = new Date(),
-  preference: SuggestionPreference = 'taste'
+  preference: SuggestionPreference = 'taste',
+  salt = 0
 ): DaySuggestion[] {
   const recipes = ctx.recipes.filter((r) => {
     const { category } = parseDescription(r.description ?? '')
@@ -222,6 +226,8 @@ export function pickBalancedWeeklySuggestions(
   const picked = new Set<number>()
   const running = emptyTotals()
   const result: DaySuggestion[] = []
+  const nearby: Array<{ date: string; recipe: Recipe }> = []
+  const origin = isoDate(now)
 
   const dailyTargets: Nutrition = {
     calories: effectiveTargets.caloriesPerDay,
@@ -249,13 +255,16 @@ export function pickBalancedWeeklySuggestions(
     ).map((key) => ({ key, gap: relativeGap(key, runningNutrition, cumulativeExpected) }))
     gaps.sort((a, b) => b.gap - a.gap)
     const weekBehind = gaps[0]?.gap > 0.06 ? gaps[0].key : null
+    const date = addDays(origin, i)
+    const occupied = occupiedStaplesNearDate(nearby, date, ctx.products)
 
     const candidates = recipes
       .filter((r) => !picked.has(r.id))
       .map((recipe) => {
         const parsed = parseDescription(recipe.description ?? '')
         const base = scoreRecipe(recipe, poolCtx, picked, preference, priceAnchor)
-        let score = base
+        let score =
+          base - stapleClashPenalty(stapleKeysFromRecipe(recipe, ctx.products), occupied)
 
         if (parsed.nutrition) {
           const nutritionWeight = preference === 'balanced' ? 1 : 0.55
@@ -275,10 +284,11 @@ export function pickBalancedWeeklySuggestions(
       })
       .sort((a, b) => b.score - a.score)
 
-    const best = candidates[0]
+    const best = pickScored(candidates, createRng(hashSeed(salt, preference, i)))
     if (!best) break
 
     picked.add(best.recipe.id)
+    nearby.push({ date, recipe: best.recipe })
     const { nutrition, portions, category, price } = best.parsed
     const hasPortions = (portions ?? 0) > 0
     const isFavourite = poolCtx.favourites.has(best.recipe.id)
@@ -335,4 +345,44 @@ export function plannedWeekProgress(
       ? Math.round((plannedTotals.calories / expected.calories) * 100)
       : 0
   return { expected, pct: Math.min(150, pct) }
+}
+
+/** Same shortfall the scorer treats as “behind” (~12%) — a little looser for the whole week. */
+const TARGET_SHORTFALL_RATIO = 0.15
+
+export interface NutritionGap {
+  key: MacroKey
+  have: number
+  need: number
+}
+
+/**
+ * Macros that fall more than 15% short of `weekTargetTotals` for the filled days.
+ * Same expected totals the live Plano bar uses (daily targets × days with a prato).
+ */
+export function planNutritionGaps(
+  totals: WeekPlanTotals,
+  targets: NutritionTargets,
+  days: number
+): NutritionGap[] {
+  if (days <= 0) return []
+  const expected = weekTargetTotals(targets, days)
+  const keys: MacroKey[] = ['calories', 'protein', 'carbs', 'fat']
+  const missing: NutritionGap[] = []
+  for (const key of keys) {
+    const need = expected[key]
+    const have = totals[key]
+    if (need > 0 && (need - have) / need > TARGET_SHORTFALL_RATIO) {
+      missing.push({ key, have, need })
+    }
+  }
+  return missing
+}
+
+export function planMeetsNutritionTargets(
+  totals: WeekPlanTotals,
+  targets: NutritionTargets,
+  days: number
+): boolean {
+  return planNutritionGaps(totals, targets, days).length === 0
 }

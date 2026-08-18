@@ -9,7 +9,6 @@ import { ConnectionError } from '../components/ConnectionError'
 import { CarModelInput } from '../components/CarModelInput'
 import { HelpInfo } from '../components/HelpInfo'
 import { IosToggle } from '../components/IosToggle'
-import { MealSpendSheet } from '../components/MealSpendSheet'
 import { VisitFuelTripsSheet } from '../components/VisitFuelTripsSheet'
 import { VisitShoppingTripsSheet } from '../components/VisitShoppingTripsSheet'
 import { NumericInput } from '../components/NumericInput'
@@ -34,7 +33,6 @@ import { useUserProfile, DEFAULT_USER_PROFILE } from '../hooks/useUserProfile'
 import { clearPwaCachesAndReload, nudgeServiceWorkerUpdate } from '../utils/pwaRecovery'
 import {
   aggregateMealStats,
-  buildMealSpendRows,
   filterMealPlanByPeriod,
   getPeriodMeta,
   macroGaps,
@@ -69,8 +67,16 @@ import {
   buildVisitShoppingTrips,
   filterVisitsByPeriod,
 } from '../utils/visitSpendStats'
+import { filterIgnoredVisits } from '../utils/ignoredSupermarket'
 import { supermarketLabelForVisit } from '../utils/visitSupermarketLabel'
 import { mealLogCountsTowardStats } from '../utils/mealLogAttribution'
+import {
+  parseProfileTab,
+  profilePathForTab,
+  resumoHasContent,
+  visibleProfileTabs,
+  type ProfileTab,
+} from '../utils/profileTabs'
 import {
   fetchVisitAttributions,
   visitAttributionMap,
@@ -83,25 +89,6 @@ const PERIODS: { key: StatsPeriod; short: string }[] = [
   { key: '30d', short: '30 dias' },
   { key: 'month', short: 'Mês' },
 ]
-
-type ProfileTab = 'resumo' | 'objectivos' | 'definicoes'
-
-const PROFILE_TABS: { key: ProfileTab; label: string }[] = [
-  { key: 'resumo', label: 'Resumo' },
-  { key: 'objectivos', label: 'Objectivos' },
-  { key: 'definicoes', label: 'Definições' },
-]
-
-function parseProfileTab(raw: string | null | undefined): ProfileTab {
-  if (raw === 'definicoes') return 'definicoes'
-  // Legacy deep-link from VisitCarSheet
-  if (raw === 'objectivos' || raw === 'viaturas') return 'objectivos'
-  return 'resumo'
-}
-
-function profilePathForTab(tab: ProfileTab): string {
-  return tab === 'resumo' ? '/profile' : `/profile?tab=${tab}`
-}
 
 function FuelMissingReport({
   fuel,
@@ -160,30 +147,39 @@ function SegmentedControl<T extends string>({
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const btnRefs = useRef<(HTMLButtonElement | null)[]>([])
-  const [pill, setPill] = useState({ left: 2, width: 0 })
+  /** Skip CSS transition until after the first measured layout (avoids mount slide). */
+  const hasMeasuredRef = useRef(false)
+  const [pill, setPill] = useState({ left: 2, width: 0, animate: false })
 
-  const syncPill = useCallback(() => {
-    const container = containerRef.current
-    const index = options.findIndex((o) => o.key === value)
-    const btn = btnRefs.current[index < 0 ? 0 : index]
-    if (!container || !btn) return
-    setPill({
-      left: btn.offsetLeft,
-      width: btn.offsetWidth,
-    })
-  }, [options, value])
+  const measurePill = useCallback(
+    (animate: boolean) => {
+      const container = containerRef.current
+      const index = options.findIndex((o) => o.key === value)
+      const btn = btnRefs.current[index < 0 ? 0 : index]
+      if (!container || !btn) return false
+      setPill({
+        left: btn.offsetLeft,
+        width: btn.offsetWidth,
+        animate,
+      })
+      return true
+    },
+    [options, value]
+  )
 
   useLayoutEffect(() => {
-    syncPill()
-  }, [syncPill])
+    // First successful layout: snap. Later value changes: animate.
+    const animate = hasMeasuredRef.current
+    if (measurePill(animate)) hasMeasuredRef.current = true
+  }, [measurePill])
 
   useEffect(() => {
     const container = containerRef.current
     if (!container || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => syncPill())
+    const ro = new ResizeObserver(() => measurePill(false))
     ro.observe(container)
     return () => ro.disconnect()
-  }, [syncPill])
+  }, [measurePill])
 
   return (
     <div
@@ -194,7 +190,9 @@ function SegmentedControl<T extends string>({
     >
       <span
         aria-hidden
-        className="pointer-events-none absolute top-0.5 bottom-0.5 rounded-md bg-nourish-primary shadow-sm transition-[left,width] duration-200 ease-out"
+        className={`pointer-events-none absolute top-0.5 bottom-0.5 rounded-md bg-nourish-primary shadow-sm ${
+          pill.animate ? 'transition-[left,width] duration-200 ease-out' : ''
+        }`}
         style={{
           left: pill.left,
           width: pill.width || undefined,
@@ -278,6 +276,7 @@ export function Profile() {
     setEnabled: setProfileEnabled,
   } = useUserProfile()
   const { prefs, updatePref } = useDisplayPrefs()
+  const showPrices = !prefs.hidePrices
   const { activeProfile, activeId } = useHouseholdProfiles()
   const [profilePickerOpen, setProfilePickerOpen] = useState(false)
   const { cars, addCar, updateCar, removeCar, refreshCars, enabled: carsEnabled, setEnabled: setCarsEnabled } =
@@ -290,24 +289,20 @@ export function Profile() {
     const stateTab = (location.state as { tab?: string } | null)?.tab
     if (!stateTab || searchParams.get('tab')) return
     const parsed = parseProfileTab(stateTab)
-    if (parsed === 'resumo') return
+    if (parsed === 'definicoes') return
     setSearchParams({ tab: parsed }, { replace: true })
   }, [location.state, searchParams, setSearchParams])
 
   const setTab = useCallback(
     (next: ProfileTab) => {
       const params = new URLSearchParams(searchParams)
-      if (next === 'resumo') params.delete('tab')
+      if (next === 'definicoes') params.delete('tab')
       else params.set('tab', next)
       setSearchParams(params, { replace: true })
       rememberNavPath('profile', profilePathForTab(next))
     },
     [searchParams, setSearchParams]
   )
-
-  useEffect(() => {
-    rememberNavPath('profile', profilePathForTab(tab))
-  }, [tab])
 
   // Tab switches keep window scroll; reset so the header/title isn't clipped.
   useLayoutEffect(() => {
@@ -333,7 +328,6 @@ export function Profile() {
   const [visitSpendLoading, setVisitSpendLoading] = useState(true)
   const [showFuelTripsSheet, setShowFuelTripsSheet] = useState(false)
   const [showShoppingTripsSheet, setShowShoppingTripsSheet] = useState(false)
-  const [showMealSpendSheet, setShowMealSpendSheet] = useState(false)
 
   const refreshSupermarkets = useCallback(() => {
     void fetchSupermarkets().then(setSupermarkets)
@@ -475,11 +469,59 @@ export function Profile() {
   const attrByVisit = useMemo(() => visitAttributionMap(visitAttrs), [visitAttrs])
   const visitsInPeriod = useMemo(() => {
     const inPeriod = filterVisitsByPeriod(supermarketVisits, period)
-    return inPeriod.filter((v) => visitCountsTowardSpend(v.entered_at, activeId, attrByVisit))
-  }, [supermarketVisits, period, activeId, attrByVisit])
+    const attributed = inPeriod.filter((v) =>
+      visitCountsTowardSpend(v.entered_at, activeId, attrByVisit)
+    )
+    return filterIgnoredVisits(attributed, supermarkets?.blocklist ?? [], (v) =>
+      supermarketLabelForVisit(v, supermarkets?.tracked ?? [])
+    )
+  }, [supermarketVisits, period, activeId, attrByVisit, supermarkets])
   const visitSpend = useMemo(() => {
     return aggregateVisitSpend(visitsInPeriod, visitCars, visitReceipts, carsById)
   }, [visitsInPeriod, visitCars, visitReceipts, carsById])
+  const lookbackEntries = useMemo(
+    () => filterMealPlanByPeriod(profileMealPlan, '30d'),
+    [profileMealPlan]
+  )
+  const lookbackMealsLogged = useMemo(
+    () => aggregateMealStats(lookbackEntries, recipesById).mealsLogged,
+    [lookbackEntries, recipesById]
+  )
+  const visitsLookback = useMemo(() => {
+    const inPeriod = filterVisitsByPeriod(supermarketVisits, '30d')
+    const attributed = inPeriod.filter((v) =>
+      visitCountsTowardSpend(v.entered_at, activeId, attrByVisit)
+    )
+    return filterIgnoredVisits(attributed, supermarkets?.blocklist ?? [], (v) =>
+      supermarketLabelForVisit(v, supermarkets?.tracked ?? [])
+    )
+  }, [supermarketVisits, activeId, attrByVisit, supermarkets])
+  const spendLookback = useMemo(
+    () => aggregateVisitSpend(visitsLookback, visitCars, visitReceipts, carsById),
+    [visitsLookback, visitCars, visitReceipts, carsById]
+  )
+  const resumoReady = !loading && !visitSpendLoading
+  const hasResumo = resumoHasContent({
+    nutritionActive,
+    mealsLogged: lookbackMealsLogged,
+    showPrices,
+    shoppingEur: spendLookback.shoppingEur,
+    fuelEur: spendLookback.fuelEur,
+    visitCount: spendLookback.visitsInPeriod,
+  })
+  const showResumoTab = hasResumo || (!resumoReady && tab === 'resumo')
+  const profileTabs = visibleProfileTabs(showResumoTab)
+
+  useEffect(() => {
+    if (tab === 'resumo' && resumoReady && !hasResumo) return
+    rememberNavPath('profile', profilePathForTab(tab))
+  }, [tab, resumoReady, hasResumo])
+
+  useEffect(() => {
+    if (!resumoReady || hasResumo || tab !== 'resumo') return
+    setTab('definicoes')
+  }, [resumoReady, hasResumo, tab, setTab])
+
   const destinationForVisit = useCallback(
     (visit: SupermarketVisit) =>
       supermarketLabelForVisit(visit, supermarkets?.tracked ?? []),
@@ -492,10 +534,6 @@ export function Profile() {
   const shoppingTrips = useMemo(
     () => buildVisitShoppingTrips(visitsInPeriod, visitReceipts, destinationForVisit, visitCars),
     [visitsInPeriod, visitReceipts, destinationForVisit, visitCars]
-  )
-  const mealSpendRows = useMemo(
-    () => buildMealSpendRows(periodEntries, recipesById),
-    [periodEntries, recipesById]
   )
 
   const [showCarForm, setShowCarForm] = useState(false)
@@ -562,7 +600,7 @@ export function Profile() {
           role="tablist"
           aria-label="Secções do perfil"
         >
-          {PROFILE_TABS.map(({ key, label }) => (
+          {profileTabs.map(({ key, label }) => (
             <button
               key={key}
               type="button"
@@ -614,7 +652,7 @@ export function Profile() {
       </BottomSheet>
 
       <main className="p-4 space-y-5" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
-        {tab === 'resumo' && (
+        {tab === 'resumo' && showResumoTab && (
           <div className="flex gap-2">
             {PERIODS.map(({ key, short }) => (
               <button
@@ -664,80 +702,42 @@ export function Profile() {
           </section>
         )}
 
-        {!loading && !error && tab === 'resumo' && (
+        {!loading && !error && tab === 'resumo' && hasResumo && (
             <section className="space-y-3">
               <h2 className="text-xs font-semibold text-nourish-primary tracking-wide">
                 Resumo · {resumoPeriodLabel}
               </h2>
 
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowShoppingTripsSheet(true)}
-                  disabled={visitSpendLoading}
-                  className={spendCardClass}
-                >
-                  <p className="text-2xl font-bold text-nourish-text tabular-nums">
-                    €{visitSpend.shoppingEur.toFixed(2)}
-                  </p>
-                  <p className="text-sm text-nourish-text-dim mt-0.5 leading-snug">
-                    Compras no super
-                  </p>
-                  <p className="text-[11px] text-nourish-border mt-1.5 leading-snug">
-                    {visitSpendLoading
-                      ? 'A carregar…'
-                      : visitSpend.visitsInPeriod > 0
-                        ? `${visitSpend.visitsWithReceipt > 0 ? `${visitSpend.visitsWithReceipt} talão${visitSpend.visitsWithReceipt !== 1 ? 's' : ''} · ` : ''}ver detalhes`
-                        : 'Sem idas registadas no período'}
-                  </p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowFuelTripsSheet(true)}
-                  disabled={visitSpendLoading}
-                  className={spendCardClass}
-                >
-                  <p className="text-2xl font-bold text-nourish-text tabular-nums">
-                    €{visitSpend.fuelEur.toFixed(2)}
-                  </p>
-                  <p className="text-sm text-nourish-text-dim mt-0.5 leading-snug">
-                    Viagens (combustível)
-                  </p>
-                  <p className="text-[11px] text-nourish-border mt-1.5 leading-snug">
-                    {visitSpendLoading
-                      ? 'A carregar…'
-                      : visitSpend.visitsWithFuelCost > 0
-                        ? `${visitSpend.visitsWithFuelCost} ida${visitSpend.visitsWithFuelCost !== 1 ? 's' : ''} com viatura · ver detalhes`
-                        : visitSpend.visitsInPeriod > 0
-                          ? `${visitSpend.visitsInPeriod} ida${visitSpend.visitsInPeriod !== 1 ? 's' : ''} · ver detalhes`
-                          : 'Sem idas registadas no período'}
-                  </p>
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowMealSpendSheet(true)}
-                disabled={loading}
-                className={`w-full ${spendCardClass}`}
-              >
-                <p className="text-3xl font-bold text-nourish-text tabular-nums">
-                  €{totals.spend.toFixed(2)}
-                </p>
-                <p className="text-sm text-nourish-text-dim mt-0.5">
-                  Refeições registadas
-                  {totals.mealsLogged > 0 && (
-                    <> · {totals.mealsLogged} registo{totals.mealsLogged !== 1 ? 's' : ''} · ver detalhes</>
-                  )}
-                </p>
-                {totals.mealsLogged === 0 && !loading && (
-                  <p className="text-xs text-nourish-border mt-2">
-                    {nutritionActive
-                      ? 'Regista refeições em Historial para ver totais. Só contam refeições com nutrição/preço no cartão.'
-                      : 'Regista refeições em Historial para ver totais. Só contam refeições com preço no cartão.'}
-                  </p>
-                )}
-              </button>
+              {showPrices && (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowShoppingTripsSheet(true)}
+                    disabled={visitSpendLoading}
+                    className={spendCardClass}
+                  >
+                    <p className="text-2xl font-bold text-nourish-text tabular-nums">
+                      €{visitSpend.shoppingEur.toFixed(2)}
+                    </p>
+                    <p className="text-sm text-nourish-text-dim mt-0.5 leading-snug">
+                      Compras no super
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowFuelTripsSheet(true)}
+                    disabled={visitSpendLoading}
+                    className={spendCardClass}
+                  >
+                    <p className="text-2xl font-bold text-nourish-text tabular-nums">
+                      €{visitSpend.fuelEur.toFixed(2)}
+                    </p>
+                    <p className="text-sm text-nourish-text-dim mt-0.5 leading-snug">
+                      Viagens (combustível)
+                    </p>
+                  </button>
+                </div>
+              )}
 
               {nutritionActive && surpluses.length > 0 && totals.mealsLogged > 0 && (
                 <div className="p-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 space-y-2">
@@ -757,24 +757,15 @@ export function Profile() {
 
               {nutritionActive && (
                 <>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-3">
                     {gaps.map((g) => {
                       const pctRaw = g.expected > 0 ? (g.actual / g.expected) * 100 : 0
                       const isOver = surplusKeys.has(g.key)
                       const barPct = Math.min(100, Math.round(pctRaw))
                       return (
-                        <div
-                          key={g.key}
-                          className={`bg-nourish-surface border rounded-xl p-3 ${
-                            isOver ? 'border-amber-500/50' : 'border-nourish-border'
-                          }`}
-                        >
+                        <div key={g.key}>
                           <p className="text-xs text-nourish-text-dim">{g.label}</p>
-                          <p className="text-lg font-bold text-nourish-text tabular-nums">
-                            {Math.round(g.actual)}
-                            <span className="text-xs font-normal text-nourish-text-dim"> {g.unit}</span>
-                          </p>
-                          <div className="mt-2 h-1.5 bg-nourish-surface-high rounded-full overflow-hidden">
+                          <div className="mt-1.5 h-1.5 bg-nourish-surface-high rounded-full overflow-hidden">
                             <div
                               className={`h-full rounded-full transition-all ${
                                 isOver ? 'bg-amber-500' : 'bg-nourish-primary'
@@ -782,9 +773,6 @@ export function Profile() {
                               style={{ width: `${barPct}%` }}
                             />
                           </div>
-                          <p className={`text-[10px] mt-1 tabular-nums ${isOver ? 'text-amber-400' : 'text-nourish-border'}`}>
-                            {Math.round(pctRaw)}% do objectivo ({Math.round(g.expected)} {g.unit})
-                          </p>
                         </div>
                       )
                     })}
@@ -1380,6 +1368,54 @@ export function Profile() {
                   />
                 </div>
                 <div className="flex items-center justify-between gap-3 p-4">
+                  <button
+                    type="button"
+                    onClick={() => updatePref('hidePrices', !prefs.hidePrices)}
+                    className="flex-1 min-w-0 text-left focus:outline-none"
+                  >
+                    <p className="text-sm font-medium text-nourish-text">
+                      Ocultar Preços
+                    </p>
+                  </button>
+                  <IosToggle
+                    checked={prefs.hidePrices}
+                    onChange={(next) => updatePref('hidePrices', next)}
+                    label="Ocultar Preços"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 p-4">
+                  <button
+                    type="button"
+                    onClick={() => updatePref('hideNutrition', !prefs.hideNutrition)}
+                    className="flex-1 min-w-0 text-left focus:outline-none"
+                  >
+                    <p className="text-sm font-medium text-nourish-text">
+                      Ocultar Nutrição
+                    </p>
+                  </button>
+                  <IosToggle
+                    checked={prefs.hideNutrition}
+                    onChange={(next) => updatePref('hideNutrition', next)}
+                    label="Ocultar Nutrição"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 p-4">
+                  <button
+                    type="button"
+                    onClick={() => updatePref('hideProductsWithoutImage', !prefs.hideProductsWithoutImage)}
+                    className="flex-1 min-w-0 text-left focus:outline-none"
+                  >
+                    <p className="text-sm font-medium text-nourish-text">
+                      Ocultar Produtos sem Imagem
+                    </p>
+                  </button>
+                  <IosToggle
+                    checked={prefs.hideProductsWithoutImage}
+                    onChange={(next) => updatePref('hideProductsWithoutImage', next)}
+                    label="Ocultar Produtos sem Imagem"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 p-4">
                   <p className="text-sm font-medium text-nourish-text flex-shrink-0">
                     Vista das refeições
                   </p>
@@ -1635,15 +1671,6 @@ export function Profile() {
           periodLabel={resumoPeriodLabel}
           totalShoppingEur={visitSpend.shoppingEur}
           onClose={() => setShowShoppingTripsSheet(false)}
-        />
-      )}
-
-      {showMealSpendSheet && (
-        <MealSpendSheet
-          meals={mealSpendRows}
-          periodLabel={resumoPeriodLabel}
-          totalSpendEur={totals.spend}
-          onClose={() => setShowMealSpendSheet(false)}
         />
       )}
 

@@ -129,14 +129,16 @@ export function canClaimMealLog(
   return !attr.owners.includes(activeProfileId)
 }
 
-/** Label for History rows: single name, or Ambos when co-owned. */
+/** Label for History rows. Hide the active profile's own name; keep Ambos / other people. */
 export function mealLogOwnerLabel(
   note: string | null | undefined,
-  nameOf: (id: string) => string | null
+  nameOf: (id: string) => string | null,
+  activeProfileId?: string | null
 ): string | null {
   const attr = parseMealLogNote(note)
   if (!attr || attr.owners.length === 0) return null
   if (attr.owners.length >= 2) return 'Ambos comemos'
+  if (activeProfileId && attr.owners[0] === activeProfileId) return null
   return nameOf(attr.owners[0])
 }
 

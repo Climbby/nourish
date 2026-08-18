@@ -74,6 +74,59 @@ describe('makeProductMacroLookup', () => {
     expect(lookup('Atum')).toEqual(atum)
     expect(lookup('Atum Continente natural 120g')).toEqual(atum)
   })
+
+  it('matches Generico and prefers the family favorite for macros', () => {
+    const other: ProductMacros = { ...atum, calories: 40 }
+    const a = product(1, 'COGUMELOS CONTINENTE', atum)
+    a.description = upsertMacrosSection(
+      '[BuyAmount]\n1\n\n[Generico]\nCogumelos',
+      atum
+    )
+    const b = product(2, 'COGUMELOS AUCHAN', other)
+    b.description = upsertMacrosSection(
+      '[BuyAmount]\n1\n\n[Generico]\nCogumelos',
+      other
+    )
+    expect(makeProductMacroLookup([a, b])('Cogumelos')?.calories).toBe(116)
+    expect(makeProductMacroLookup([a, b], { cogumelos: 2 })('Cogumelos')?.calories).toBe(40)
+  })
+
+  it('uses the only complete variant even if the favorite is incomplete', () => {
+    const other: ProductMacros = { ...atum, calories: 40 }
+    const incomplete = product(1, 'COGUMELOS CLASSICA', null)
+    incomplete.description = '[BuyAmount]\n1\n\n[Generico]\nCogumelos'
+    const complete = product(2, 'COGUMELOS LAMINADOS 185G', other)
+    complete.description = upsertMacrosSection(
+      '[BuyAmount]\n1\n\n[UnitGrams]\n185\n\n[Generico]\nCogumelos',
+      other
+    )
+    expect(
+      makeProductMacroLookup([incomplete, complete], { cogumelos: 1 })('Cogumelos')?.calories
+    ).toBe(40)
+  })
+
+  it('uses the in-stock SKU macros, falling back to a sibling if it has none', () => {
+    const other: ProductMacros = { ...atum, calories: 40 }
+    const inStock = product(1, 'COGUMELOS CLASSICA 185G', null)
+    inStock.description = '[BuyAmount]\n1\n\n[Generico]\nCogumelos'
+    const labelled = product(2, 'COGUMELOS LAMINADOS 185G', other)
+    labelled.description = upsertMacrosSection(
+      '[BuyAmount]\n1\n\n[UnitGrams]\n185\n\n[Generico]\nCogumelos',
+      other
+    )
+    expect(
+      makeProductMacroLookup([inStock, labelled], undefined, { 1: 2 })('Cogumelos')?.calories
+    ).toBe(40)
+    const stockedWithMacros = product(1, 'COGUMELOS CLASSICA 185G', atum)
+    stockedWithMacros.description = upsertMacrosSection(
+      '[BuyAmount]\n1\n\n[UnitGrams]\n185\n\n[Generico]\nCogumelos',
+      atum
+    )
+    expect(
+      makeProductMacroLookup([stockedWithMacros, labelled], undefined, { 1: 2 })('Cogumelos')
+        ?.calories
+    ).toBe(116)
+  })
 })
 
 describe('productsMissingMacros', () => {

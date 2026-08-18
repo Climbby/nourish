@@ -28,6 +28,7 @@ import { matchVisitForReceipt } from './matchVisit'
 import { resolveReceiptStore } from './resolveReceiptStore'
 import { fetchSupermarketVisits, type SupermarketVisit } from '../../api/homelabMetrics'
 import { rankProductMatches } from './matchProduct'
+import { formatPtDate } from '../../utils/formatPtDate'
 import { useReceiptOcr } from './useReceiptOcr'
 import { useFuelPrices } from '../../hooks/useFuelPrices'
 import { fetchCars } from '../../hooks/useCars'
@@ -60,6 +61,62 @@ type RecentTalão =
 
 const inputClass =
   'w-full px-3 py-2 bg-nourish-surface-high border border-nourish-border rounded-lg text-nourish-text text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary'
+
+/** Compact store/date rows — no focus ring (clipped by overflow-hidden parents on capture). */
+const compactFieldClass =
+  'w-full px-3 py-2 bg-nourish-surface-high border border-nourish-border rounded-lg text-nourish-text text-sm outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 [-webkit-tap-highlight-color:transparent]'
+
+/** Controlled number field that keeps an empty string while clearing (avoids `|| 0` snap-back). */
+function DraftNumberInput({
+  value,
+  onValueChange,
+  min,
+  step,
+  className,
+}: {
+  value: number
+  onValueChange: (n: number) => void
+  min?: string
+  step?: string
+  className?: string
+}) {
+  const [text, setText] = useState(() => String(value))
+  const focusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!focusedRef.current) setText(String(value))
+  }, [value])
+
+  return (
+    <input
+      type="number"
+      min={min}
+      step={step}
+      value={text}
+      className={className}
+      onFocus={() => {
+        focusedRef.current = true
+      }}
+      onChange={(e) => {
+        const raw = e.target.value
+        setText(raw)
+        if (raw === '' || raw === '-' || raw === '.') {
+          onValueChange(0)
+          return
+        }
+        const n = parseFloat(raw)
+        if (Number.isFinite(n)) onValueChange(n)
+      }}
+      onBlur={() => {
+        focusedRef.current = false
+        const n = parseFloat(text)
+        const next = Number.isFinite(n) ? n : 0
+        onValueChange(next)
+        setText(String(next))
+      }}
+    />
+  )
+}
 
 const STORE_OPTIONS: { value: ReceiptStore; label: string }[] = [
   { value: 'mixed', label: 'Misto / auto' },
@@ -744,7 +801,7 @@ export function ReceiptScanPage() {
                     <select
                       value={store}
                       onChange={(e) => setStore(e.target.value as ReceiptStore)}
-                      className={inputClass}
+                      className={compactFieldClass}
                       tabIndex={captureMode === 'products' ? undefined : -1}
                     >
                       {STORE_OPTIONS_MANUAL.map((o) => (
@@ -760,7 +817,7 @@ export function ReceiptScanPage() {
                       type="date"
                       value={purchasedDate}
                       onChange={(e) => setPurchasedDate(e.target.value)}
-                      className={inputClass}
+                      className={compactFieldClass}
                       tabIndex={captureMode === 'products' ? undefined : -1}
                     />
                   </div>
@@ -774,7 +831,7 @@ export function ReceiptScanPage() {
                 <select
                   value={store}
                   onChange={(e) => setStore(e.target.value as ReceiptStore)}
-                  className={inputClass}
+                  className={compactFieldClass}
                 >
                   {STORE_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
@@ -891,7 +948,7 @@ export function ReceiptScanPage() {
                         >
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-xs text-nourish-text-dim truncate">
-                              {storeLabel} · {r.purchased_date}
+                              {storeLabel} · {formatPtDate(r.purchased_date)}
                             </span>
                             <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-nourish-primary/15 text-nourish-primary">
                               Completo
@@ -966,7 +1023,7 @@ export function ReceiptScanPage() {
                 <select
                   value={store}
                   onChange={(e) => setStore(e.target.value as ReceiptStore)}
-                  className={inputClass}
+                  className={compactFieldClass}
                 >
                   {STORE_OPTIONS_MANUAL.map((o) => (
                     <option key={o.value} value={o.value}>
@@ -1009,7 +1066,7 @@ export function ReceiptScanPage() {
                 type="date"
                 value={purchasedDate}
                 onChange={(e) => setPurchasedDate(e.target.value)}
-                className={inputClass}
+                className={compactFieldClass}
               />
             </div>
 
@@ -1231,27 +1288,21 @@ export function ReceiptScanPage() {
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="text-xs text-nourish-text-dim">Stock (+)</label>
-                        <input
-                          type="number"
+                        <DraftNumberInput
                           min="0.01"
                           step="0.01"
                           value={line.stockAmount}
-                          onChange={(e) =>
-                            updateLine(line.id, { stockAmount: parseFloat(e.target.value) || 0 })
-                          }
+                          onValueChange={(n) => updateLine(line.id, { stockAmount: n })}
                           className={inputClass}
                         />
                       </div>
                       <div>
                         <label className="text-xs text-nourish-text-dim">Preço (€)</label>
-                        <input
-                          type="number"
+                        <DraftNumberInput
                           min="0"
                           step="0.01"
                           value={line.price}
-                          onChange={(e) =>
-                            updateLine(line.id, { price: parseFloat(e.target.value) || 0 })
-                          }
+                          onValueChange={(n) => updateLine(line.id, { price: n })}
                           className={inputClass}
                         />
                       </div>

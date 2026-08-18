@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parseDescription, parseSteps } from './parseDescription'
-import { buildDescription, decrementPortions, addPortions, type IngredientRow } from './buildDescription'
+import { parseDescription, parseIngredientLine, parseSteps } from './parseDescription'
+import { buildDescription, computeAutoTotal, readyAutoTotal, decrementPortions, addPortions, type IngredientRow } from './buildDescription'
 import type { VerifiedField } from './verification'
 
 const sampleRows: IngredientRow[] = [
@@ -56,7 +56,7 @@ describe('buildDescription + parseDescription round-trip', () => {
     expect(parsed.price).toBe(8.5)
   })
 
-  it('round-trips locality label and coords', () => {
+  it('round-trips restaurant name and coords without showing locality', () => {
     const built = buildDescription({
       ingredientRows: [],
       steps: '',
@@ -66,12 +66,24 @@ describe('buildDescription + parseDescription round-trip', () => {
       category: 'Completa',
       portions: null,
       origin: 'restaurante',
-      location: 'Condeixa, Coimbra',
+      location: 'Cantina do ISCTE',
       locationCoords: { latitude: 40.114, longitude: -8.499 },
     })
     const parsed = parseDescription(built)
-    expect(parsed.location).toBe('Condeixa, Coimbra')
+    expect(parsed.location).toBe('Cantina do ISCTE')
     expect(parsed.locationCoords).toEqual({ latitude: 40.114, longitude: -8.499 })
+    expect(built).toContain('[Local]\nCantina do ISCTE')
+    expect(built).toContain('[Coords]\n40.114,-8.499')
+    expect(built).not.toContain('Condeixa')
+  })
+
+  it('parses restaurant name from Grocy HTML with br tags', () => {
+    const parsed = parseDescription(
+      '<p>[Origem]<br>restaurante</p><p>[Local]<br>Cantina do ISCTE</p><p>[Preco]<br>8.50</p>'
+    )
+    expect(parsed.origin).toBe('restaurante')
+    expect(parsed.location).toBe('Cantina do ISCTE')
+    expect(parsed.price).toBe(8.5)
   })
 
   it('round-trips supermercado origin', () => {
@@ -207,6 +219,149 @@ describe('portion helpers', () => {
   it('creates portions section when missing', () => {
     const result = addPortions('[Passos]\nFerver', 2)
     expect(result).toContain('[Porcoes]\n2')
+  })
+})
+
+describe('ingredient ignore-price flag', () => {
+  it('parses trailing |i on name, price, and grams lines', () => {
+    expect(parseIngredientLine('Sal|i')).toEqual({
+      name: 'Sal',
+      price: null,
+      grams: null,
+      ignorePrice: true,
+    })
+    expect(parseIngredientLine('Sal|0.10|i')).toEqual({
+      name: 'Sal',
+      price: 0.1,
+      grams: null,
+      ignorePrice: true,
+    })
+    expect(parseIngredientLine('Sal||2|i')).toEqual({
+      name: 'Sal',
+      price: null,
+      grams: 2,
+      ignorePrice: true,
+    })
+    expect(parseIngredientLine('Atum|1.50|80|i')).toEqual({
+      name: 'Atum',
+      price: 1.5,
+      grams: 80,
+      ignorePrice: true,
+    })
+  })
+
+  it('does not treat a missing flag as ignore', () => {
+    expect(parseIngredientLine('Sal')).toEqual({ name: 'Sal', price: null, grams: null })
+    expect(parseIngredientLine('Atum|1.50|80')).toEqual({ name: 'Atum', price: 1.5, grams: 80 })
+  })
+
+  it('round-trips ignorePrice through buildDescription', () => {
+    const built = buildDescription({
+      ingredientRows: [
+        { id: 1, name: 'Atum', price: '1.50', grams: '80' },
+        { id: 2, name: 'Sal', price: '', grams: '2', ignorePrice: true },
+      ],
+      steps: '',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '',
+      autoTotal: 1.5,
+    })
+    expect(built).toContain('Sal||2|i')
+    expect(parseDescription(built).ingredientItems).toEqual([
+      { name: 'Atum', price: 1.5, grams: 80 },
+      { name: 'Sal', price: null, grams: 2, ignorePrice: true },
+    ])
+  })
+
+  it('writes |i on a name-only ignored line', () => {
+    const built = buildDescription({
+      ingredientRows: [{ id: 1, name: 'Sal', price: '', ignorePrice: true }],
+      steps: '',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '',
+      autoTotal: 0,
+    })
+    expect(built).toContain('Sal|i')
+    expect(parseDescription(built).ingredientItems).toEqual([
+      { name: 'Sal', price: null, grams: null, ignorePrice: true },
+    ])
+  })
+})
+
+describe('computeAutoTotal / readyAutoTotal', () => {
+  const row = (partial: Partial<IngredientRow> & Pick<IngredientRow, 'id' | 'name'>): IngredientRow => ({
+    price: '',
+    ...partial,
+  })
+
+  it('is complete when every named row is priced or ignored', () => {
+    const result = computeAutoTotal([
+      row({ id: 1, name: 'Atum', price: '1.50' }),
+      row({ id: 2, name: 'Sal', ignorePrice: true }),
+      row({ id: 3, name: '  ' }),
+    ])
+    expect(result).toEqual({ total: 1.5, complete: true, missing: [] })
+    expect(readyAutoTotal([
+      row({ id: 1, name: 'Atum', price: '1.50' }),
+      row({ id: 2, name: 'Sal', ignorePrice: true }),
+    ])).toBe(1.5)
+  })
+
+  it('is incomplete when a named row has no price and is not ignored', () => {
+    const rows = [
+      row({ id: 1, name: 'Atum', price: '1.50' }),
+      row({ id: 2, name: 'Sal' }),
+    ]
+    expect(computeAutoTotal(rows)).toEqual({
+      total: 1.5,
+      complete: false,
+      missing: ['Sal'],
+    })
+    expect(readyAutoTotal(rows)).toBe(0)
+  })
+
+  it('excludes ignored rows from the sum even if they have a price', () => {
+    const rows = [
+      row({ id: 1, name: 'Atum', price: '1.50' }),
+      row({ id: 2, name: 'Azeite', price: '0.40', ignorePrice: true }),
+    ]
+    expect(computeAutoTotal(rows)).toEqual({ total: 1.5, complete: true, missing: [] })
+    expect(readyAutoTotal(rows)).toBe(1.5)
+  })
+
+  it('does not treat an empty form as a meal price', () => {
+    expect(readyAutoTotal([row({ id: 1, name: '', price: '' })])).toBe(0)
+    expect(computeAutoTotal([row({ id: 1, name: '', price: '' })]).complete).toBe(true)
+  })
+
+  it('does not persist [Preco] when the auto sum is incomplete', () => {
+    const built = buildDescription({
+      ingredientRows: [
+        row({ id: 1, name: 'Atum', price: '1.50' }),
+        row({ id: 2, name: 'Sal' }),
+      ],
+      steps: '',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '',
+      autoTotal: 1.5,
+    })
+    expect(built).not.toContain('[Preco]')
+    expect(parseDescription(built).price).toBeNull()
+  })
+
+  it('persists [Preco] from priced rows once the rest are ignored', () => {
+    const built = buildDescription({
+      ingredientRows: [
+        row({ id: 1, name: 'Atum', price: '1.50' }),
+        row({ id: 2, name: 'Sal', ignorePrice: true }),
+      ],
+      steps: '',
+      nutrition: { calories: '', protein: '', carbs: '', fat: '' },
+      priceOverride: '',
+      autoTotal: 0,
+    })
+    expect(built).toContain('[Preco]\n1.50')
+    expect(parseDescription(built).price).toBe(1.5)
   })
 })
 

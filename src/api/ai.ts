@@ -235,6 +235,88 @@ export async function suggestIngredients(
   }
 }
 
+/**
+ * Extract ingredient names from recipe steps. Text-only — never send photos.
+ * Used only when a local Despensa name-scan of the passos found nothing.
+ */
+export async function extractIngredientNamesFromSteps(steps: string): Promise<string[]> {
+  const text = steps.trim()
+  if (text.length < 12) return []
+
+  const res = await fetch(AI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: TEXT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'És um assistente de cozinha Português. Dado os passos de uma receita, lista os ingredientes mencionados (só nomes, sem quantidades nem unidades). Devolve APENAS um array JSON de strings, ex: ["atum","esparguete","azeite"]. Sem explicações.',
+        },
+        { role: 'user', content: text },
+      ],
+      max_tokens: 256,
+      temperature: 0.1,
+    }),
+  })
+
+  if (!res.ok) return []
+  const data = await res.json()
+  const content = data.choices?.[0]?.message?.content
+  if (!content) return []
+  try {
+    const names = parseJsonContent(content) as unknown
+    if (!Array.isArray(names)) return []
+    return names
+      .map((n) => stripQuantity(String(n)))
+      .filter((n) => n.length > 1)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Fallback NLU when the local Portuguese list parser finds nothing.
+ * Text-only — the transcript already came from SpeechRecognition.
+ */
+export async function extractShoppingNamesFromTranscript(transcript: string): Promise<string[]> {
+  const text = transcript.trim()
+  if (text.length < 2) return []
+
+  const res = await fetch(AI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: TEXT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'És um assistente de lista de compras em Português (Portugal). Dado o que a pessoa disse em voz alta, extrai APENAS os nomes dos produtos a comprar. Exemplos: "preciso de leite e pão" → ["leite","pão"]; "atum, ovos e saco do lixo" → ["atum","ovos","saco do lixo"]. Não inventes produtos. Não incluas verbos nem frases de preenchimento (preciso, quero, compra, disto). Devolve APENAS um array JSON de strings. Sem explicações.',
+        },
+        { role: 'user', content: text },
+      ],
+      max_tokens: 256,
+      temperature: 0.1,
+    }),
+  })
+
+  if (!res.ok) return []
+  const data = await res.json()
+  const content = data.choices?.[0]?.message?.content
+  if (!content) return []
+  try {
+    const names = parseJsonContent(content) as unknown
+    if (!Array.isArray(names)) return []
+    return names
+      .map((n) => String(n).trim())
+      .filter((n) => n.length > 1)
+  } catch {
+    return []
+  }
+}
+
 export async function analyzeProduct(
   productName: string,
   photoFile?: File | null

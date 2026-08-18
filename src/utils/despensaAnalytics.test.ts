@@ -11,6 +11,9 @@ import {
   getPriceFromDesc,
   getStoreFromDesc,
   getUnitGramsFromDesc,
+  inferUnitGramsFromName,
+  inferUnitGramsFromNames,
+  ingredientDisplayName,
   purchaseTotalPrice,
   shortStoreBrand,
   sortByConsumption,
@@ -73,6 +76,12 @@ describe('despensa description helpers', () => {
     expect(getUnitGramsFromDesc(desc)).toBe(120)
     expect(cookingName('Atum Continente 120g', desc)).toBe('Atum')
     expect(cookingName('Ovos', '[BuyAmount]\n6')).toBe('Ovos')
+    expect(
+      ingredientDisplayName(
+        'COGUMELOS LAM 250G',
+        buildDespensaDescription(1, 1, { generico: 'Cogumelos', nomeCurto: 'Cogumelo' })
+      )
+    ).toBe('Cogumelos')
   })
 
   it('preserves NomeCurto and UnitGrams when rebuilding', () => {
@@ -120,5 +129,25 @@ describe('consumption ranking', () => {
       }
     )
     expect(sorted.map((i) => i.product.name)).toEqual(['Pão', 'Água'])
+  })
+})
+
+describe('inferUnitGramsFromName', () => {
+  it('reads pack weight from SKU / talão names', () => {
+    expect(inferUnitGramsFromName('COGUMELOS LAMINADOS CNT 185GR')).toBe(185)
+    expect(inferUnitGramsFromName('COGUMELOS DESP. CLASSICA 185G')).toBe(185)
+    expect(inferUnitGramsFromName('COGUMELOS LAM 250G CNT')).toBe(250)
+    expect(inferUnitGramsFromName('AÇÚCAR 1KG')).toBe(1000)
+    expect(inferUnitGramsFromName('FARINHA 0,5KG')).toBe(500)
+  })
+
+  it('skips NxM multipliers and empty names', () => {
+    expect(inferUnitGramsFromName('HAMBURGUER PORCO CNT 10x50G')).toBeNull()
+    expect(inferUnitGramsFromName('IOGURTE 4X125G')).toBeNull()
+    expect(inferUnitGramsFromName('BANANA')).toBeNull()
+  })
+
+  it('prefers the first name that has a pack weight', () => {
+    expect(inferUnitGramsFromNames('Cogumelos', 'COGUMELOS LAM 185G')).toBe(185)
   })
 })

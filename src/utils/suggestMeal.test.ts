@@ -167,4 +167,41 @@ describe('pickWeeklySuggestions', () => {
     const week = pickWeeklySuggestions({ recipes, favourites: new Set(), mealPlan: [] }, 7)
     expect(week).toHaveLength(2)
   })
+
+  it('is stable for the same salt and can differ across salts', () => {
+    const recipes = [
+      base(1, 'A', '[Porcoes]\n2'),
+      base(2, 'B', '[Porcoes]\n2'),
+      base(3, 'C', '[Porcoes]\n2'),
+      base(4, 'D', '[Porcoes]\n2'),
+      base(5, 'E', '[Porcoes]\n2'),
+      base(6, 'F', '[Porcoes]\n2'),
+    ]
+    const ctx = { recipes, favourites: new Set<number>(), mealPlan: [] }
+    const a = pickWeeklySuggestions(ctx, 4, 'balanced', 11).map((d) => d.recipe.id)
+    const again = pickWeeklySuggestions(ctx, 4, 'balanced', 11).map((d) => d.recipe.id)
+    expect(again).toEqual(a)
+    expect(new Set(a).size).toBe(4)
+
+    const others = [2, 3, 5, 8, 13, 21].map((salt) =>
+      pickWeeklySuggestions(ctx, 4, 'balanced', salt)
+        .map((d) => d.recipe.id)
+        .join(',')
+    )
+    expect(others.some((seq) => seq !== a.join(','))).toBe(true)
+  })
+
+  it('avoids a second spaghetti meal on the next day when another option exists', () => {
+    const recipes = [
+      base(1, 'Esparguete à bolonhesa', '[Porcoes]\n2'),
+      base(2, 'Spaghetti al pesto', '[Porcoes]\n2'),
+      base(3, 'Arroz de pato', '[Porcoes]\n2'),
+    ]
+    const week = pickWeeklySuggestions({ recipes, favourites: new Set(), mealPlan: [] }, 2, 'balanced', 0)
+    expect(week).toHaveLength(2)
+    const names = week.map((d) => d.recipe.name)
+    const pastaDays = names.filter((n) => /esparguete|spaghetti/i.test(n)).length
+    expect(pastaDays).toBe(1)
+    expect(names).toContain('Arroz de pato')
+  })
 })

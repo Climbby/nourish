@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Recipe } from '../types/grocy'
 import type { PlannedSlot } from '../hooks/usePlannedMeals'
+import { useShowPrices } from '../hooks/useDisplayPrefs'
 import {
   applicableSlots,
   planFromSlots,
@@ -8,6 +9,7 @@ import {
   summarizePlan,
   type SavedWeekPlan,
   type TemplateSlot,
+  type WeekPlanAnchor,
 } from '../utils/savedWeekPlans'
 import { BottomSheet } from './BottomSheet'
 
@@ -25,8 +27,10 @@ interface Props {
   onClose: () => void
   onSave: (plan: SavedWeekPlan) => void
   /** Template slots — relative offsets, mapped onto real dates by the caller. */
-  onApply: (slots: TemplateSlot[]) => void
+  onApply: (slots: TemplateSlot[], weekAnchor?: WeekPlanAnchor) => void
   onRemove: (id: string) => void
+  /** Open the Dom–Sáb manual plan builder. */
+  onOpenBuilder: () => void
 }
 
 export function SavedPlansSheet({
@@ -38,7 +42,9 @@ export function SavedPlansSheet({
   onSave,
   onApply,
   onRemove,
+  onOpenBuilder,
 }: Props) {
+  const showPrices = useShowPrices()
   const [saving, setSaving] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -76,12 +82,23 @@ export function SavedPlansSheet({
           </button>
         </div>
 
+        <button
+          type="button"
+          onClick={() => {
+            onOpenBuilder()
+            onClose()
+          }}
+          className="w-full py-3 rounded-xl text-sm font-semibold bg-nourish-primary text-nourish-on-primary focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+        >
+          Construtor de plano
+        </button>
+
         {!saving ? (
           <button
             type="button"
             disabled={savableSlots.length === 0}
             onClick={() => setSaving(true)}
-            className="w-full py-3 rounded-xl text-sm font-semibold bg-nourish-primary text-nourish-on-primary disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+            className="w-full py-3 rounded-xl text-sm font-semibold bg-nourish-surface-high text-nourish-text border border-nourish-border disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-nourish-primary"
           >
             {savableSlots.length === 0
               ? 'Planeia refeições para poder guardar'
@@ -157,10 +174,13 @@ export function SavedPlansSheet({
         )}
 
         {plans.length === 0 ? (
-          <p className="text-xs text-nourish-text-dim leading-relaxed">
-            Ainda não há planos guardados. Ao fim de umas semanas ficas com uma biblioteca de
-            semanas que já sabes que funcionam — escolhes uma e os 14 slots ficam resolvidos.
-          </p>
+          <div className="space-y-2 rounded-xl border border-dashed border-nourish-border p-3">
+            <p className="text-sm font-semibold text-nourish-text">Ainda sem planos guardados</p>
+            <p className="text-xs text-nourish-text-dim leading-relaxed">
+              Monta a semana no construtor (Domingo a sábado), ou planeia no ecrã principal e
+              guarda daqui. Depois escolhes um plano e os slots ficam resolvidos.
+            </p>
+          </div>
         ) : (
           <ul className="space-y-3">
             {plans.map((plan) => {
@@ -205,8 +225,8 @@ export function SavedPlansSheet({
 
                   <p className="text-xs text-nourish-text-dim tabular-nums">
                     {summary.meals} refeições · {summary.distinctPratos} pratos
-                    {summary.spend > 0 && <> · €{summary.spend.toFixed(2)}</>}
-                    {perMeal !== null && <> (€{perMeal.toFixed(2)}/refeição)</>}
+                    {showPrices && summary.spend > 0 && <> · €{summary.spend.toFixed(2)}</>}
+                    {showPrices && perMeal !== null && <> (€{perMeal.toFixed(2)}/refeição)</>}
                   </p>
 
                   {summary.missingRecipeIds.length > 0 && (
@@ -221,7 +241,7 @@ export function SavedPlansSheet({
                       type="button"
                       disabled={usable.length === 0}
                       onClick={() => {
-                        onApply(usable)
+                        onApply(usable, plan.weekAnchor)
                         onClose()
                       }}
                       className="flex-1 py-2 rounded-lg text-xs font-semibold bg-nourish-primary text-nourish-on-primary disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-nourish-primary"

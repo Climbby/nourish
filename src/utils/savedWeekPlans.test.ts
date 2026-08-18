@@ -4,10 +4,12 @@ import type { Recipe } from '../types/grocy'
 import {
   applicableSlots,
   clonePlan,
+  mapTemplateToDates,
   parseSavedPlans,
   planFromSlots,
   removePlan,
   summarizePlan,
+  templateOriginDate,
   upsertPlan,
 } from './savedWeekPlans'
 
@@ -28,6 +30,7 @@ function recipe(id: number, name: string, price: number | null): Recipe {
 const TODAY = '2026-07-19'
 const TOMORROW = '2026-07-20'
 const YESTERDAY = '2026-07-18'
+const WEDNESDAY = '2026-07-22'
 
 const slots: PlannedSlot[] = [
   { date: TODAY, slot: 'almoco', parts: [{ role: 'prato', recipeId: 1 }], source: 'chosen' },
@@ -245,6 +248,35 @@ describe('applicableSlots', () => {
     ])
     expect(applicableSlots(saved, recipes)).toEqual([
       { dayOffset: 0, slot: 'almoco', parts: [{ role: 'prato', recipeId: 1 }] },
+    ])
+  })
+})
+
+describe('mapTemplateToDates', () => {
+  const parts = [{ role: 'prato' as const, recipeId: 1 }]
+
+  it('maps a today-anchored mould from today', () => {
+    const mapped = mapTemplateToDates(
+      [{ dayOffset: 0, slot: 'almoco', parts }, { dayOffset: 1, slot: 'jantar', parts }],
+      WEDNESDAY
+    )
+    expect(mapped.map((s) => s.date)).toEqual([WEDNESDAY, '2026-07-23'])
+  })
+
+  it('maps a Sunday mould onto this week and skips days already in the past', () => {
+    expect(templateOriginDate(WEDNESDAY, 'sunday')).toBe(TODAY)
+    const mapped = mapTemplateToDates(
+      [
+        { dayOffset: 0, slot: 'almoco', parts },
+        { dayOffset: 3, slot: 'jantar', parts },
+        { dayOffset: 4, slot: 'almoco', parts },
+      ],
+      WEDNESDAY,
+      'sunday'
+    )
+    expect(mapped).toEqual([
+      { date: WEDNESDAY, slot: 'jantar', parts },
+      { date: '2026-07-23', slot: 'almoco', parts },
     ])
   })
 })

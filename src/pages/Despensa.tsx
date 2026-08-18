@@ -4,23 +4,27 @@ import { grocy } from '../api/grocy'
 import type { StockItem, StockLogEntry, ShoppingListItem } from '../types/grocy'
 import { Spinner } from '../components/Spinner'
 import { ConnectionError } from '../components/ConnectionError'
-import { VerifiedBadge } from '../components/VerifiedBadge'
-import { CartIcon, ShoppingListButton, ShoppingListSheet } from '../components/ShoppingListSheet'
-import { fetchHomelabMetrics, hasShopIntervalMedian, shopIntervalDays } from '../api/homelabMetrics'
+import { BottomSheet } from '../components/BottomSheet'
+import { CartIcon, ShoppingListSheet } from '../components/ShoppingListSheet'
+import { fetchHomelabMetrics, shopIntervalDays } from '../api/homelabMetrics'
 import {
   computeDespensaAnalytics,
   despensaDisplayName,
   getBuyAmountFromDesc,
-  getGenericoFromDesc,
 } from '../utils/despensaAnalytics'
 import {
   familyMatchesQuery,
+  filterFamiliesWithPhotos,
   groupDespensaFamilies,
   sortFamiliesByConsumption,
   type DespensaFamily,
 } from '../utils/despensaFamilies'
-import { isVerified } from '../utils/verification'
-import { useShowNutrition } from '../hooks/useShowNutrition'
+import { useDisplayPrefs } from '../hooks/useDisplayPrefs'
+import { useGenericoFavorites } from '../hooks/useGenericoFavorites'
+import {
+  ignoreReceiptNames,
+  receiptIgnoreNamesForProducts,
+} from '../features/receipt/receiptIgnore'
 
 function TrashIcon({ className = 'w-3.5 h-3.5' }: { className?: string }) {
   return (
@@ -35,7 +39,35 @@ function TrashIcon({ className = 'w-3.5 h-3.5' }: { className?: string }) {
 }
 
 const iconBtn =
-  'h-8 w-8 flex-shrink-0 rounded-lg flex items-center justify-center bg-nourish-surface-high text-nourish-text-dim active:bg-nourish-border/30 focus:outline-none focus:ring-2 focus:ring-nourish-primary disabled:opacity-100'
+  'h-8 w-8 flex-shrink-0 rounded-lg flex items-center justify-center bg-nourish-surface-high text-nourish-text-dim active:bg-nourish-border/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-nourish-primary disabled:opacity-100'
+
+const sheetBtn =
+  'w-full py-3 rounded-xl text-sm font-semibold disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-nourish-primary'
+
+function ChevronIcon({ down }: { down: boolean }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      className={`w-3.5 h-3.5 transition-transform ${down ? 'rotate-90' : ''}`}
+      aria-hidden
+    >
+      <path
+        fillRule="evenodd"
+        d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  )
+}
+
+interface RemoveRequest {
+  ids: number[]
+  title: string
+  variantCount: number
+  names: string[]
+}
 
 interface DespensaRowProps {
   item: StockItem
@@ -45,13 +77,11 @@ interface DespensaRowProps {
   log: StockLogEntry[]
   onShoppingList: boolean
   onAddToShoppingList: (id: number) => void
-  onClearStock?: (id: number) => void
+  onRemove?: () => void
   daysUntilShop: number | null
-  showNutrition: boolean
-  /** When set, row opens expansion instead of navigating. */
+  onOpen?: () => void
   onToggleExpand?: () => void
   expanded?: boolean
-  variantCount?: number
 }
 
 function DespensaListRow({
@@ -61,38 +91,27 @@ function DespensaListRow({
   log,
   onShoppingList,
   onAddToShoppingList,
-  onClearStock,
+  onRemove,
   daysUntilShop,
-  showNutrition,
+  onOpen,
   onToggleExpand,
   expanded,
-  variantCount,
 }: DespensaRowProps) {
   const navigate = useNavigate()
   const [imgError, setImgError] = useState(false)
-  const [confirmClear, setConfirmClear] = useState(false)
   const analytics = computeDespensaAnalytics(log, item.amount, daysUntilShop)
-  const caloriesVerified = isVerified(item.product.description, 'calorias')
-  const hasCalories = showNutrition && (item.product.calories ?? 0) > 0
   const hasPhoto = Boolean(item.product.picture_file_name) && !imgError
   const displayTitle =
     title ?? despensaDisplayName(item.product.name, item.product.description)
-
-  useEffect(() => {
-    if (!confirmClear) return
-    const t = window.setTimeout(() => setConfirmClear(false), 3000)
-    return () => window.clearTimeout(t)
-  }, [confirmClear])
+  const openProduct = onOpen ?? (() => navigate(`/product/${item.product_id}`))
 
   return (
     <div className="flex items-center gap-1 pr-2">
       <button
         type="button"
-        onClick={() => {
-          if (onToggleExpand) onToggleExpand()
-          else navigate(`/product/${item.product_id}`)
-        }}
-        className="flex-1 min-w-0 flex items-center gap-3 p-2 rounded-lg text-left active:bg-nourish-surface-high focus:outline-none focus:ring-2 focus:ring-inset focus:ring-nourish-primary"
+        onClick={openProduct}
+        className="flex shrink-0 items-center p-2 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-nourish-primary"
+        aria-label={displayTitle}
       >
         {hasPhoto ? (
           <img
@@ -106,66 +125,62 @@ function DespensaListRow({
             🛒
           </div>
         )}
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-nourish-text truncate">
-            {displayTitle}
-            {analytics?.isLow && !onShoppingList && (
-              <span className="ml-1.5 text-amber-500" aria-label="Stock baixo">
-                ⚠
-              </span>
-            )}
-            {variantCount != null && variantCount > 1 && (
-              <span className="ml-1.5 text-[10px] font-medium text-nourish-text-dim">
-                · {variantCount} variantes
-              </span>
-            )}
-            {expanded != null && variantCount != null && variantCount > 1 && (
-              <span className="ml-1 text-nourish-text-dim text-xs">{expanded ? '▾' : '▸'}</span>
-            )}
-          </p>
-          {subtitle && (
-            <p className="text-[10px] text-nourish-text-dim mt-0.5 truncate">{subtitle}</p>
-          )}
-          {hasCalories && (
-            <p className="text-xs text-nourish-text-dim tabular-nums mt-0.5 truncate inline-flex items-center gap-0.5">
-              {item.product.calories} kcal
-              {caloriesVerified && <VerifiedBadge verified />}
-            </p>
-          )}
-          {analytics && item.amount > 0 && (
-            <p className="text-[11px] text-nourish-text-dim mt-0.5 truncate">
-              {analytics.dailyAvg.toFixed(1)}/dia
-              {analytics.daysRemaining !== null && (
-                <>
-                  {' '}
-                  · <span className="text-nourish-text">{analytics.daysRemaining.toFixed(1)} dias</span>
-                </>
-              )}
-            </p>
-          )}
-        </div>
       </button>
 
-      <div className="flex items-center gap-1 flex-shrink-0 mr-1">
-        {onClearStock && (
+      <div className="min-w-0 flex-1 py-2">
+        <div className="flex items-center gap-0.5 min-w-0">
           <button
             type="button"
-            onClick={() => {
-              if (!confirmClear) {
-                setConfirmClear(true)
-                return
-              }
-              onClearStock(item.product_id)
-            }}
-            className={iconBtn}
-            aria-label={confirmClear ? 'Confirmar esgotar stock' : 'Esgotar stock'}
-            title={confirmClear ? 'Toca outra vez para esgotar' : 'Esgotar stock'}
+            onClick={openProduct}
+            className="min-w-0 overflow-hidden text-left rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-nourish-primary"
           >
-            {confirmClear ? (
-              <span className="text-[10px] font-bold">OK</span>
-            ) : (
-              <TrashIcon />
+            <p className="text-sm font-semibold text-nourish-text truncate">
+              {displayTitle}
+              {analytics?.isLow && !onShoppingList && (
+                <span className="ml-1.5 text-amber-500" aria-label="Stock baixo">
+                  ⚠
+                </span>
+              )}
+            </p>
+          </button>
+          {onToggleExpand && (
+            <button
+              type="button"
+              onClick={onToggleExpand}
+              className="shrink-0 p-1 rounded-lg text-nourish-text-dim active:bg-nourish-border/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-nourish-primary"
+              aria-label={expanded ? 'Ocultar variantes' : 'Ver stock por variante'}
+              aria-expanded={expanded}
+            >
+              <ChevronIcon down={Boolean(expanded)} />
+            </button>
+          )}
+        </div>
+        {subtitle && (
+          <p className="text-[10px] text-nourish-text-dim mt-0.5 truncate">{subtitle}</p>
+        )}
+        {analytics && item.amount > 0 && (
+          <p className="text-[11px] text-nourish-text-dim mt-0.5 truncate">
+            {analytics.dailyAvg.toFixed(1)}/dia
+            {analytics.daysRemaining !== null && (
+              <>
+                {' '}
+                · <span className="text-nourish-text">{analytics.daysRemaining.toFixed(1)} dias</span>
+              </>
             )}
+          </p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1 flex-shrink-0 mr-1">
+        {onRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className={iconBtn}
+            aria-label="Apagar da Despensa"
+            title="Apagar da Despensa"
+          >
+            <TrashIcon />
           </button>
         )}
         <button
@@ -189,27 +204,34 @@ function FamilyBlock({
   logs,
   shoppingListProductIds,
   onAddToShoppingList,
-  onClearStock,
+  onRemoveRequest,
   daysUntilShop,
-  showNutrition,
-  clearable,
 }: {
   family: DespensaFamily
   logs: Record<number, StockLogEntry[]>
   shoppingListProductIds: Set<number>
   onAddToShoppingList: (id: number) => void
-  onClearStock?: (id: number) => void
+  onRemoveRequest: (req: RemoveRequest) => void
   daysUntilShop: number | null
-  showNutrition: boolean
-  clearable?: boolean
 }) {
+  const navigate = useNavigate()
   const [expanded, setExpanded] = useState(false)
   const multi = family.variants.length > 1
   const primary = family.primary
-  // Synthetic amount for analytics on family header
   const familyItem: StockItem = { ...primary, amount: family.totalAmount }
-
   const mergedLog = family.variants.flatMap((v) => logs[v.product_id] ?? [])
+
+  function requestRemove(items: StockItem[], title: string, includeGenerico: boolean) {
+    onRemoveRequest({
+      ids: items.map((v) => v.product_id),
+      title,
+      variantCount: items.length,
+      names: receiptIgnoreNamesForProducts(
+        items.map((v) => v.product),
+        { includeGenerico }
+      ),
+    })
+  }
 
   if (!multi) {
     const only = family.variants[0]
@@ -217,17 +239,11 @@ function FamilyBlock({
       <DespensaListRow
         item={only}
         title={family.title}
-        subtitle={
-          getGenericoFromDesc(only.product.description) && only.product.name !== family.title
-            ? only.product.name
-            : null
-        }
         log={logs[only.product_id] ?? []}
         onShoppingList={shoppingListProductIds.has(only.product_id)}
         onAddToShoppingList={onAddToShoppingList}
-        onClearStock={clearable ? onClearStock : undefined}
+        onRemove={() => requestRemove([only], family.title, true)}
         daysUntilShop={daysUntilShop}
-        showNutrition={showNutrition}
       />
     )
   }
@@ -239,18 +255,16 @@ function FamilyBlock({
         title={family.title}
         log={mergedLog}
         onShoppingList={family.variants.every((v) => shoppingListProductIds.has(v.product_id))}
-        onAddToShoppingList={(id) => {
-          // Add primary (or first out-of-list) to shopping list
+        onAddToShoppingList={() => {
           const target =
             family.variants.find((v) => !shoppingListProductIds.has(v.product_id)) ?? primary
           onAddToShoppingList(target.product.id)
         }}
-        onClearStock={undefined}
+        onRemove={() => requestRemove(family.variants, family.title, true)}
         daysUntilShop={daysUntilShop}
-        showNutrition={showNutrition}
+        onOpen={() => navigate(`/product/${primary.product_id}`)}
         onToggleExpand={() => setExpanded((e) => !e)}
         expanded={expanded}
-        variantCount={family.variants.length}
       />
       {expanded && (
         <ul className="border-t border-nourish-border/40 bg-nourish-bg/50">
@@ -262,9 +276,8 @@ function FamilyBlock({
                 log={logs[v.product_id] ?? []}
                 onShoppingList={shoppingListProductIds.has(v.product_id)}
                 onAddToShoppingList={onAddToShoppingList}
-                onClearStock={clearable && v.amount > 0 ? onClearStock : undefined}
+                onRemove={() => requestRemove([v], v.product.name, false)}
                 daysUntilShop={daysUntilShop}
-                showNutrition={showNutrition}
               />
             </li>
           ))}
@@ -274,16 +287,92 @@ function FamilyBlock({
   )
 }
 
-export function DespensaSection({ query = '' }: { query?: string }) {
-  const showNutrition = useShowNutrition()
+function DespensaRemoveSheet({
+  request,
+  busy,
+  onClose,
+  onDelete,
+  onIgnore,
+}: {
+  request: RemoveRequest | null
+  busy: boolean
+  onClose: () => void
+  onDelete: () => void
+  onIgnore: () => void
+}) {
+  const open = request != null
+  const family = (request?.variantCount ?? 0) > 1
+
+  return (
+    <BottomSheet open={open} onClose={onClose} ariaLabel="Remover da despensa">
+      {request && (
+        <div className="px-4 pb-1 space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-nourish-text truncate">{request.title}</p>
+            <p className="text-xs text-nourish-text-dim mt-0.5 leading-snug">
+              {family
+                ? `Isto apaga as ${request.variantCount} variantes desta família da Despensa.`
+                : 'O produto é apagado permanentemente do Grocy.'}
+            </p>
+          </div>
+          <div className="space-y-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onDelete}
+              className={`${sheetBtn} bg-red-500/15 text-red-400 border border-red-500/30`}
+            >
+              {busy ? 'A apagar…' : 'Apagar da Despensa'}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onIgnore}
+              className={`${sheetBtn} border border-nourish-border text-nourish-text`}
+            >
+              Ignorar
+            </button>
+            <p className="-mt-1 text-[11px] text-nourish-text-dim leading-snug px-1">
+              {family
+                ? 'Sai da Despensa e, no próximo talão, estas linhas começam desmarcadas.'
+                : 'Sai da Despensa e, no próximo talão, esta linha começa desmarcada.'}
+            </p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onClose}
+              className={`${sheetBtn} border border-nourish-border text-nourish-text-dim font-medium`}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+    </BottomSheet>
+  )
+}
+
+export function DespensaSection({
+  query = '',
+  shoppingListOpen = false,
+  onShoppingListOpenChange,
+  onShoppingListCountChange,
+}: {
+  query?: string
+  shoppingListOpen?: boolean
+  onShoppingListOpenChange?: (open: boolean) => void
+  onShoppingListCountChange?: (count: number) => void
+}) {
+  const { prefs } = useDisplayPrefs()
+  const { favorites } = useGenericoFavorites()
   const [items, setItems] = useState<StockItem[]>([])
   const [logs, setLogs] = useState<Record<number, StockLogEntry[]>>({})
   const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>([])
   const [daysUntilShop, setDaysUntilShop] = useState<number | null>(null)
-  const [shopIntervalFromMedian, setShopIntervalFromMedian] = useState(false)
-  const [showList, setShowList] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [removeRequest, setRemoveRequest] = useState<RemoveRequest | null>(null)
+  const [removing, setRemoving] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -296,6 +385,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
       ])
       setItems(despensaItems)
       setShoppingList(sl)
+      onShoppingListCountChange?.(sl.filter((i) => !i.done).length)
       const productIds = new Set(despensaItems.map((item) => item.product_id))
       const logMap: Record<number, StockLogEntry[]> = {}
       for (const entry of allLogs) {
@@ -310,7 +400,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [onShoppingListCountChange])
 
   useEffect(() => {
     load()
@@ -318,10 +408,7 @@ export function DespensaSection({ query = '' }: { query?: string }) {
 
   useEffect(() => {
     fetchHomelabMetrics().then((m) => {
-      if (m) {
-        setDaysUntilShop(shopIntervalDays(m))
-        setShopIntervalFromMedian(hasShopIntervalMedian(m))
-      }
+      if (m) setDaysUntilShop(shopIntervalDays(m))
     })
   }, [])
 
@@ -329,40 +416,48 @@ export function DespensaSection({ query = '' }: { query?: string }) {
     const product = items.find((s) => s.product_id === id)!.product
     try {
       await grocy.addToShoppingList(id, getBuyAmountFromDesc(product.description, product.id))
-      setShoppingList(await grocy.getShoppingList())
+      const sl = await grocy.getShoppingList()
+      setShoppingList(sl)
+      onShoppingListCountChange?.(sl.filter((i) => !i.done).length)
     } catch {
       /* silent */
     }
   }
 
-  const handleClearStock = async (id: number) => {
-    const prev = items.find((s) => s.product_id === id)
-    setItems((list) =>
-      list.map((s) => (s.product_id === id ? { ...s, amount: 0, value: 0 } : s))
-    )
+  const executeRemove = async (ignore: boolean) => {
+    if (!removeRequest) return
+    const { ids, names } = removeRequest
+    const prev = items
+    setRemoving(true)
+    setItems((list) => list.filter((s) => !ids.includes(s.product_id)))
+    setRemoveRequest(null)
     try {
-      await grocy.setStockAmount(id, 0)
-      const newLog = await grocy.getStockLog(id)
-      setLogs((l) => ({ ...l, [id]: newLog }))
+      await Promise.all(ids.map((id) => grocy.deleteProduct(id)))
+      if (ignore) ignoreReceiptNames(names)
     } catch {
-      if (prev) {
-        setItems((list) => list.map((s) => (s.product_id === id ? prev : s)))
-      }
-      load()
+      setItems(prev)
+      void load()
+    } finally {
+      setRemoving(false)
     }
   }
 
   const pendingList = shoppingList.filter((i) => !i.done)
-  const shoppingListProductIds = new Set(pendingList.map((i) => i.product_id))
+  const shoppingListProductIds = new Set(
+    pendingList.flatMap((i) => (i.product_id != null && i.product_id > 0 ? [i.product_id] : []))
+  )
 
   const families = sortFamiliesByConsumption(
-    groupDespensaFamilies(items).filter((f) => familyMatchesQuery(f, query)),
+    (() => {
+      const matched = groupDespensaFamilies(items, favorites).filter((f) => familyMatchesQuery(f, query))
+      return prefs.hideProductsWithoutImage ? filterFamiliesWithPhotos(matched, favorites) : matched
+    })(),
     logs
   )
   const inStock = families.filter((f) => f.totalAmount > 0)
   const outOfStock = families.filter((f) => f.totalAmount <= 0)
 
-  function renderFamilies(list: DespensaFamily[], opts?: { clearable?: boolean }) {
+  function renderFamilies(list: DespensaFamily[]) {
     return (
       <ul className="bg-nourish-surface border border-nourish-border rounded-xl overflow-hidden divide-y divide-nourish-border/60">
         {list.map((family) => (
@@ -372,10 +467,8 @@ export function DespensaSection({ query = '' }: { query?: string }) {
               logs={logs}
               shoppingListProductIds={shoppingListProductIds}
               onAddToShoppingList={handleAddToShoppingList}
-              onClearStock={opts?.clearable ? handleClearStock : undefined}
+              onRemoveRequest={setRemoveRequest}
               daysUntilShop={daysUntilShop}
-              showNutrition={showNutrition}
-              clearable={opts?.clearable}
             />
           </li>
         ))}
@@ -383,63 +476,62 @@ export function DespensaSection({ query = '' }: { query?: string }) {
     )
   }
 
-  if (loading)
-    return (
-      <div className="flex justify-center pt-12">
-        <Spinner />
-      </div>
-    )
-  if (error) {
-    return (
-      <div className="px-4 pt-12">
-        <ConnectionError message={error} onRetry={() => void load()} />
-      </div>
-    )
-  }
-
   return (
     <div>
-      <div className="flex items-center justify-between gap-2 mb-3">
-        {daysUntilShop != null && (
-          <p className="text-xs text-nourish-text-dim">
-            Compras a cada{' '}
-            <span className="font-semibold text-nourish-text">{daysUntilShop}</span> dias
-            {shopIntervalFromMedian ? (
-              <span className="text-nourish-text-dim/80"> · mediana do historial</span>
-            ) : (
-              <span className="text-nourish-text-dim/80"> · estimativa</span>
-            )}
-          </p>
-        )}
-        <ShoppingListButton count={pendingList.length} onClick={() => setShowList(true)} />
-      </div>
-
       <ShoppingListSheet
-        open={showList}
-        onClose={() => setShowList(false)}
-        onListChange={() => grocy.getShoppingList().then(setShoppingList)}
+        open={shoppingListOpen}
+        onClose={() => onShoppingListOpenChange?.(false)}
+        onListChange={() => {
+          grocy.getShoppingList().then((sl) => {
+            setShoppingList(sl)
+            onShoppingListCountChange?.(sl.filter((i) => !i.done).length)
+          })
+        }}
+      />
+      <DespensaRemoveSheet
+        request={removeRequest}
+        busy={removing}
+        onClose={() => {
+          if (!removing) setRemoveRequest(null)
+        }}
+        onDelete={() => void executeRemove(false)}
+        onIgnore={() => void executeRemove(true)}
       />
 
-      <div className="space-y-4">
-        {inStock.length > 0 && (
-          <div>
-            <p className="px-1 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-nourish-text-dim">
-              Em stock
-            </p>
-            {renderFamilies(inStock, { clearable: true })}
-          </div>
-        )}
-
-        {outOfStock.length > 0 && renderFamilies(outOfStock)}
-      </div>
-
-      {families.length === 0 && items.length > 0 && (
-        <p className="text-nourish-text-dim text-sm text-center pt-8">Sem resultados</p>
+      {loading && (
+        <div className="flex justify-center pt-12">
+          <Spinner />
+        </div>
       )}
-      {items.length === 0 && (
-        <p className="text-nourish-text-dim text-sm text-center pt-8">
-          Ainda não há produtos de despensa. Usa Adicionar → Produto de despensa.
-        </p>
+      {!loading && error && (
+        <div className="px-4 pt-12">
+          <ConnectionError message={error} onRetry={() => void load()} />
+        </div>
+      )}
+      {!loading && !error && (
+        <>
+          <div className="space-y-4">
+            {inStock.length > 0 && (
+              <div>
+                <p className="px-1 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-nourish-text-dim">
+                  Em stock
+                </p>
+                {renderFamilies(inStock)}
+              </div>
+            )}
+
+            {outOfStock.length > 0 && renderFamilies(outOfStock)}
+          </div>
+
+          {families.length === 0 && items.length > 0 && (
+            <p className="text-nourish-text-dim text-sm text-center pt-8">Sem resultados</p>
+          )}
+          {items.length === 0 && (
+            <p className="text-nourish-text-dim text-sm text-center pt-8">
+              Ainda não há produtos de despensa. Usa Adicionar → Produto de despensa.
+            </p>
+          )}
+        </>
       )}
     </div>
   )

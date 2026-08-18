@@ -15,7 +15,7 @@ const SYSTEM_PROMPT = `És um leitor de tabelas nutricionais de embalagens de co
 Devolves SEMPRE e APENAS um objecto JSON, sem texto à volta e sem blocos de código.
 
 Formato exacto:
-{"calories": number, "protein": number, "carbs": number, "fat": number, "fibre": number, "per": "100g" | "porcao" | "desconhecido"}
+{"calories": number, "protein": number, "carbs": number, "fat": number, "fibre": number, "per": "100g" | "porcao" | "desconhecido", "netGrams": number|null}
 
 Regras:
 - Usa SEMPRE a coluna "por 100 g" ou "por 100 ml". Ignora a coluna por porção/dose se existirem as duas.
@@ -24,6 +24,7 @@ Regras:
 - "fat" é a gordura TOTAL, não a linha "das quais saturadas".
 - "fibre" é a fibra. Se a tabela não a indicar, devolve 0.
 - Define "per" com a coluna que realmente usaste.
+- "netGrams" é o peso líquido da EMBALAGEM (peso líquido / conteúdo / "e 185 g"), em gramas. Não é a porção nem os 100 g da tabela. Se estiver em kg, converte para gramas (0,5 kg → 500). Se não estiver visível, devolve null.
 - Se um valor não for legível, devolve 0 para esse campo.
 - Não inventes valores. Não devolvas unidades, apenas números.`
 
@@ -37,6 +38,8 @@ export interface NutritionLabelResult {
   per: '100g' | 'porcao' | 'desconhecido'
   /** True when an energy value in kJ was detected and converted to kcal. */
   convertedFromKj: boolean
+  /** Pack net weight in grams, if printed on the pack. */
+  netGrams: number | null
 }
 
 function num(v: unknown): number {
@@ -64,6 +67,10 @@ export function normalizeNutritionLabel(raw: unknown): NutritionLabelResult {
     perRaw === '100g' || perRaw === '100ml' ? '100g' : perRaw === 'porcao' ? 'porcao' : 'desconhecido'
 
   const round1 = (n: number) => Math.round(n * 10) / 10
+  const rawNet = obj.netGrams ?? obj.net_grams
+  let netGrams: number | null = num(rawNet)
+  if (!netGrams || netGrams < 5 || netGrams > 10000) netGrams = null
+  else netGrams = Math.round(netGrams * 100) / 100
 
   return {
     macros: {
@@ -75,6 +82,7 @@ export function normalizeNutritionLabel(raw: unknown): NutritionLabelResult {
     },
     per,
     convertedFromKj,
+    netGrams,
   }
 }
 
@@ -88,7 +96,7 @@ export async function extractNutritionLabel(file: File): Promise<NutritionLabelR
   const imageDataUrl = await downscaleImage(file)
   const raw = await requestVisionJson(
     SYSTEM_PROMPT,
-    'Lê a tabela nutricional desta embalagem e devolve os valores por 100 g.',
+    'Lê a tabela nutricional desta embalagem e devolve os valores por 100 g. Se o peso líquido da embalagem estiver visível, inclui-o em netGrams.',
     imageDataUrl,
     512
   )

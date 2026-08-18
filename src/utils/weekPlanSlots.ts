@@ -10,6 +10,8 @@ import type { Recipe } from '../types/grocy'
 import { resolveMealOrigin, type MealOrigin } from './mealOrigin'
 import { parseDescription, type Nutrition } from './parseDescription'
 import { addDays, diffDays, MAX_FUTURE_DAYS, PAST_WINDOW_DAYS } from './planDates'
+import { occupiedStaplesNearDate, stapleClashPenalty, stapleKeysFromRecipe } from './stapleClash'
+import { createRng, hashSeed, pickScored } from './suggestionPick'
 import {
   medianRecipePrice,
   scoreRecipe,
@@ -221,6 +223,10 @@ function completaRecipes(recipes: Recipe[]): Recipe[] {
  * Only the prato is suggested — sopa, sobremesa and bebida are filled by habit
  * and manual choice, not scored. Past days never get suggestions: they are a
  * record of what was eaten, not something left to decide.
+ *
+ * `salt` seeds the near-tie shuffle so a reload keeps the same suggestions,
+ * while a new salt (or a new calendar day in the seed) yields a different
+ * sequence instead of Grocy-id order every week.
  */
 export function buildSlotSuggestions(
   ctx: SuggestionContext,
@@ -230,7 +236,10 @@ export function buildSlotSuggestions(
   preference: SuggestionPreference,
   originByKey: Record<string, MealOrigin> = {},
   today = todayIsoDate(),
-  maxDays = MAX_FUTURE_DAYS
+  maxDays = MAX_FUTURE_DAYS,
+  salt = 0,
+  /** When set, skip progressive unlock (plan builder wants the whole Dom–Sáb). */
+  forceVisibleDays?: number
 ): Map<string, number> {
   const pool = completaRecipes(ctx.recipes)
   const recipeById = new Map(pool.map((r) => [r.id, r]))
@@ -252,7 +261,10 @@ export function buildSlotSuggestions(
   const decidedIds = new Set(upcoming.flatMap(slotRecipeIds))
 
   const suggestions = new Map<string, number>()
-  const visible = futureDayCount(decided, today, maxDays)
+  const visible =
+    forceVisibleDays != null
+      ? Math.min(maxDays, Math.max(1, Math.floor(forceVisibleDays)))
+      : futureDayCount(decided, today, maxDays)
 
   const ordered: { date: string; slot: MealSlot }[] = []
   for (let day = 0; day < visible; day++) {
@@ -305,6 +317,21 @@ export function buildSlotSuggestions(
     const denied = new Set(deniedByKey[key] ?? [])
     const taken = new Set<number>([...decidedIds, ...suggestions.values()])
 
+    const nearby: Array<{ date: string; recipe: Recipe }> = []
+    for (const s of upcoming) {
+      if (s.date === date && s.slot === slot) continue
+      for (const recipe of slotRecipes([s], recipeById)) {
+        nearby.push({ date: s.date, recipe })
+      }
+    }
+    for (const [sk, recipeId] of suggestions) {
+      const idx = sk.lastIndexOf(':')
+      const suggestedDate = sk.slice(0, idx)
+      const recipe = recipeById.get(recipeId)
+      if (recipe) nearby.push({ date: suggestedDate, recipe })
+    }
+    const occupied = occupiedStaplesNearDate(nearby, date, ctx.products)
+
     const candidates = pool
       .filter((r) => {
         if (taken.has(r.id) || denied.has(r.id)) return false
@@ -313,7 +340,9 @@ export function buildSlotSuggestions(
       })
       .map((recipe) => {
         const parsed = parseDescription(recipe.description ?? '')
-        let score = scoreRecipe(recipe, ctx, taken, preference, priceAnchor)
+        let score =
+          scoreRecipe(recipe, ctx, taken, preference, priceAnchor) -
+          stapleClashPenalty(stapleKeysFromRecipe(recipe, ctx.products), occupied)
         if (parsed.nutrition) {
           const nutritionWeight = preference === 'balanced' ? 1 : 0.55
           score +=
@@ -326,7 +355,9 @@ export function buildSlotSuggestions(
       })
       .sort((a, b) => b.score - a.score)
 
-    const best = candidates[0]
+    const deniedKey = (deniedByKey[key] ?? []).join(',')
+    const rng = createRng(hashSeed(salt, date, slot, preference, deniedKey))
+    const best = pickScored(candidates, rng)
     if (best) suggestions.set(key, best.recipe.id)
   }
 

@@ -13,6 +13,12 @@ export interface DisplayPrefs {
   mealSort: MealSortMode
   defaultTab: DefaultTab
   mealListView: MealListView
+  /** When true, hide € on browsing UI and the eat-out meal form price field. */
+  hidePrices: boolean
+  /** When true, hide macros/kcal bars even if profile/objectivos are on. */
+  hideNutrition: boolean
+  /** When true, hide Despensa products and Completa/Ligeira meals with no photo. */
+  hideProductsWithoutImage: boolean
 }
 
 export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
@@ -20,6 +26,9 @@ export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   mealSort: DEFAULT_MEAL_SORT,
   defaultTab: 'plan',
   mealListView: 'cards',
+  hidePrices: false,
+  hideNutrition: false,
+  hideProductsWithoutImage: false,
 }
 
 function load(key: string): DisplayPrefs {
@@ -33,6 +42,9 @@ function load(key: string): DisplayPrefs {
     if (merged.mealListView !== 'cards' && merged.mealListView !== 'list') {
       merged.mealListView = DEFAULT_DISPLAY_PREFS.mealListView
     }
+    merged.hidePrices = Boolean(merged.hidePrices)
+    merged.hideNutrition = Boolean(merged.hideNutrition)
+    merged.hideProductsWithoutImage = Boolean(merged.hideProductsWithoutImage)
     return merged
   } catch {
     return { ...DEFAULT_DISPLAY_PREFS }
@@ -59,4 +71,10 @@ export function useDisplayPrefs() {
   )
 
   return { prefs, updatePref }
+}
+
+/** True when browsing UI should show € amounts. */
+export function useShowPrices(): boolean {
+  const { prefs } = useDisplayPrefs()
+  return !prefs.hidePrices
 }

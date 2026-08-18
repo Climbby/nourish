@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { pickBalancedWeeklySuggestions, sumWeekPlanNutrition } from './weeklyNutritionPlan'
+import {
+  pickBalancedWeeklySuggestions,
+  planMeetsNutritionTargets,
+  planNutritionGaps,
+  sumWeekPlanNutrition,
+} from './weeklyNutritionPlan'
 import { DEFAULT_TARGETS } from '../hooks/useNutritionTargets'
 import type { MealPlanEntry, Recipe } from '../types/grocy'
 
@@ -159,5 +164,36 @@ describe('pickBalancedWeeklySuggestions', () => {
       'taste'
     )
     expect(week[0].recipe.id).toBe(1)
+  })
+})
+
+describe('planNutritionGaps / planMeetsNutritionTargets', () => {
+  it('treats a 15% shortfall as missing the week target', () => {
+    const totals = {
+      calories: 1000,
+      protein: 100,
+      carbs: 250,
+      fat: 70,
+      daysWithNutrition: 1,
+      spend: 0,
+      mealsWithPrice: 0,
+    }
+    const gaps = planNutritionGaps(totals, DEFAULT_TARGETS, 1)
+    expect(gaps.map((g) => g.key)).toContain('calories')
+    expect(planMeetsNutritionTargets(totals, DEFAULT_TARGETS, 1)).toBe(false)
+  })
+
+  it('meets targets when macros are within the shortfall window', () => {
+    const totals = {
+      calories: 1900,
+      protein: 110,
+      carbs: 230,
+      fat: 65,
+      daysWithNutrition: 1,
+      spend: 0,
+      mealsWithPrice: 0,
+    }
+    expect(planNutritionGaps(totals, DEFAULT_TARGETS, 1)).toEqual([])
+    expect(planMeetsNutritionTargets(totals, DEFAULT_TARGETS, 1)).toBe(true)
   })
 })

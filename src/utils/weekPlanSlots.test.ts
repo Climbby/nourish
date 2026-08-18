@@ -149,7 +149,8 @@ describe('buildSlotSuggestions', () => {
     decided: PlannedSlot[] = [],
     denied: Record<string, number[]> = {},
     origins: Record<string, 'supermercado' | 'restaurante'> = {},
-    pool = recipes
+    pool = recipes,
+    salt = 0
   ) =>
     buildSlotSuggestions(
       { recipes: pool, favourites: new Set<number>(), mealPlan: [] },
@@ -158,7 +159,9 @@ describe('buildSlotSuggestions', () => {
       denied,
       'balanced',
       origins,
-      TODAY
+      TODAY,
+      7,
+      salt
     )
 
   it('suggests almoço and jantar for today when empty', () => {
@@ -204,6 +207,49 @@ describe('buildSlotSuggestions', () => {
     const fora = suggest([], {}, { [key(0, 'almoco')]: 'restaurante' }, withOrigin)
     expect([3, 4]).toContain(fora.get(key(0, 'almoco')))
     expect([1, 2]).toContain(fora.get(key(0, 'jantar')))
+  })
+
+  it('is stable for the same salt across calls', () => {
+    const a = suggest([], {}, {}, recipes, 42)
+    const b = suggest([], {}, {}, recipes, 42)
+    expect([...a.entries()]).toEqual([...b.entries()])
+  })
+
+  it('can produce a different sequence with a different salt', () => {
+    const pool = Array.from({ length: 8 }, (_, i) => base(i + 10, `M${i}`, nutr(500, 2)))
+    const first = [...suggest([], {}, {}, pool, 1).values()].join(',')
+    const others = [2, 3, 5, 8, 13, 21, 34, 55].map((salt) =>
+      [...suggest([], {}, {}, pool, salt).values()].join(',')
+    )
+    expect(others.some((seq) => seq !== first)).toBe(true)
+  })
+
+  it('does not repeat a meal across today\'s slots when alternatives exist', () => {
+    const pool = Array.from({ length: 6 }, (_, i) => base(i + 1, `M${i}`, nutr(500, 2)))
+    for (const salt of [1, 2, 3, 7, 11]) {
+      const map = suggest([], {}, {}, pool, salt)
+      expect(map.get(key(0, 'almoco'))).not.toBe(map.get(key(0, 'jantar')))
+    }
+  })
+
+  it('penalises a second pasta meal in the same-day ±1 window without leaving the slot empty', () => {
+    const pool = [
+      base(1, 'Esparguete à bolonhesa', nutr(500, 2)),
+      base(2, 'Esparguete com atum', nutr(500, 2)),
+      base(3, 'Frango grelhado', nutr(500, 2)),
+      base(4, 'Arroz de legumes', nutr(500, 2)),
+      base(5, 'Salada de grão', nutr(500, 2)),
+    ]
+    const decided = [slot(0, 'almoco', 1), slot(0, 'jantar', 3)]
+    const map = suggest(decided, {}, {}, pool, 0)
+
+    expect(map.has(key(1, 'almoco'))).toBe(true)
+    expect(map.has(key(1, 'jantar'))).toBe(true)
+    expect([4, 5]).toContain(map.get(key(1, 'almoco')))
+    expect([4, 5]).toContain(map.get(key(1, 'jantar')))
+    expect(map.get(key(1, 'almoco'))).not.toBe(map.get(key(1, 'jantar')))
+    expect(map.get(key(1, 'almoco'))).not.toBe(2)
+    expect(map.get(key(1, 'jantar'))).not.toBe(2)
   })
 })
 

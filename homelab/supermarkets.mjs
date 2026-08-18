@@ -71,14 +71,33 @@ function placeMatchesTracked(placeKey, tracked) {
   )
 }
 
-function placeMatchesBlocked(placeKey, blocklist) {
-  return blocklist.some(
-    (b) =>
-      b.place_key === placeKey ||
-      placeKey.includes(b.place_key) ||
-      b.place_key.includes(placeKey) ||
-      String(b.name || '').toLowerCase().includes(placeKey.replace(/_/g, ' '))
-  )
+function identityKey(raw) {
+  return normalizePlaceKey(String(raw || '').replace(/^(zone|receipt)\./i, ''))
+}
+
+function keysOverlap(a, b) {
+  if (!a || !b) return false
+  return a === b || a.includes(b) || b.includes(a)
+}
+
+export function placeMatchesBlocked(placeKey, blocklist) {
+  const key = identityKey(placeKey)
+  if (!key) return false
+  return blocklist.some((b) => {
+    const keys = [identityKey(b.place_key), identityKey(b.name), identityKey(b.zone_id)].filter(Boolean)
+    return keys.some((bk) => keysOverlap(key, bk))
+  })
+}
+
+export function visitMatchesBlocklist(visit, blocklist) {
+  if (!blocklist?.length) return false
+  const ids = [visit?.zone, visit?.name].filter(Boolean)
+  return ids.some((id) => placeMatchesBlocked(id, blocklist))
+}
+
+export function filterBlockedVisits(visits, blocklist) {
+  if (!blocklist?.length) return visits
+  return visits.filter((v) => !visitMatchesBlocklist(v, blocklist))
 }
 
 /**
@@ -196,15 +215,44 @@ export async function syncTrackedSupermarketsToHa() {
   return { ok: true, results }
 }
 
-export function blockSupermarket(place) {
+export function blockSupermarket(place, opts = {}) {
   const data = loadSupermarkets()
-  const placeKey = normalizePlaceKey(place)
+  const stripped = String(place || '').replace(/^(zone|receipt)\./i, '')
+  const placeKey = normalizePlaceKey(stripped)
   const name = String(place || placeKey).trim()
+  const zoneId = opts.zone_id ? String(opts.zone_id) : undefined
 
-  if (!placeMatchesBlocked(placeKey, data.blocklist)) {
-    data.blocklist.push({ place_key: placeKey, name, blocked_at: new Date().toISOString() })
+  const tracked = data.tracked.find(
+    (t) =>
+      t.place_key === placeKey ||
+      placeKey.includes(t.place_key) ||
+      t.place_key.includes(placeKey) ||
+      (zoneId && (t.zone_id === zoneId || `zone.${t.place_key}` === zoneId))
+  )
+
+  const entryZone = zoneId || tracked?.zone_id
+  const entryName = tracked?.name || name
+  const entryKey = tracked?.place_key || placeKey
+
+  if (!placeMatchesBlocked(placeKey, data.blocklist) && !(entryZone && placeMatchesBlocked(entryZone, data.blocklist))) {
+    data.blocklist.push({
+      place_key: entryKey,
+      name: entryName,
+      blocked_at: new Date().toISOString(),
+      ...(entryZone ? { zone_id: entryZone } : {}),
+    })
+  } else if (entryZone) {
+    const existing = data.blocklist.find(
+      (b) => placeMatchesBlocked(placeKey, [b]) || (b.zone_id && b.zone_id === entryZone)
+    )
+    if (existing && !existing.zone_id) existing.zone_id = entryZone
   }
-  data.tracked = data.tracked.filter((t) => t.place_key !== placeKey)
+
+  data.tracked = data.tracked.filter((t) => {
+    if (t.place_key === entryKey || t.place_key === placeKey) return false
+    if (entryZone && (t.zone_id === entryZone || `zone.${t.place_key}` === entryZone)) return false
+    return true
+  })
   saveSupermarkets(data)
   return { ok: true, data }
 }

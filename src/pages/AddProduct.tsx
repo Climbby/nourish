@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { grocy } from '../api/grocy'
 import { grocyConfig } from '../config/grocy'
 import { PhotoField } from '../components/PhotoField'
-import { buildDespensaDescription } from '../utils/despensaAnalytics'
+import { buildDespensaDescription, inferUnitGramsFromName } from '../utils/despensaAnalytics'
 import type { NavigationFeedbackState } from '../utils/navigationFeedback'
 import type { VerifiedField } from '../utils/verification'
 import { VerifyCheckbox } from '../components/VerifiedBadge'
@@ -34,6 +34,7 @@ export function AddProduct() {
   const [buyAmount, setBuyAmount] = useState('1')
   const [unitPrice, setUnitPrice] = useState('')
   const [unitGrams, setUnitGrams] = useState('')
+  const [unitGramsTouched, setUnitGramsTouched] = useState(false)
   const [verifyPrice, setVerifyPrice] = useState(false)
   const [photoFile, setPhotoFile] = useState<File | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
@@ -68,7 +69,7 @@ export function AddProduct() {
           })(),
           nomeCurto: nomeCurto || generico || null,
           generico: generico || null,
-          unitGrams: unitGrams || null,
+          unitGrams: unitGrams || inferUnitGramsFromName(name) || null,
         }),
       })
 
@@ -119,7 +120,14 @@ export function AddProduct() {
           <input
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value
+              setName(next)
+              if (!unitGramsTouched) {
+                const inferred = inferUnitGramsFromName(next)
+                setUnitGrams(inferred != null ? String(inferred) : '')
+              }
+            }}
             placeholder="ex: Cogumelos laminados Continente 250g"
             required
             className={inputClass}
@@ -198,7 +206,10 @@ export function AddProduct() {
           <input
             type="number"
             value={unitGrams}
-            onChange={(e) => setUnitGrams(e.target.value)}
+            onChange={(e) => {
+              setUnitGramsTouched(true)
+              setUnitGrams(e.target.value)
+            }}
             placeholder="ex: 120"
             min="0"
             step="1"

@@ -22,7 +22,7 @@ import {
   type SlotPart,
 } from '../hooks/usePlannedMeals'
 import type { Recipe } from '../types/grocy'
-import { diffDays, MAX_FUTURE_DAYS } from './planDates'
+import { addDays, diffDays, MAX_FUTURE_DAYS, parseIsoDate } from './planDates'
 import { parseDescription } from './parseDescription'
 
 /** A slot inside a template — relative to the day the plan gets applied. */
@@ -33,12 +33,20 @@ export interface TemplateSlot {
   parts: SlotPart[]
 }
 
+/** Where dayOffset 0 lands when the plan is applied. */
+export type WeekPlanAnchor = 'today' | 'sunday'
+
 export interface SavedWeekPlan {
   id: string
   name: string
   description: string
   tags: string[]
   slots: TemplateSlot[]
+  /**
+   * Constructor plans are a Dom–Sáb mould (`sunday`). Plans captured from the
+   * live rolling week stay relative to the day they are applied (`today`).
+   */
+  weekAnchor: WeekPlanAnchor
   /** ISO timestamps */
   createdAt: string
   updatedAt: string
@@ -87,6 +95,7 @@ export function normalizeSavedPlan(raw: unknown): SavedWeekPlan | null {
       ? p.tags.filter((t): t is string => typeof t === 'string' && t.trim() !== '').map((t) => t.trim())
       : [],
     slots,
+    weekAnchor: p.weekAnchor === 'sunday' ? 'sunday' : 'today',
     createdAt: typeof p.createdAt === 'string' ? p.createdAt : now,
     updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : now,
   }
@@ -138,6 +147,7 @@ export function planFromSlots(
       }))
       .filter((s) => s.dayOffset < MAX_FUTURE_DAYS)
       .sort((a, b) => a.dayOffset - b.dayOffset),
+    weekAnchor: 'today',
     createdAt: iso,
     updatedAt: iso,
   }
@@ -163,6 +173,7 @@ export function clonePlan(plan: SavedWeekPlan, name: string, now = new Date()): 
     id: newPlanId(),
     name: name.trim() || `${plan.name} (cópia)`,
     slots: plan.slots.map((s) => ({ ...s, parts: s.parts.map((p) => ({ ...p })) })),
+    weekAnchor: plan.weekAnchor ?? 'today',
     createdAt: iso,
     updatedAt: iso,
   }
@@ -226,4 +237,29 @@ export function applicableSlots(plan: SavedWeekPlan, recipes: Recipe[]): Templat
   return plan.slots
     .map((s) => ({ ...s, parts: s.parts.filter((p) => ids.has(p.recipeId)) }))
     .filter((s) => s.parts.length > 0)
+}
+
+/** Where dayOffset 0 lands: today, or this week's Sunday. */
+export function templateOriginDate(today: string, weekAnchor: WeekPlanAnchor = 'today'): string {
+  if (weekAnchor !== 'sunday') return today
+  return addDays(today, -parseIsoDate(today).getDay())
+}
+
+/**
+ * Map a template onto real dates. Sunday-anchored plans skip days already in
+ * the past; today-anchored plans start at `today` as offset 0.
+ */
+export function mapTemplateToDates(
+  slots: TemplateSlot[],
+  today: string,
+  weekAnchor: WeekPlanAnchor = 'today'
+): Array<{ date: string; slot: MealSlot; parts: SlotPart[] }> {
+  const origin = templateOriginDate(today, weekAnchor)
+  return slots
+    .map((s) => ({
+      date: addDays(origin, s.dayOffset),
+      slot: s.slot,
+      parts: s.parts,
+    }))
+    .filter((s) => s.date >= today)
 }

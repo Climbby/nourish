@@ -25,9 +25,9 @@ describe('navMemory', () => {
   })
 
   it('remembers profile and meals paths with query', () => {
-    rememberNavPath('profile', '/profile?tab=definicoes')
+    rememberNavPath('profile', '/profile?tab=resumo')
     rememberNavPath('meals', '/meals?origem=restaurante')
-    expect(getLastNavPath('profile')).toBe('/profile?tab=definicoes')
+    expect(getLastNavPath('profile')).toBe('/profile?tab=resumo')
     expect(getLastNavPath('meals')).toBe('/meals?origem=restaurante')
   })
 
