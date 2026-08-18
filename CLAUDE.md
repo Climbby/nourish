@@ -113,7 +113,7 @@ Cantina do ISCTE
 
 `buildDescription` takes a single `BuildDescriptionInput` options object — not positional args.
 
-**Ingredient lines** are `Nome`, `Nome|preco`, or `Nome|preco|gramas` (price may be blank: `Nome||gramas`). The 3-field form is only read when both trailing fields are numeric, so names containing a literal `|` still parse the legacy way.
+**Ingredient lines** are `Nome`, `Nome|preco`, or `Nome|preco|gramas` (price may be blank: `Nome||gramas`). The 3-field form is only read when both trailing fields are numeric, so names containing a literal `|` still parse the legacy way. Trailing `|i` keeps the ingredient on the recipe but skips it for meal € **and** derived nutrition (quantity not required).
 
 **`[Tempo]`** is cook time in minutes — an estimate to be replaced by the real measured time. **`[Notas]`** is free text that accumulates as a recipe gets repeated.
 

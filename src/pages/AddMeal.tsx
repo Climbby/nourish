@@ -860,9 +860,10 @@ export function IngredientSection({
                       value={row.qty ?? ''}
                       onChange={(e) => onUpdate(row.id, 'qty', e.target.value)}
                       placeholder="Qtd"
-                      className={`${inputClass} pr-14`}
+                      className={`${inputClass} pr-14 ${row.ignorePrice ? 'opacity-40' : ''}`}
                       min="0"
                       step="1"
+                      aria-disabled={row.ignorePrice}
                     />
                   ) : (
                     <input
@@ -871,9 +872,10 @@ export function IngredientSection({
                       value={row.grams ?? ''}
                       onChange={(e) => onUpdate(row.id, 'grams', e.target.value)}
                       placeholder="Quantidade"
-                      className={`${inputClass} pr-14`}
+                      className={`${inputClass} pr-14 ${row.ignorePrice ? 'opacity-40' : ''}`}
                       min="0"
                       step="1"
+                      aria-disabled={row.ignorePrice}
                     />
                   )}
                   <AmountUnitPicker
@@ -893,7 +895,7 @@ export function IngredientSection({
                     row.ignorePrice ? 'text-nourish-primary' : 'text-nourish-text-dim'
                   }`}
                 >
-                  {row.ignorePrice ? 'A ignorar no €' : 'Ignorar no €'}
+                  {row.ignorePrice ? 'A ignorar qtd e €' : 'Ignorar qtd e €'}
                 </button>
               )}
               {showVariantChoice && (
@@ -924,13 +926,13 @@ export function IngredientSection({
                   })}
                 </div>
               )}
-              {useCount && row.grams && (
+              {useCount && row.grams && !row.ignorePrice && (
                 <p className="text-xs text-nourish-text-dim pl-0.5">
                   ≈ {row.grams} g
                   {row.unitGrams != null ? ` (${row.unitGrams} g/un)` : ''}
                 </p>
               )}
-              {useCount && !hasUnitGrams && (
+              {useCount && !hasUnitGrams && !row.ignorePrice && (
                 <p className="text-xs text-amber-400 pl-0.5">
                   {linked
                     ? 'Falta o peso por embalagem (g/un) na Despensa — a nutrição por 100 g não chega.'
@@ -1151,7 +1153,7 @@ export function PriceSection({ autoTotal, missingPrices = [], priceOverride, onO
       )}
       {autoTotal <= 0 && missingPrices.length > 0 && (
         <p className="text-xs text-nourish-text-dim mb-1.5">
-          Falta € em {missingPrices.join(', ')}. Ignora se não conta.
+          Falta € em {missingPrices.join(', ')}. Ignora qtd e € se não conta.
         </p>
       )}
       <div className="relative">

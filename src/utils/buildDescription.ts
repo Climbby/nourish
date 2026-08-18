@@ -17,7 +17,7 @@ export interface IngredientRow {
   unitGrams?: number | null
   /** Form-only: enter grams or stock-unit count. Storage always persists grams. */
   amountMode?: 'g' | 'un'
-  /** Skip this line in the meal € sum (still stored on the recipe). */
+  /** Skip € and quantity — still on the recipe, not in the meal total or macros. */
   ignorePrice?: boolean
 }
 

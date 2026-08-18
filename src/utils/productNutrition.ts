@@ -138,6 +138,7 @@ export function deriveRecipeNutrition(
   const out = emptyDerivedNutrition()
 
   for (const ing of ingredients) {
+    if (ing.ignorePrice) continue
     if (ing.grams === null || ing.grams <= 0) {
       if (ing.name.trim()) out.missingGrams.push(ing.name)
       continue

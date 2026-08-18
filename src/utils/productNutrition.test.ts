@@ -119,4 +119,17 @@ describe('deriveRecipeNutrition', () => {
     const derived = deriveRecipeNutrition([{ name: '  ', price: null, grams: null }], lookup, 1)
     expect(derived.missingGrams).toEqual([])
   })
+
+  it('skips ignored ingredients for grams, macros, and completeness', () => {
+    const ingredients: IngredientLine[] = [
+      { name: 'Atum', price: 1.5, grams: 100 },
+      { name: 'Sal', price: null, grams: null, ignorePrice: true },
+    ]
+    const derived = deriveRecipeNutrition(ingredients, lookup, 1)
+    expect(derived.missingGrams).toEqual([])
+    expect(derived.missingMacros).toEqual([])
+    expect(derived.resolved).toBe(1)
+    expect(derived.calories).toBe(116)
+    expect(isNutritionComplete(derived)).toBe(true)
+  })
 })

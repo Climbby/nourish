@@ -8,7 +8,7 @@ export interface Nutrition {
   fat: number
 }
 
-/** Trailing `|i` on an ingredient line: keep the ingredient, skip it in the € sum. */
+/** Trailing `|i` on an ingredient line: keep the ingredient, skip € and quantity. */
 export const INGREDIENT_PRICE_IGNORE_FLAG = 'i'
 
 export interface IngredientLine {
@@ -16,7 +16,7 @@ export interface IngredientLine {
   price: number | null
   /** Quantity in grams (or ml), used to derive nutrition from product macros. */
   grams: number | null
-  /** When true, this line is not part of the meal price (e.g. a pinch of salt). */
+  /** Skip € sum and nutrition grams (e.g. a pinch of salt). */
   ignorePrice?: boolean
 }
 
@@ -69,9 +69,9 @@ function isPriceIgnoreFlag(value: string): boolean {
 
 /**
  * Ingredient lines are `Nome`, `Nome|preco`, or `Nome|preco|gramas` (with the
- * price optionally blank: `Nome||gramas`). An optional trailing `|i` means
- * ignore this line when summing the meal price. Names containing a literal `|`
- * still parse the way they always did, so legacy recipes are unaffected.
+ * price optionally blank: `Nome||gramas`). An optional trailing `|i` skips
+ * this line for meal € and for derived nutrition (quantity not required).
+ * Names containing a literal `|` still parse the way they always did.
  */
 export function parseIngredientLine(line: string): IngredientLine {
   const rawParts = line.split('|')
