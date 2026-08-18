@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseShoppingVoice } from './parseShoppingVoice'
+import { parseShoppingVoice, resolveHeardShoppingNames } from './parseShoppingVoice'
 
 describe('parseShoppingVoice', () => {
   it('splits a comma-and-e list', () => {
