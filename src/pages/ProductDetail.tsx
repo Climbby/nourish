@@ -218,6 +218,7 @@ export function ProductDetail() {
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [generico, setGenerico] = useState('')
   const [unitGrams, setUnitGrams] = useState('')
+  const [buyAmount, setBuyAmount] = useState('1')
   const [metaSaving, setMetaSaving] = useState(false)
   const [editingName, setEditingName] = useState(false)
   const [macrosSaving, setMacrosSaving] = useState(false)
@@ -231,6 +232,7 @@ export function ProductDetail() {
     const stored = getUnitGramsFromDesc(prod.description)
     const inferred = inferUnitGramsFromName(prod.name)
     setUnitGrams((stored ?? inferred)?.toString() ?? '')
+    setBuyAmount(String(getBuyAmountFromDesc(prod.description, prod.id)))
     setPhotoPreview(prod.picture_file_name ? grocy.productPictureUrl(prod.picture_file_name) : null)
   }
 
@@ -355,14 +357,15 @@ export function ProductDetail() {
     }
   }
 
-  async function handleSaveCookingMeta(overrides?: { unitGrams?: string }) {
+  async function handleSaveCookingMeta(overrides?: { unitGrams?: string; buyAmount?: string }) {
     if (!product) return
     setMetaSaving(true)
     try {
-      const buyAmount = getBuyAmountFromDesc(product.description, product.id)
+      const parsedBuy = parseInt(overrides?.buyAmount ?? buyAmount, 10)
+      const nextBuy = Number.isFinite(parsedBuy) && parsedBuy > 0 ? parsedBuy : 1
       const price = getPriceFromDesc(product.description)
       const nextGrams = overrides?.unitGrams ?? unitGrams
-      const description = buildDespensaDescription(buyAmount, price, {
+      const description = buildDespensaDescription(nextBuy, price, {
         verified: parseVerifiedFields(product.description),
         existingDescription: product.description,
         generico: generico || null,
@@ -373,6 +376,7 @@ export function ProductDetail() {
       setProduct(updated)
       setSiblings((prev) => prev.map((s) => (s.id === numId ? updated : s)))
       if (overrides?.unitGrams != null) setUnitGrams(overrides.unitGrams)
+      setBuyAmount(String(nextBuy))
     } catch {
       /* keep local */
     } finally {
@@ -641,28 +645,48 @@ export function ProductDetail() {
           </section>
         )}
 
-        <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4">
-          <label className={labelClass}>
-            Gramas por unidade <span className="text-nourish-border font-normal">(opcional)</span>
-          </label>
-          <input
-            type="number"
-            inputMode="decimal"
-            value={unitGrams}
-            onChange={(e) => setUnitGrams(e.target.value)}
-            onBlur={() => void handleSaveCookingMeta()}
-            placeholder={suggestedUnitGrams != null ? String(suggestedUnitGrams) : 'ex: 185'}
-            min="0"
-            step="1"
-            className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
-          />
-          <p className="text-xs text-nourish-text-dim mt-1">
-            Peso de uma unidade (pack, lata, ovo) — para contar unidades nas refeições
-            {getUnitGramsFromDesc(product.description) == null && suggestedUnitGrams != null
-              ? ` · detectado ${suggestedUnitGrams} g no nome`
-              : ''}
-          </p>
-          {metaSaving && <p className="text-xs text-nourish-text-dim mt-1">A guardar…</p>}
+        <section className="bg-nourish-surface border border-nourish-border rounded-2xl p-4 space-y-4">
+          <div>
+            <label className={labelClass}>
+              Quantidade que compras de cada vez
+            </label>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={buyAmount}
+              onChange={(e) => setBuyAmount(e.target.value)}
+              onBlur={() => void handleSaveCookingMeta()}
+              min="1"
+              step="1"
+              className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+            />
+            <p className="text-xs text-nourish-text-dim mt-1">
+              Unidades dentro da embalagem. Ex: 6 numa caixa de ovos — na refeição, 5 un são 5 ovos, não 5 caixas.
+            </p>
+          </div>
+          <div>
+            <label className={labelClass}>
+              Gramas por unidade <span className="text-nourish-border font-normal">(opcional)</span>
+            </label>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={unitGrams}
+              onChange={(e) => setUnitGrams(e.target.value)}
+              onBlur={() => void handleSaveCookingMeta()}
+              placeholder={suggestedUnitGrams != null ? String(suggestedUnitGrams) : 'ex: 55'}
+              min="0"
+              step="1"
+              className="w-full px-4 py-3 bg-nourish-surface-high border border-nourish-border rounded-xl text-nourish-text placeholder-nourish-border text-sm focus:outline-none focus:ring-2 focus:ring-nourish-primary"
+            />
+            <p className="text-xs text-nourish-text-dim mt-1">
+              Peso da unidade que contas na refeição (um ovo ≈ 55 g, uma lata), não o pack inteiro
+              {getUnitGramsFromDesc(product.description) == null && suggestedUnitGrams != null
+                ? ` · detectado ${suggestedUnitGrams} g no nome`
+                : ''}
+            </p>
+          </div>
+          {metaSaving && <p className="text-xs text-nourish-text-dim">A guardar…</p>}
         </section>
 
         <ProductMacrosSection

@@ -560,7 +560,7 @@ export function AddMeal() {
               <label className={labelClass}>Quantidade que compras de cada vez</label>
               <input type="number" value={buyAmount} onChange={(e) => setBuyAmount(e.target.value)}
                 min="1" className={inputClass} />
-              <p className="text-xs text-nourish-text-dim mt-1">Ex: 6 para água (pack de 6 garrafas)</p>
+              <p className="text-xs text-nourish-text-dim mt-1">Ex: 6 para ovos ou água (unidades na embalagem)</p>
             </div>
           </>
         ) : (
