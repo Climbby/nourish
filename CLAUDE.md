@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Nourish** — a mobile-first meal tracker PWA built on top of Grocy as its backend/database. The custom UI handles meal browsing, pantry (Despensa) tracking, recipe display, meal logging, and creation while Grocy handles all persistence via REST API.
 
+**Shopping lives in Markety** (`~/projects/markety`, same CT117): the shopping list, supermarket arrival push, and (being moved over) visits, trip/fuel costs, supermarket management, receipts and prices. Don't build new shopping features here. Nourish keeps *writing* to Grocy's `shopping_list` (low stock, weekly plan); Markety shows it. See `~/projects/markety/DESIGN.md` for what moves when.
+
 ## Commands
 
 ```bash
