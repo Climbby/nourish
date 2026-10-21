@@ -24,10 +24,12 @@ function line(id: string, name: string): ReviewLine {
   }
 }
 
+// Sets updatedAt explicitly: left out, upsert stamps "now" and the sort test depends on today's date.
 function baseDraft(id: string, updatedAt: string) {
   return {
     id,
     createdAt: updatedAt,
+    updatedAt,
     store: 'continente' as const,
     purchasedDate: '2026-08-12',
     captureMode: 'full' as const,
@@ -58,6 +60,14 @@ describe('receiptDrafts', () => {
     const list = loadReceiptDrafts()
     expect(list.map((d) => d.id)).toEqual(['old', 'new'])
     expect(list[0].reviewLines[0].productName).toBe('Pão')
+  })
+
+  it('an edit without updatedAt (how ReceiptScanPage saves) moves that draft to the top', () => {
+    upsertReceiptDraft(baseDraft('old', '2026-08-01T10:00:00.000Z'))
+    upsertReceiptDraft(baseDraft('new', '2026-08-12T10:00:00.000Z'))
+    const { updatedAt: _ignored, ...edit } = baseDraft('old', '2026-08-01T10:00:00.000Z')
+    upsertReceiptDraft({ ...edit, reviewLines: [line('l1', 'Pão')] })
+    expect(loadReceiptDrafts().map((d) => d.id)).toEqual(['old', 'new'])
   })
 
   it('caps at MAX_RECEIPT_DRAFTS', () => {
