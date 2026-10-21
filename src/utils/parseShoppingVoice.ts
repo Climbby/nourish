@@ -6,10 +6,14 @@
 const LIST_SPLIT = /\s*(?:,|;| e também | também | depois | mais |\s+e\s+)\s*/i
 
 const FILLER_WORD =
-  /^(eu|preciso|queria|quero|podes|pode|adicionar|adiciona|comprar|compra|poe|põe|mete|lista|de|do|da|dos|das|dum|duma|disto|disso|daquilo|um|uma|uns|umas|o|a|os|as)$/i
+  /^(eu|preciso|queria|quero|podes|pode|adicionar|adiciona|comprar|compra|trazer|traz|traga|tragas|poe|põe|mete|lista|de|do|da|dos|das|dum|duma|disto|disso|daquilo|um|uma|uns|umas|o|a|os|as)$/i
 
+// "aquilo do costume", "isso": a reference, not an item. Leave it to the fallback (or ask again).
+const VAGUE = /(^|\s)(aquilo|isso|isto|costume|habitual)(\s|$)/i
+
+// The unit must end at a word boundary: otherwise "l" (litres) eats the start of "latas".
 const LEADING_QTY =
-  /^\d+([.,]\d+)?\s*(kg|g|gr|l|lt|ml|un|unid\.?|unidades?|latas?|pacotes?|sacos?)?\s*(de\s+)?/i
+  /^\d+([.,]\d+)?\s*(?:(?:kg|g|gr|l|lt|ml|un|unid\.?|unidades?|latas?|pacotes?|sacos?)(?![a-zà-ú]))?\s*(de\s+)?/i
 
 export function parseShoppingVoice(transcript: string): string[] {
   const text = transcript.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/g, '').trim()
@@ -19,7 +23,7 @@ export function parseShoppingVoice(transcript: string): string[] {
   const names: string[] = []
   for (const raw of text.split(LIST_SPLIT)) {
     const name = cleanHeardItem(raw)
-    if (name.length < 2) continue
+    if (name.length < 2 || VAGUE.test(name)) continue
     const key = name.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
