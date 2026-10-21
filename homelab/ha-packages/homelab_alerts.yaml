@@ -11,6 +11,7 @@ automation:
         entity_id:
           - binary_sensor.homelab_n8n
           - binary_sensor.homelab_nourish_api
+          - binary_sensor.homelab_markety_push
           - binary_sensor.homelab_grocy
           - binary_sensor.homelab_cloudflare_tunnel
           - binary_sensor.homelab_guessit_bot
@@ -38,6 +39,7 @@ automation:
         entity_id:
           - binary_sensor.homelab_n8n
           - binary_sensor.homelab_nourish_api
+          - binary_sensor.homelab_markety_push
           - binary_sensor.homelab_grocy
           - binary_sensor.homelab_cloudflare_tunnel
           - binary_sensor.homelab_guessit_bot

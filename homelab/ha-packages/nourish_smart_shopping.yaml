@@ -2,12 +2,15 @@
 # nourish_despensa_check + input_number live in configuration.yaml
 
 rest_command:
+  # Supermarket arrival → Markety's own Web Push with the pending list (was the n8n webhook
+  # that sent a Companion notification). Name kept: the per-store automations call it.
+  # `store` is the tracker state, i.e. the zone's friendly name ("Auchan").
   nourish_at_supermarket:
-    url: "http://192.168.1.24:5678/webhook/nourish-at-supermarket"
+    url: "http://192.168.1.27:8788/arrival"
     method: POST
     content_type: "application/json"
-    payload: "{}"
-    timeout: 60
+    payload: "{{ {'store': states('device_tracker.telemovel_francisco')} | to_json }}"
+    timeout: 30
   nourish_event_supermarket_enter:
     url: "http://192.168.1.27:8787/event"
     method: POST

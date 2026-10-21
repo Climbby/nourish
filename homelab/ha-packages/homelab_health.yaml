@@ -24,6 +24,16 @@ command_line:
       payload_off: "OFF"
 
   - binary_sensor:
+      name: "Homelab Markety push"
+      unique_id: homelab_markety_push
+      device_class: connectivity
+      scan_interval: 120
+      command: >-
+        curl -sf --max-time 5 http://192.168.1.27:8788/health >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+
+  - binary_sensor:
       name: "Homelab Grocy"
       unique_id: homelab_grocy
       device_class: connectivity
